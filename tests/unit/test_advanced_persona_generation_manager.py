@@ -12,7 +12,9 @@ fake that calls the real tools and answers with the shapes AgentService returns.
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,6 +27,7 @@ import pytest
 moto = pytest.importorskip("moto")
 
 from src.config import config  # noqa: E402
+from src.managers.advanced_generation.analysis_policy import AnalysisPolicy  # noqa: E402
 from src.managers.advanced_generation.manager import (  # noqa: E402
     AdvancedGenerationError,
     AdvancedPersonaGenerationManager,
@@ -40,6 +43,9 @@ from src.models.errors import ErrorCode  # noqa: E402
 from src.models.source_file import SourceFile, SourceFileStatus, SourceFormat  # noqa: E402
 from src.services.agent_service import AgentServiceError  # noqa: E402
 from src.services.s3_service import S3Service, S3ServiceError  # noqa: E402
+from src.services.dataset_analysis.analysis_tool_service import (  # noqa: E402
+    AnalysisToolService,
+)
 from src.services.sandbox_service import InProcessSandbox, SandboxSession  # noqa: E402
 from src.services.service_factory import service_factory  # noqa: E402
 from src.services.stores.advanced_generation_store import (  # noqa: E402
@@ -287,6 +293,8 @@ class _Agents:
         self.extracted_count = 0
         #: The ``may_retry`` each extraction call was given (BR26.2)
         self.may_retry: list[Any] = []
+        #: The ``purpose`` each extraction call was given (BR26.1)
+        self.extraction_purposes: list[str] = []
         self.instructions_seen = []
         self.documents_seen = []
         self.assignments = {}
@@ -326,11 +334,13 @@ class _Agents:
         document_index,
         chunk_index,
         may_retry=None,
+        purpose="",
     ):
         import threading
 
         with self.lock:
             self.may_retry.append(may_retry)
+            self.extraction_purposes.append(purpose)
             self.calls.append("extraction")
             self.running += 1
             self.max_running = max(self.max_running, self.running)
@@ -367,7 +377,12 @@ class _Agents:
             with self.lock:
                 self.running -= 1
 
+    #: U6 addendum: the planning and analysis requests, in order
+    planning_prompts: list[str] = []
+    analysis_prompts: list[str] = []
+
     def run_advanced_planning(self, agent, prompt, data, documents=()):
+        self.planning_prompts = [*self.planning_prompts, prompt]
         self.calls.append("planning")
         self.data_seen.append(data)
         self.documents_seen.append(list(documents))
@@ -384,10 +399,19 @@ class _Agents:
     #: U5: called inside each extraction call
     on_extraction: Any = None
 
+    #: U6: replaces the analysis (tools, holder, source_id) -> output
+    analysis_fn: Any = None
+
     def run_advanced_analysis(self, agent, prompt, data, *, source_id):
+        self.analysis_prompts = [*self.analysis_prompts, prompt]
+        self.analysis_data = data
         self.calls.append("analysis")
         if self.on_analysis is not None:
             self.on_analysis()
+        if self.analysis_fn is not None:
+            output = self.analysis_fn(self.tools, self.holder, source_id)
+            self._segments = list(output["segments"])
+            return output
         if self.analysis_mode == "zero":
             return {"segments": [], "evidence": []}
         text = self.tools["cluster_segments"](columns=["age", "income"])
@@ -452,8 +476,15 @@ class _Agents:
             wanted.group(1) if wanted else 2
         )
         personas = []
+        same_layer = self.synthesis_mode == "same_layer" or (
+            self.synthesis_mode == "same_layer_first"
+            and self.calls.count("synthesis") == 1
+        )
         for i, segment in enumerate(segments):
             segment_id = segment["id"]
+            if same_layer:
+                segment = segments[0]
+                segment_id = segment["id"]
             if self.synthesis_mode == "orphan" and i == 0:
                 segment_id = "seg-missing"
             personas.append(
@@ -524,8 +555,16 @@ class _Env:
         self.agents = _Agents(self.holder)
 
     def factory(self, session, policy, **kwargs):
-        service = service_factory.create_analysis_tools(session, policy, **kwargs)
+        if "gate" in kwargs and kwargs["gate"] is not None:
+            # U6: the same Service, polling a running run_code quickly
+            sandbox = kwargs.pop("sandbox")
+            service = AnalysisToolService(
+                sandbox, session, policy, poll_seconds=0.02, **kwargs
+            )
+        else:
+            service = service_factory.create_analysis_tools(session, policy, **kwargs)
         self.holder["service"] = service
+        self.holder.setdefault("policies", []).append(policy)
         return service
 
     def manager(self, **overrides: Any) -> AdvancedPersonaGenerationManager:
@@ -673,13 +712,19 @@ class TestStart:
         ):
             _start(env.manager(), file, count=count)
 
-    def test_two_tables_are_refused(self, env: _Env) -> None:
-        a, b = env.ready_file(), env.ready_file()
+    def test_four_tables_are_refused(self, env: _Env) -> None:
+        # U6 BR37.1 replaced U4's one table: three tables at most
+        files = [env.ready_file() for _ in range(4)]
 
-        with raises_code(AdvancedGenerationError, ErrorCode.UPLOAD_SOURCE_INVALID):
+        with raises_code(
+            AdvancedGenerationError,
+            ErrorCode.UPLOAD_SOURCE_INVALID,
+            reason="tables",
+            max=3,
+        ):
             env.manager().start_generation(
                 ADMIN,
-                source_file_ids=[a.source_file_id, b.source_file_id],
+                source_file_ids=[f.source_file_id for f in files],
                 purpose="",
                 persona_count=2,
             )
@@ -724,6 +769,101 @@ class TestStart:
             _start(manager, env.ready_file())
         # The refused start gave its slot back: another user can still start.
         _start(manager, env.ready_file(owner=OTHER.sub), principal=OTHER)
+
+
+class TestPersonaCheck:
+    def test_a_synthesis_that_leaves_a_layer_out_is_written_again_once(
+        self, env: _Env
+    ) -> None:
+        env.agents.synthesis_mode = "same_layer_first"
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+        assert env.agents.calls.count("synthesis") == 2
+
+    def test_a_synthesis_that_still_leaves_a_layer_out_fails_the_generation(
+        self, env: _Env
+    ) -> None:
+        env.agents.synthesis_mode = "same_layer"
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.GENERATION_VERIFICATION_FAILED.value
+        assert env.agents.calls.count("synthesis") == 2
+
+
+class TestRowsAreNotPeopleParam:
+    @staticmethod
+    def _state(profile: dict[str, Any]) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            budget=None,
+            detailed_fallback=None,
+            joins=[],
+            tables=[SimpleNamespace(alias="source_1", profile=profile)],
+            profile=profile,
+            reading=AnalysisPolicy.read_tables([("source_1", "f.csv", profile)]),
+        )
+
+    def test_a_history_is_recorded_as_counting_rows(self) -> None:
+        profile = {
+            "columns": [
+                {"name": "注文ID", "type": "VARCHAR", "all_distinct": True},
+                {"name": "顧客ID", "type": "VARCHAR", "all_distinct": False},
+            ]
+        }
+
+        params = AdvancedPersonaGenerationManager._u6_params(self._state(profile))
+
+        assert params["rows_are_not_people"] is True
+
+    def test_a_table_of_people_records_nothing(self) -> None:
+        profile = {
+            "columns": [{"name": "顧客ID", "type": "VARCHAR", "all_distinct": True}]
+        }
+
+        params = AdvancedPersonaGenerationManager._u6_params(self._state(profile))
+
+        assert "rows_are_not_people" not in params
+
+
+class TestSegmentFeatures:
+    def test_the_synthesis_gets_the_features_the_library_counted(
+        self, env: _Env
+    ) -> None:
+        def analysis(tools: dict, holder: dict, source_id: str) -> dict[str, Any]:
+            output = _cluster_fallback(tools, holder)
+            for segment in output["segments"]:
+                # free text the agent wrote: nothing backs it
+                segment["features"] = [
+                    {"name": "年齢", "value": "43.7歳", "baseline": "別の層は41歳"}
+                ]
+            return output
+
+        env.agents.analysis_fn = analysis
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        synthesis = next(
+            d for d in env.agents.data_seen if "segments" in d and "purpose" in d
+        )
+        segments = json.loads(synthesis["segments"])
+        features = [f for s in segments for f in s["features"]]
+        assert features, "the cluster features reach the synthesis"
+        assert all(f["kind"] in ("mean", "share") for f in features)
+        assert all(isinstance(f["value"], float) for f in features)
+        assert not any("別の層" in str(f) for f in features)
 
 
 class TestRun:
@@ -1626,6 +1766,58 @@ class TestInsufficientData:
         assert context["required_rows"] == 200
 
 
+class TestStageProgressMessages:
+    """The screen's log says what is going on in every stage, not only the rows."""
+
+    def test_every_stage_tells_what_it_does_without_the_users_data(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        messages = [
+            str(s.get("message", ""))
+            for k, s in _events(env, generation_id)
+            if k == "progress"
+        ]
+        text = "\n".join(messages)
+        assert "分析の計画を作っています" in text
+        assert "計画ができました" in text
+        assert "分析を始めます" in text
+        assert "分析が終わりました" in text
+        assert "ペルソナ" in text and "作っています" in text
+        assert "検証" in text
+        # the order follows the stages
+        order = [
+            next(i for i, m in enumerate(messages) if needle in m)
+            for needle in (
+                "分析の計画を作っています",
+                "計画ができました",
+                "分析を始めます",
+                "分析が終わりました",
+                "検証できました",
+            )
+        ]
+        assert order == sorted(order)
+
+    def test_each_tool_call_is_told_as_it_finishes(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        messages = [
+            str(s.get("message", ""))
+            for k, s in _events(env, generation_id)
+            if k == "progress"
+        ]
+        calls = len(env.holder["service"].calls)
+        told = [m for m in messages if m.startswith("操作 ")]
+        assert calls >= 1 and len(told) == calls
+
+
 class TestPrepareNotice:
     """BR17.2, NFR1.13: a notice every 60 seconds while the rows stand still."""
 
@@ -2093,6 +2285,21 @@ class TestEvidenceExtraction:
         assert env.agents.calls.count("extraction") == chunks
         assert env.agents.max_running <= 2
 
+    @pytest.mark.parametrize("purpose", ["30 代の不満を優先", ""])
+    def test_every_chunk_call_gets_the_users_purpose(
+        self, env: _Env, extraction, purpose: str
+    ) -> None:
+        """The prompt asks to favour the instruction, so it must be sent (BR26.1)."""
+        doc = env.ready_document(_interview(8))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc, purpose=purpose)
+
+        manager.run(generation_id)
+
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE
+        assert env.agents.extraction_purposes
+        assert set(env.agents.extraction_purposes) == {purpose}
+
     def test_progress_says_n_of_m_up_to_the_end(self, env: _Env, extraction) -> None:
         doc = env.ready_document(_interview(8))
 
@@ -2479,7 +2686,7 @@ class TestPlanConfirmation:
 
         generation = _current(env, generation_id)
         assert generation.status is GenerationStatus.DONE
-        assert generation.options == {"confirm_plan": False}
+        assert generation.options["confirm_plan"] is False
         stages = [s["status"] for k, s in _events(env, generation_id) if k == "stage"]
         assert AWAITING.value not in stages
 
@@ -3387,6 +3594,108 @@ class TestNothingKeptAfterALateEnd:
         self._assert_nothing_kept(env, generation_id)
 
 
+class TestDataReading:
+    """U6 addendum: the plan card shows how the tables read, and the user may fix it."""
+
+    def test_the_card_has_the_proposed_reading(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        (reading,) = _current(env, generation_id).data_reading or ()
+
+        assert reading.name == "people.csv" and reading.kind == "people"
+        assert reading.person_id == "id" and "id" in reading.skip
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+    def test_a_choice_at_approve_is_kept_and_told_to_the_analysis(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        manager.decide_plan(
+            ADMIN,
+            generation_id,
+            "approve",
+            data_reading={
+                "source_1": {"kind": "people", "person_id": "id", "skip": ["income"]}
+            },
+        )
+        run.join()
+
+        generation = _current(env, generation_id)
+        (reading,) = generation.data_reading or ()
+        assert generation.status is GenerationStatus.DONE
+        assert reading.skip == ("id", "income")
+        assert '"income"' in env.agents.analysis_data["data_reading"]
+
+    def test_a_replan_with_a_corrected_reading_suggests_the_history_steps(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = manager.start_generation(
+            ADMIN,
+            source_file_ids=[env.ready_file().source_file_id],
+            purpose="30 代",
+            persona_count=2,
+            confirm_plan=True,
+            use_detailed_analysis=True,
+        )
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+        assert "person_profile:" not in env.agents.planning_prompts[0]
+
+        manager.decide_plan(
+            ADMIN,
+            generation_id,
+            "replan",
+            revised_purpose="30 代",
+            data_reading={
+                "source_1": {"kind": "history", "person_id": "id", "skip": ["id"]}
+            },
+        )
+        _await_card(env, generation_id, replans=1)
+
+        assert "person_profile:" in env.agents.planning_prompts[-1]
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+    @pytest.mark.parametrize(
+        "choice",
+        [
+            {"kind": "weird", "person_id": "id", "skip": []},
+            {"kind": "people", "person_id": "nope", "skip": []},
+            {"kind": "people", "person_id": "id", "skip": ["nope"]},
+        ],
+    )
+    def test_a_choice_the_table_cannot_take_is_refused(
+        self, env: _Env, choice: dict
+    ) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        with raises_code(AdvancedGenerationError, ErrorCode.REQUEST_INVALID):
+            manager.decide_plan(
+                ADMIN, generation_id, "approve", data_reading={"source_1": choice}
+            )
+        with raises_code(AdvancedGenerationError, ErrorCode.REQUEST_INVALID):
+            manager.decide_plan(
+                ADMIN, generation_id, "approve", data_reading={"source_9": choice}
+            )
+
+        assert _current(env, generation_id).control_request is None
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+
 class TestPlanDecisionOnly:
     """Review fix 3: the plan route takes approve and replan only."""
 
@@ -3435,3 +3744,710 @@ class TestPlanDecisionOnly:
 
         with raises_code(AdvancedGenerationError, ErrorCode.GENERATION_NOT_FOUND):
             manager.decide_plan(OTHER, generation_id, "approve")
+
+
+# ---------------------------------------------------------------------------
+# U6: the AI detailed analysis and several tables (BR35〜BR38)
+# ---------------------------------------------------------------------------
+
+_ALLOWED = {"audience_mode": "everyone", "allow_detailed_analysis": True, "version": 1}
+_EMIT = (
+    'df = read_table("source_1")\n'
+    'df["seg"] = ["young" if a < 40 else "old" for a in df["age"]]\n'
+    'print("print-secret 77777")\n'
+    'emit_result(df, "seg", "source_1", id_column="id")\n'
+)
+_EMIT_JOIN = (
+    'df = join_tables("source_1", "id", [{"source": "source_2",'
+    ' "aggregations": [{"column": "amount", "func": "sum"}]}])\n'
+    'df["seg"] = ["young" if a < 40 else "old" for a in df["age"]]\n'
+    'emit_result(df, "seg", "join:source_1+source_2", id_column="id")\n'
+)
+_DISABLED_NOTICE = "AI による詳細分析をやめて、事前定義された関数で続けます"
+
+
+class _CodeSandbox(_Sandbox):
+    """The in-process library, told apart as Code Interpreter (run_code given)."""
+
+    @property
+    def kind(self) -> str:
+        return "code_interpreter"
+
+
+def _purchases_csv(people: int = 200) -> bytes:
+    lines = ["id,amount"]
+    for i in range(people):
+        lines += [f"{i},{100 + i}", f"{i},{200 + i}"]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _detailed_env(env: _Env) -> _Env:
+    env.sandbox = _CodeSandbox(
+        read_object=env.sandbox._read_object,
+        root_dir=env.sandbox.root_dir,
+    )
+    env.settings.get.return_value = dict(_ALLOWED)
+    return env
+
+
+def _start_detailed(manager, *files: SourceFile, checked: bool = True) -> str:
+    return manager.start_generation(
+        ADMIN,
+        source_file_ids=[f.source_file_id for f in files],
+        purpose="",
+        persona_count=2,
+        use_detailed_analysis=checked,
+    )
+
+
+def _call_id(text: str) -> str:
+    return text.splitlines()[0].removeprefix("tool_call_id: ")
+
+
+def _from_emitted(service: Any, call_id: str) -> dict[str, Any]:
+    result = service.emitted_results()[call_id]
+    segments, evidence = [], []
+    for n, item in enumerate(result.segments):
+        key, size = item["segment_key"], item["size"]
+        segments.append(
+            {
+                "id": f"seg-{n}",
+                "label": key,
+                "definition": {
+                    "kind": "derived",
+                    "source": result.population_source,
+                    "spec": {"tool_call_id": call_id, "segment_key": key},
+                },
+                "size": size,
+                "share": round(size / result.population, 3),
+                "features": [],
+                "evidence_ids": [f"ev-{n}"],
+                "overlaps": False,
+            }
+        )
+        evidence.append(
+            {
+                "id": f"ev-{n}",
+                "source_id": "x",
+                "location": call_id,
+                "kind": "attribute",
+                "claim": f"{key} の層",
+                "statistic": {"value": size, "population": result.population},
+            }
+        )
+    return {"segments": segments, "evidence": evidence}
+
+
+def _cluster_fallback(tools: dict, holder: dict) -> dict[str, Any]:
+    text = tools["cluster_segments"](columns=["age", "income"], source="source_1")
+    call_id = _call_id(text)
+    output = holder["service"].output_of(call_id)
+    segments: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    if output is None:  # the tools halted (a change was found)
+        return {"segments": segments, "evidence": evidence}
+    for cluster in output["clusters"]:
+        i = cluster["index"]
+        segments.append(
+            {
+                "id": f"seg-{i}",
+                "label": f"層 {i}",
+                "definition": {
+                    "kind": "cluster",
+                    "source": "source_1",
+                    "spec": {"tool_call_id": call_id, "cluster_index": i},
+                },
+                "size": cluster["size"],
+                "share": cluster["share"],
+                "features": [],
+                "evidence_ids": [f"ev-{i}"],
+            }
+        )
+        evidence.append(
+            {
+                "id": f"ev-{i}",
+                "source_id": "x",
+                "location": call_id,
+                "kind": "attribute",
+                "claim": "年齢と収入",
+            }
+        )
+    return {"segments": segments, "evidence": evidence}
+
+
+def _code_analysis(failures: int = 0, *, after=None, code: str = _EMIT):
+    def analysis(tools: dict, holder: dict, source_id: str) -> dict[str, Any]:
+        for i in range(failures):
+            tools["run_code"](code=f"raise ValueError('boom-secret {i}')")
+        text = tools["run_code"](code=code)
+        service = holder["service"]
+        if after is not None:
+            after(holder)
+        if _call_id(text) in service.emitted_results():
+            return _from_emitted(service, _call_id(text))
+        return _cluster_fallback(tools, holder)
+
+    return analysis
+
+
+class TestDetailedAnalysisChoice:
+    """BR35.2, NFR5.58: decided at the start and kept on the generation."""
+
+    def test_allowed_code_interpreter_and_checked_is_on(self, env: _Env) -> None:
+        env = _detailed_env(env)
+
+        gid = _start_detailed(env.manager(), env.ready_file())
+
+        assert _current(env, gid).use_detailed_analysis is True
+
+    @pytest.mark.parametrize("case", ["not_allowed", "in_process", "unchecked"])
+    def test_otherwise_it_is_off(self, env: _Env, case: str) -> None:
+        if case != "in_process":
+            env = _detailed_env(env)
+        env.settings.get.return_value = {
+            **_ALLOWED,
+            "allow_detailed_analysis": case != "not_allowed",
+        }
+
+        gid = _start_detailed(
+            env.manager(), env.ready_file(), checked=case != "unchecked"
+        )
+
+        assert _current(env, gid).use_detailed_analysis is False
+
+    def test_documents_only_is_off(self, env: _Env) -> None:
+        env = _detailed_env(env)
+
+        gid = _start_detailed(env.manager(), env.ready_document(_interview()))
+
+        assert _current(env, gid).use_detailed_analysis is False
+
+    def test_a_change_of_the_setting_does_not_reach_a_started_run(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.settings.get.return_value = {**_ALLOWED, "allow_detailed_analysis": False}
+        env.agents.analysis_fn = _code_analysis()
+
+        manager.run(gid)
+
+        assert _current(env, gid).status is GenerationStatus.DONE
+        assert "run_code" in env.agents.tools
+
+    def test_off_gives_no_run_code_to_the_agent(self, env: _Env) -> None:
+        env.settings.get.return_value = {**_ALLOWED, "allow_detailed_analysis": False}
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+
+        manager.run(gid)
+
+        assert "run_code" not in env.agents.tools
+        assert "load_playbook" not in env.agents.tools
+
+
+class TestRunCodeInTheGeneration:
+    def test_five_failures_go_on_with_the_fixed_functions(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis(failures=6)
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        generation = _current(env, gid)
+        assert generation.status is GenerationStatus.DONE
+        assert _progress(env, gid).count(_DISABLED_NOTICE) == 1
+        (disabled,) = logs.events("advanced_generation.run_code_disabled")
+        assert disabled["status"] == "disabled"
+        assert disabled["reason"] == "max_failures" and disabled["failures"] == 5
+        params = generation.analysis_run.params["detailed_analysis"]
+        assert params == {"used": True, "fell_back": True, "failures": 5}
+        (finished,) = logs.events("advanced_generation.finished")
+        assert finished["run_code_disabled"] is True
+        assert finished["run_code_failures"] == 5
+        assert finished["detailed_analysis_used"] is True
+
+    def test_failures_never_reach_the_synthesis_or_the_record(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis(failures=3)
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert _current(env, gid).status is GenerationStatus.DONE
+        synthesis = json.dumps(env.agents.data_seen[-1], ensure_ascii=False)
+        records = logs.records()
+        for secret in ("boom-secret", "print-secret", "raise ValueError"):
+            assert secret not in synthesis
+            assert_not_leaked(secret, records)
+        record = manager.get_record(ADMIN, gid)
+        written = [b for b in record.code_blocks if b["kind"] == "ai_written"]
+        assert [b["code"] for b in written] == [_EMIT]
+        calls = [c for c in record.tool_calls if c["tool"] == "run_code"]
+        assert [c["ok"] for c in calls] == [False, False, False, True]
+        assert all("error_code" in c for c in calls[:3])
+        run = _current(env, gid).analysis_run
+        assert written[0]["sha256"] in run.code_sha256
+
+    def test_a_changed_parquet_fails_without_a_record(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        file = env.ready_file()
+        gid = _start_detailed(manager, file)
+        env.agents.analysis_fn = lambda tools, holder, source_id: (
+            tools["run_code"](
+                code="open('../../prepared/" + file.source_file_id + ".parquet', 'ab')"
+                ".write(b'x')"
+            ),
+            _cluster_fallback(tools, holder),
+        )[1]
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert (
+            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+        )
+        assert _candidate_count(env) == 0 and not _record_exists(env, gid)
+        (tamper,) = logs.events("advanced_generation.tamper_detected")
+        assert tamper["status"] == "detected" and tamper["changed"] == ["parquet"]
+
+    def test_a_change_after_the_last_run_is_found_before_the_synthesis(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        file = env.ready_file()
+        gid = _start_detailed(manager, file)
+
+        def tamper(holder: dict) -> None:
+            session = env.sandbox._workdirs
+            (workdir,) = session.values()
+            parquet = Path(workdir) / "prepared" / f"{file.source_file_id}.parquet"
+            with parquet.open("ab") as f:
+                f.write(b"x")
+
+        env.agents.analysis_fn = _code_analysis(after=tamper)
+
+        manager.run(gid)
+
+        assert (
+            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+        )
+        assert "synthesis" not in env.agents.calls
+        assert _candidate_count(env) == 0
+
+
+class _NoParquetHashSandbox(_CodeSandbox):
+    """The preparation reports no ``parquet_sha256`` (review-01 R-01)."""
+
+    def poll_command(self, session, command_id):
+        status = super().poll_command(session, command_id)
+        result = status.get("result")
+        if (
+            self.functions.get(command_id) == "prepare"
+            and isinstance(result, dict)
+            and isinstance(result.get("value"), dict)
+        ):
+            value = {k: v for k, v in result["value"].items() if k != "parquet_sha256"}
+            status = {**status, "result": {**result, "value": value}}
+        return status
+
+
+class _NoLibraryHashSandbox(_CodeSandbox):
+    """The session holds no library hash to compare with (review-01 R-01)."""
+
+    @property
+    def library_sha256(self) -> str:
+        return ""
+
+
+class _FailingCheckSandbox(_CodeSandbox):
+    """The isolated check itself fails for one function (review-01 R-03)."""
+
+    failing: str = "verify_hashes"
+
+    def call_verified(self, session, function, args):
+        if function == self.failing:
+            return {"ok": False, "error_code": "SANDBOX_COMMAND_FAILED"}
+        return super().call_verified(session, function, args)
+
+
+class _ScanSandbox(_CodeSandbox):
+    """The final check reports this process scan (security review)."""
+
+    scan: dict = {"process_scan": "ok", "leftover_processes": 1}
+
+    def call_verified(self, session, function, args):
+        result = super().call_verified(session, function, args)
+        if function == "verify_hashes" and isinstance(result.get("value"), dict):
+            value = {
+                k: v
+                for k, v in result["value"].items()
+                if k not in ("process_scan", "leftover_processes")
+            }
+            return {**result, "value": {**value, **self.scan}}
+        return result
+
+
+_ESCAPE_THEN_EMIT = (
+    "import os, time\n"
+    "pid = os.fork()\n"
+    "if pid == 0:\n"
+    "    os.setsid()\n"
+    "    time.sleep(30)\n"
+    "    os._exit(0)\n"
+    "open('child.pid', 'w').write(str(pid))\n" + _EMIT
+)
+
+
+def _with_sandbox(env: _Env, cls: type) -> _Env:
+    env = _detailed_env(env)
+    env.sandbox = cls(
+        read_object=env.sandbox._read_object, root_dir=env.sandbox.root_dir
+    )
+    return env
+
+
+class TestDetailedAnalysisFailsClosed:
+    """review-01 R-01 / R-03: no hash to compare and a failed check."""
+
+    @pytest.mark.parametrize("cls", [_NoParquetHashSandbox, _NoLibraryHashSandbox])
+    def test_without_a_hash_the_fixed_functions_go_on(
+        self, env: _Env, capsys: pytest.CaptureFixture[str], cls: type
+    ) -> None:
+        env = _with_sandbox(env, cls)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = lambda tools, holder, _: _cluster_fallback(
+            tools, holder
+        )
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        generation = _current(env, gid)
+        assert generation.status is GenerationStatus.DONE
+        assert "run_code" not in env.agents.tools
+        assert "load_playbook" not in env.agents.tools
+        assert _progress(env, gid).count(_DISABLED_NOTICE) == 1
+        (disabled,) = logs.events("advanced_generation.run_code_disabled")
+        assert disabled["status"] == "disabled"
+        assert disabled["reason"] == "missing_hash" and disabled["failures"] == 0
+        assert generation.analysis_run.params["detailed_analysis"] == {
+            "used": False,
+            "fell_back": True,
+            "failures": 0,
+            "reason": "missing_hash",
+        }
+        (finished,) = logs.events("advanced_generation.finished")
+        assert finished["run_code_disabled"] is True
+        assert logs.events("advanced_generation.tamper_detected") == []
+
+    @pytest.mark.parametrize("failing", ["verify_hashes", "finalize_ai_result"])
+    def test_a_failed_check_fails_the_generation_but_is_no_tamper(
+        self, env: _Env, capsys: pytest.CaptureFixture[str], failing: str
+    ) -> None:
+        env = _with_sandbox(env, _FailingCheckSandbox)
+        env.sandbox.failing = failing
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis()
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert (
+            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+        )
+        assert "synthesis" not in env.agents.calls
+        assert _candidate_count(env) == 0 and not _record_exists(env, gid)
+        assert logs.events("advanced_generation.tamper_detected") == []
+        (disabled,) = logs.events("advanced_generation.run_code_disabled")
+        assert disabled["status"] == "disabled"
+        assert disabled["reason"] == "verify_failed"
+
+    def test_a_process_left_at_the_final_check_fails_as_a_tamper(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _with_sandbox(env, _ScanSandbox)
+        env.sandbox.scan = {"process_scan": "ok", "leftover_processes": 1}
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis()
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert (
+            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+        )
+        assert "synthesis" not in env.agents.calls
+        (tamper,) = logs.events("advanced_generation.tamper_detected")
+        assert tamper["changed"] == ["process"]
+
+    @pytest.mark.parametrize(
+        "scan",
+        [{"process_scan": "unavailable"}, {}],
+        ids=["unavailable", "missing"],
+    )
+    def test_a_final_scan_that_could_not_run_fails_closed_but_is_no_tamper(
+        self, env: _Env, capsys: pytest.CaptureFixture[str], scan: dict
+    ) -> None:
+        env = _with_sandbox(env, _ScanSandbox)
+        env.sandbox.scan = scan
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis()
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert (
+            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+        )
+        assert logs.events("advanced_generation.tamper_detected") == []
+        (disabled,) = logs.events("advanced_generation.run_code_disabled")
+        assert disabled["reason"] == "verify_failed"
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
+    def test_code_that_leaves_a_process_fails_the_generation(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        children: list[int] = []
+
+        def collect(holder: dict) -> None:
+            # read before the session folder goes, to stop them in any case
+            root = Path(env.sandbox.root_dir)
+            children.extend(
+                int(p.read_text()) for p in root.glob("*/ai_work/*/child.pid")
+            )
+
+        env.agents.analysis_fn = _code_analysis(code=_ESCAPE_THEN_EMIT, after=collect)
+        logs = LogCapture(capsys)
+        try:
+            manager.run(gid)
+
+            assert children
+            assert (
+                _failed(env, gid).error_code
+                == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+            )
+            assert "synthesis" not in env.agents.calls
+            (tamper,) = logs.events("advanced_generation.tamper_detected")
+            assert tamper["changed"] == ["process"]
+        finally:
+            for pid in children:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+
+class TestSeveralTables:
+    def test_tables_are_prepared_in_order_and_the_hash_is_not_stored(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        people, buys = env.ready_file(), env.ready_file(data=_purchases_csv())
+        gid = _start_with(manager, people, buys)
+        env.agents.analysis_fn = lambda tools, holder, _: _cluster_fallback(
+            tools, holder
+        )
+
+        manager.run(gid)
+
+        prepared = [a["source_id"] for f, a in env.sandbox.started if f == "prepare"]
+        assert prepared == [people.source_file_id, buys.source_file_id]
+        assert _current(env, gid).status is GenerationStatus.DONE
+        parts = env.generations.read_result_parts(gid, ResultPartName.PREPARE_REPORTS)
+        assert len(parts) == 2
+        assert all("parquet_sha256" not in p for p in parts)
+        assert "key_overlap" not in [f for f, _ in env.sandbox.started]
+        assert env.holder["policies"][-1].sources == ("source_1", "source_2")
+
+    def test_a_common_id_column_is_planned_and_recorded_when_on(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        people, buys = env.ready_file(), env.ready_file(data=_purchases_csv())
+        gid = _start_detailed(manager, people, buys)
+        env.agents.analysis_fn = _code_analysis()
+
+        manager.run(gid)
+
+        assert "key_overlap" in [f for f, _ in env.sandbox.started]
+        plan_data = env.agents.data_seen[0]
+        joins = json.loads(plan_data["join_plans"])
+        assert joins == [
+            {
+                "axis": "source_1",
+                "table": "source_2",
+                "key_column": "id",
+                "match_rate": pytest.approx(0.6667, abs=1e-3),
+            }
+        ]
+        # review-01 R-04: the analysis kept to source_1, so only the plan is kept
+        params = _current(env, gid).analysis_run.params
+        assert "join" not in params
+        plan = params["join_plan"]
+        assert plan["axis"] == "source_1"
+        assert plan["tables"][0]["table"] == "source_2"
+        assert plan["tables"][0]["key_column"] == "id"
+        assert plan["tables"][0]["matched_people"] == 200
+        assert "joined_columns" not in plan
+
+    def test_a_join_the_analysis_used_is_recorded_as_joined(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        people, buys = env.ready_file(), env.ready_file(data=_purchases_csv())
+        gid = _start_detailed(manager, people, buys)
+        env.agents.analysis_fn = _code_analysis(code=_EMIT_JOIN)
+
+        manager.run(gid)
+
+        params = _current(env, gid).analysis_run.params
+        assert "join_plan" not in params
+        join = params["join"]
+        assert join["axis"] == "source_1"
+        assert join["tables"][0]["table"] == "source_2"
+        assert join["tables"][0]["matched_people"] == 200
+        assert join["joined_columns"][0] == "id"
+        assert "source_2_amount_sum" in join["joined_columns"]
+
+    def test_no_common_column_is_analysed_apart(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        other = "page,views\n" + "".join(f"p{i},{i}\n" for i in range(40))
+        people, pages = env.ready_file(), env.ready_file(data=other.encode())
+        gid = _start_detailed(manager, people, pages)
+        env.agents.analysis_fn = _code_analysis()
+
+        manager.run(gid)
+
+        assert _current(env, gid).status is GenerationStatus.DONE
+        assert "join_plans" not in env.agents.data_seen[0]
+        assert "join" not in _current(env, gid).analysis_run.params
+
+
+class TestMultiStepPlan:
+    """U6 addendum: the plan as steps, the candidates and the playbooks read."""
+
+    def test_the_plan_keeps_its_steps_and_the_requests_follow_them(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        people, buys = env.ready_file(), env.ready_file(data=_purchases_csv())
+        gid = _start_detailed(manager, people, buys)
+        env.agents.plan = {
+            **env.agents.plan,
+            "steps": [
+                {"kind": "join", "reason": "結合できる"},
+                {"kind": "cluster", "reason": "まとめる", "table": "source_1"},
+            ],
+        }
+        env.agents.analysis_fn = _code_analysis(code=_EMIT_JOIN)
+
+        manager.run(gid)
+
+        generation = _current(env, gid)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.plan is not None
+        assert [s.kind.value for s in generation.plan.plan_steps()] == [
+            "join",
+            "cluster",
+        ]
+        # the guide's candidates reach the planning request
+        assert "1. join:" in env.agents.planning_prompts[0]
+        assert 'load_playbook("join")' in env.agents.analysis_prompts[0]
+        record = manager.get_record(ADMIN, gid)
+        assert [s["kind"] for s in record.plan["steps"]] == ["join", "cluster"]
+
+    def test_without_the_detailed_analysis_no_detailed_step_is_kept(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        gid = _start(manager, env.ready_file())
+        env.agents.plan = {
+            **env.agents.plan,
+            "steps": [
+                {"kind": "join", "reason": "結合"},
+                {"kind": "cluster", "reason": "まとめる"},
+            ],
+        }
+
+        manager.run(gid)
+
+        generation = _current(env, gid)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.plan is not None
+        assert [s.kind.value for s in generation.plan.plan_steps()] == ["cluster"]
+        prompt = env.agents.planning_prompts[0]
+        assert "cluster:" in prompt
+        for kind in ("join:", "rfm:", "compare_groups:"):
+            assert kind not in prompt
+
+    def test_the_record_names_the_playbooks_read(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        analysis = _code_analysis()
+
+        def read_then_analyse(tools: dict, holder: dict, source_id: str):
+            tools["load_playbook"](name="rfm")
+            tools["load_playbook"](name="../secrets")
+            return analysis(tools, holder, source_id)
+
+        env.agents.analysis_fn = read_then_analyse
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        loads = [c for c in record.tool_calls if c["tool"] == "load_playbook"]
+        assert [c.get("playbook") for c in loads] == ["rfm", None]
+        assert all(
+            "playbook" not in c
+            for c in record.tool_calls
+            if c["tool"] != "load_playbook"
+        )
+
+    def test_look_arounds_never_take_run_code_off(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+
+        def look_around_then_emit(tools: dict, holder: dict, source_id: str):
+            for _ in range(6):
+                tools["run_code"](code='print(read_table("source_1").shape)')
+            return _code_analysis()(tools, holder, source_id)
+
+        env.agents.analysis_fn = look_around_then_emit
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert _current(env, gid).status is GenerationStatus.DONE
+        assert logs.events("advanced_generation.run_code_disabled") == []
+        record = manager.get_record(ADMIN, gid)
+        calls = [c for c in record.tool_calls if c["tool"] == "run_code"]
+        assert [c.get("error_code") for c in calls] == ["NO_RESULT"] * 6 + [None]
+        written = [b for b in record.code_blocks if b["kind"] == "ai_written"]
+        assert [b["code"] for b in written] == [_EMIT]

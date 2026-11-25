@@ -335,9 +335,9 @@ describe('AppStack: ログとメトリクス', () => {
   });
 
   test('認証のメトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
-    // 高度な生成の 5 つ（AIPersona/AdvancedGeneration。U2 で 2 つ足した）は下の節で確かめる
+    // 高度な生成の 7 つ（AIPersona/AdvancedGeneration。U2 で 2 つ、U6 で 2 つ足した）は下の節で確かめる
     const all = Object.values(template.findResources('AWS::Logs::MetricFilter'));
-    expect(all).toHaveLength(12);
+    expect(all).toHaveLength(14);
     const filters = all.filter(
       (f) => f.Properties.MetricTransformations[0].MetricNamespace === 'AIPersona/Auth',
     );
@@ -1245,7 +1245,7 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
     expect(joinedText(statements[0].Resource)).toMatch(/^IMPORT\(.*UploadBucket/);
   });
 
-  test('メトリクスフィルタ 5 つ（AIPersona/AdvancedGeneration。値は 1、既定値なし、アラームなし）', () => {
+  test('メトリクスフィルタ 7 つ（AIPersona/AdvancedGeneration。値は 1、既定値なし、アラームなし）', () => {
     const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'))
       .map((f) => f.Properties)
       .filter((p) => p.MetricTransformations[0].MetricNamespace === 'AIPersona/AdvancedGeneration');
@@ -1253,10 +1253,23 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
     expect(Object.keys(byName).sort()).toEqual([
       'GenerationCompleted',
       'GenerationFailed',
+      'RunCodeDisabled',
       'SourceDeleteFailed',
       'SourceRefreshFailed',
+      'TamperDetected',
       'UploadFailed',
     ]);
+    // U6（NFR6.22）: AI による詳細分析を外した数（reason の次元）と、書き換えを見つけた数
+    expect(byName.RunCodeDisabled.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.run_code_disabled") && ($.status = "disabled") }',
+    );
+    expect(byName.RunCodeDisabled.MetricTransformations[0].Dimensions).toEqual([
+      { Key: 'reason', Value: '$.reason' },
+    ]);
+    expect(byName.TamperDetected.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.tamper_detected") && ($.status = "detected") }',
+    );
+    expect(byName.TamperDetected.MetricTransformations[0].Dimensions).toBeUndefined();
     // U2（NFR6.10）: 削除とコピーの失敗。アプリのログの event と status の値
     expect(byName.SourceDeleteFailed.FilterPattern).toBe(
       '{ ($.event = "advanced_generation.source_deleted") && ($.status = "failed") }',

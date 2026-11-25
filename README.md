@@ -102,6 +102,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 | 対象 | ドキュメント |
 |------|------------|
 | ユーザー向け | [ユーザーガイド](docs/user_guide.md)  |
+| ユーザー向け | [ペルソナの高度な生成機能活用ガイド](docs/advanced_generation_guide.md) |
 | 開発者向け | [CDKデプロイガイド](cdk/README.md) |
 | 開発者向け | [閉域構成ガイド](docs/closed_network.md) |
 | 管理者向け | [利用者・ロール・グループの管理](docs/user_management.md) |

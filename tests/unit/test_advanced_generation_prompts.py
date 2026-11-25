@@ -117,3 +117,91 @@ class TestDocumentPrompts:
         # Structured output does not take dict fields (agent_service.py note)
         field = prompts.EvidenceItemOutput.model_fields["speaker_attributes"]
         assert "list" in str(field.annotation)
+
+
+class TestAnalysisInstructionsU6:
+    """BR36.5, BR37.2, BR37.4: the notes appear only when they apply."""
+
+    def test_one_table_without_detailed_is_the_u1_text(self) -> None:
+        assert prompts.analysis_instructions() == prompts.ANALYSIS_INSTRUCTIONS
+
+    def test_detailed_tells_emit_result_and_untrusted_output(self) -> None:
+        text = prompts.analysis_instructions(detailed=True)
+        assert "emit_result" in text and "信頼できないデータ" in text
+        assert "source_1" not in text
+
+    def test_detailed_forbids_the_network_and_instructions_in_the_data(self) -> None:
+        """Security review: the sandbox can reach some AWS services."""
+        text = prompts.analysis_instructions(detailed=True)
+        assert "ネットワーク" in text and "URL" in text
+        assert "データの中" in text
+
+    def test_several_tables_are_named(self) -> None:
+        assert "source_2" in prompts.analysis_instructions(tables=2)
+
+    def test_a_missing_value_is_not_filled_in_by_the_detailed_analysis(self) -> None:
+        text = prompts.analysis_instructions(detailed=True)
+
+        assert "補完" in text
+        assert "補完" not in prompts.analysis_instructions(detailed=False)
+
+    def test_layers_of_a_detailed_step_come_from_run_code(self) -> None:
+        from src.models.analysis import (
+            AnalysisMethod,
+            AnalysisPlan,
+            AnalysisStep,
+            AnalysisStepKind,
+        )
+
+        def plan(*kinds: AnalysisStepKind, method: AnalysisMethod) -> AnalysisPlan:
+            return AnalysisPlan(
+                interpreted_purpose="",
+                questions=("q",),
+                method=method,
+                rationale="",
+                budget={},
+                steps=tuple(AnalysisStep(k, "") for k in kinds),
+            )
+
+        detailed = plan(
+            AnalysisStepKind.JOIN,
+            AnalysisStepKind.RFM,
+            AnalysisStepKind.FILTER,
+            method=AnalysisMethod.FILTER,
+        )
+        fixed = plan(AnalysisStepKind.FILTER, method=AnalysisMethod.FILTER)
+
+        # a join or a score exists only in run_code: the layers are made there too
+        assert "emit_result" in prompts.analysis_prompt(detailed, 2)
+        assert "profile_segments" in prompts.analysis_prompt(detailed, 2)
+        assert "emit_result" not in prompts.analysis_prompt(fixed, 2)
+
+    def test_a_join_plan_reaches_the_request(self) -> None:
+        from src.models.analysis import (
+            AnalysisMethod,
+            AnalysisPlan,
+            AnalysisStep,
+            AnalysisStepKind,
+            JoinPlan,
+        )
+
+        # U6 addendum: the join playbook is named only with a join step
+        plan = AnalysisPlan(
+            interpreted_purpose="",
+            questions=("q",),
+            method=AnalysisMethod.CLUSTER,
+            rationale="",
+            budget={},
+            steps=(
+                AnalysisStep(AnalysisStepKind.JOIN, "結合"),
+                AnalysisStep(AnalysisStepKind.CLUSTER, "まとめる"),
+            ),
+        )
+        join = JoinPlan(
+            axis="source_1", table="source_2", key_column="customer_id", match_rate=0.9
+        )
+
+        text = prompts.analysis_prompt(plan, 3, joins=[join])
+
+        assert "customer_id" in text and 'load_playbook("join")' in text
+        assert "customer_id" not in prompts.analysis_prompt(plan, 3)

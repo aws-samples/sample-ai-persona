@@ -141,7 +141,7 @@ _CATALOG: dict[ErrorCode, str] = {
         "実行中の生成があります。進み具合を表示しました"
     ),
     ErrorCode.UPLOAD_SOURCE_INVALID: (
-        "このファイルは使えません。CSV・TSV の表か、PDF・Word（.docx）・テキスト"
+        "このファイルは使えません。CSV・TSV か、PDF・Word（.docx）・テキスト"
         "（.txt・.md）の文書を上げてください"
     ),
     ErrorCode.UPLOAD_TOO_LARGE: (
@@ -170,7 +170,7 @@ _CATALOG: dict[ErrorCode, str] = {
         "文字コードを判定できませんでした。UTF-8 で保存し直してください"
     ),
     ErrorCode.SOURCE_NOT_A_TABLE: (
-        "表として読めませんでした。CSV か TSV の表（1 行目が列名）を上げてください"
+        "CSV として読めませんでした。CSV か TSV（1 行目が列名）を上げてください"
     ),
     # --- 高度な生成（ベータ）U4（rules.md BR21〜BR25） ---
     ErrorCode.SOURCE_NOT_A_DOCUMENT: (
@@ -291,6 +291,9 @@ _CATALOG: dict[ErrorCode, str] = {
         "同じ名前のペルソナ元データがあります。別の名前を入力してください"
     ),
     ErrorCode.SETTINGS_NOT_FOUND: "お探しのページが見つかりません",
+    ErrorCode.SETTINGS_VERSION_CONFLICT: (
+        "ほかの人が先に変えました。内容を確かめて、もう一度保存してください"
+    ),
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING: "画像には名前を設定してください",
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_INVALID: (
         "画像の名前に改行などの制御文字は使えません"
@@ -763,7 +766,20 @@ def _source_invalid_detail(base: str, context: dict[str, Any]) -> str:
             "古い Word の形式（.doc）は使えません。.docx で保存し直して上げてください"
         )
     if context.get("reason") == "tables":
-        return "1 回の生成に使える表は 1 つまでです。文書はいくつでも一緒に選べます"
+        # U6 BR37.1: up to three tables (the limit comes from the context)
+        limit = _positive_int(context.get("max")) or 3
+        return f"CSV は {limit} つまで選べます。文書はいくつでも一緒に選べます"
+    return base
+
+
+def _request_invalid_detail(base: str, context: dict[str, Any]) -> str:
+    """A department gone since the settings screen opened (U6 BR34.3)."""
+    if context.get("reason") == "vanished_departments":
+        count = _positive_int(context.get("count"))
+        counted = f"（{count:,} 件）" if count is not None else ""
+        return (
+            f"見つからないグループが選ばれています{counted}。外してから保存してください"
+        )
     return base
 
 
@@ -790,6 +806,11 @@ def _encrypted_detail(base: str, context: dict[str, Any]) -> str:
 
 def _too_large_detail(base: str, context: dict[str, Any]) -> str:
     """The settled characters and the limit (BR25.1), integers only."""
+    if context.get("limit") == "tables_total":
+        # U6 NFR5.54: the chosen tables add up to more than 1GB
+        return (
+            "選んだ CSV の合計が 1GB を超えています。CSV を減らして生成し直してください"
+        )
     total = _non_negative_int(context.get("total_chars"))
     limit = _positive_int(context.get("max_chars"))
     if total is None or limit is None:
@@ -819,6 +840,7 @@ _DETAIL_WORDING: dict[ErrorCode, Callable[[str, dict[str, Any]], str]] = {
     ErrorCode.GENERATION_SOURCE_UNREADABLE: _unreadable_detail,
     ErrorCode.GENERATION_CAPACITY: _capacity_detail,
     ErrorCode.GENERATION_INSUFFICIENT_DATA: _insufficient_detail,
+    ErrorCode.REQUEST_INVALID: _request_invalid_detail,
     ErrorCode.UPLOAD_SOURCE_INVALID: _source_invalid_detail,
     ErrorCode.DOCUMENT_NO_TEXT: _no_text_detail,
     ErrorCode.DOCUMENT_ENCRYPTED: _encrypted_detail,

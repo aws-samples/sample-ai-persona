@@ -35,7 +35,23 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             # U5 NFR6.17
             "replan_count",
             "waited_seconds",
+            # U6 NFR6.20: counts only, never the code, its output or the
+            # error text (NFR3.36)
+            "detailed_analysis_used",
+            "run_code_calls",
+            "run_code_failures",
+            "run_code_disabled",
+            "table_count",
+            "joined_tables",
+            "join_match_rate",
         }
+    ),
+    # U6 NFR6.21 / NFR6.22: ``status`` is what the metric filters match.
+    "advanced_generation.run_code_disabled": frozenset(
+        {"generation_id", "status", "reason", "failures"}
+    ),
+    "advanced_generation.tamper_detected": frozenset(
+        {"generation_id", "status", "changed"}
     ),
     # U5 (observability-design.md NFR6.16): IDs, actions, states, codes,
     # counts and milliseconds only. Never the instruction or the session ID.

@@ -782,4 +782,5 @@ class TestServiceFactoryAuthzServices:
             "profile_dataset",
             "analyze_dataset",
             "cluster_segments",
+            "profile_segments",
         ]

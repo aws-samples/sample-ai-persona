@@ -3,6 +3,8 @@
 from datetime import datetime
 from unittest.mock import Mock
 
+import pytest
+
 from src.models.persona import Persona
 
 
@@ -274,3 +276,105 @@ class TestAdvancedControlLogFields:
         assert reader["error_code"] == "generation_stalled"
         assert expired["limit"] == "plan_wait_minutes"
         assert finished["status"] == "cancelled" and finished["replan_count"] == 1
+
+
+class TestAdvancedDetailedAnalysisLogFields:
+    """U6 NFR6.19〜NFR6.21, NFR3.36: counts and codes, never code or output."""
+
+    _SECRET = {"code": "CODE-SECRET", "stdout": "OUT-SECRET", "error": "ERR-SECRET"}
+
+    def test_run_code_disabled_and_tamper_detected(self, capsys) -> None:
+        from src.managers.shared.advanced_generation_log import log_advanced_event
+        from tests.log_helpers import LogCapture
+
+        logs = LogCapture(capsys)
+        log_advanced_event(
+            "advanced_generation.run_code_disabled",
+            generation_id="g",
+            status="disabled",
+            reason="max_failures",
+            failures=5,
+            **self._SECRET,
+        )
+        log_advanced_event(
+            "advanced_generation.tamper_detected",
+            generation_id="g",
+            status="detected",
+            changed=["parquet"],
+            **self._SECRET,
+        )
+
+        disabled, tamper = logs.records()
+        assert disabled["status"] == "disabled" and disabled["reason"] == "max_failures"
+        assert disabled["failures"] == 5
+        assert tamper["status"] == "detected" and tamper["changed"] == ["parquet"]
+        for record in (disabled, tamper):
+            assert not set(self._SECRET) & set(record)
+
+    @pytest.mark.parametrize("reason", ["verify_failed", "missing_hash"])
+    def test_a_failed_check_and_a_missing_hash_are_run_code_disabled(
+        self, capsys, reason: str
+    ) -> None:
+        """review-01 R-01 / R-03: told apart from a tamper by ``reason``."""
+        from src.managers.advanced_generation.detailed_analysis import (
+            REASON_MISSING_HASH,
+            REASON_VERIFY_FAILED,
+        )
+        from src.managers.shared.advanced_generation_log import log_advanced_event
+        from tests.log_helpers import LogCapture
+
+        assert {REASON_VERIFY_FAILED, REASON_MISSING_HASH} == {
+            "verify_failed",
+            "missing_hash",
+        }
+        logs = LogCapture(capsys)
+        log_advanced_event(
+            "advanced_generation.run_code_disabled",
+            generation_id="g",
+            status="disabled",
+            reason=reason,
+            failures=0,
+            **self._SECRET,
+        )
+
+        (record,) = logs.records()
+        assert record["event"] == "advanced_generation.run_code_disabled"
+        assert record["reason"] == reason and record["status"] == "disabled"
+        assert not set(self._SECRET) & set(record)
+
+    def test_finished_carries_the_new_counts(self, capsys) -> None:
+        from src.managers.shared.advanced_generation_log import log_advanced_event
+        from tests.log_helpers import LogCapture
+
+        logs = LogCapture(capsys)
+        log_advanced_event(
+            "advanced_generation.finished",
+            generation_id="g",
+            status="done",
+            detailed_analysis_used=True,
+            run_code_calls=4,
+            run_code_failures=3,
+            run_code_disabled=False,
+            table_count=2,
+            joined_tables=1,
+            join_match_rate=0.67,
+            **self._SECRET,
+        )
+
+        (finished,) = logs.records()
+        assert finished["detailed_analysis_used"] is True
+        assert finished["run_code_calls"] == 4 and finished["run_code_failures"] == 3
+        assert finished["run_code_disabled"] is False
+        assert finished["table_count"] == 2 and finished["joined_tables"] == 1
+        assert finished["join_match_rate"] == 0.67
+        assert not set(self._SECRET) & set(finished)
+
+    def test_the_new_events_are_listed(self) -> None:
+        from src.managers.shared.advanced_generation_log import ALLOWED_FIELDS
+
+        assert "changed" in ALLOWED_FIELDS["advanced_generation.tamper_detected"]
+        assert ALLOWED_FIELDS["advanced_generation.run_code_disabled"] >= {
+            "status",
+            "reason",
+            "failures",
+        }

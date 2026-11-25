@@ -20,16 +20,19 @@
     vanished  ... もう存在しないが共有されている部署の group_id（U4、admin のときだけ渡す）。
                   選択肢の最後に vanished_label の名前で出し、今の状態（選択か中間）から始める
     vanished_label ... 消えた部署の表示名
+    legend_text ... 見出しを変えたいとき（省略すると mode から決める。設定画面の高度な生成は「許可グループ」）
 #}
-{% macro department_picker(name, choices, selected, mixed=None, mode="share", id_prefix=None, vanished=None, vanished_label="（存在しないグループ）") -%}
+{#- free（U6）: 部署のほかにも保存する値がある区画（設定画面の高度な生成）。保存ボタンの
+    有効・無効と全部外すときの確認を DepartmentPicker に任せない -#}
+{% macro department_picker(name, choices, selected, mixed=None, mode="share", id_prefix=None, vanished=None, vanished_label="（存在しないグループ）", free=False, legend_text=None) -%}
 {%- set prefix = id_prefix or name -%}
-{%- set legend = "利用できるグループ（複数選択可）" if mode == "scope" else "共有するグループ（複数選択可）" -%}
+{%- set legend = legend_text or ("利用できるグループ（複数選択可）" if mode == "scope" else "共有するグループ（複数選択可）") -%}
 {#- 対象の件数（1 件を対象に開いたときは 1）。全部外す確認の判定に app.js が使う -#}
 {%- set ns = namespace(targets=1) -%}
 {%- if mixed %}{% for counts in mixed.values() %}{% if counts[1] > ns.targets %}{% set ns.targets = counts[1] %}{% endif %}{% endfor %}{% endif -%}
 {%- set options = choices | list -%}
 {%- for group_id in (vanished or []) %}{% set _ = options.append({"group_id": group_id, "display_name": vanished_label}) %}{% endfor -%}
-<fieldset data-department-picker data-name="{{ name }}" data-mode="{{ mode }}" data-target-count="{{ ns.targets }}"
+<fieldset data-department-picker data-name="{{ name }}" data-mode="{{ mode }}" data-target-count="{{ ns.targets }}"{% if free %} data-department-free{% endif %}
           data-testid="department-picker">
     <legend class="text-sm font-medium text-gray-700 mb-2">{{ legend }}</legend>
     {%- if not options %}

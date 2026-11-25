@@ -6,6 +6,11 @@
 {{ {"filter": "絞り込み", "compare": "群どうしの比較", "cluster": "クラスタ分析"}.get(method, method) }}
 {%- endmacro %}
 
+{# U6 の追加の設計: 計画の手順の種類と、読んだ定石の名前 #}
+{% macro step_label(kind) -%}
+{{ {"filter": "対象を絞って集計", "compare": "群どうしの比較", "cluster": "似た人をまとめる", "join": "CSV を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定", "person_profile": "履歴を人ごとに集計"}.get(kind, kind) }}
+{%- endmacro %}
+
 {% macro encoding_label(encoding) -%}
 {{ {"utf-8": "UTF-8", "utf-8-sig": "UTF-8", "cp932": "CP932", "euc-jp": "EUC-JP", "undetermined": "英数字だけ（前準備で確定）"}.get(encoding, encoding) }}
 {%- endmacro %}
@@ -28,9 +33,28 @@
 {%- endmacro %}
 
 {#
-  ai_written は U6（AI による詳細分析）で記録に現れる。U1 の記録は決まった関数（fixed）だけで、
+  ai_written は U6（AI による詳細分析）で記録に現れる。U1 の記録は事前定義された関数（fixed）だけで、
   この分岐はまだ通らない。U6 で使うため残している。
 #}
 {% macro code_kind_label(kind) -%}
-{{ "AI による詳細分析" if kind == "ai_written" else "決まった関数" }}
+{{ "AI による詳細分析" if kind == "ai_written" else "事前定義された関数" }}
+{%- endmacro %}
+
+{# 分析の記録: 分析エージェントが使った道具の名前（決まった 5 つ） #}
+{% macro tool_label(tool) -%}
+{{ {"profile_dataset": "データの全体像を確認", "analyze_dataset": "条件を指定して集計", "cluster_segments": "似た人のグループ分け", "run_code": "AI が書いたプログラムで分析", "load_playbook": "分析の定石を読み込み"}.get(tool, "分析") }}
+{%- endmacro %}
+
+{# 分析の記録: 実行したコードのブロックが何をしたか（関数名でなく処理の言葉）。固定の対応で、利用者のデータは入らない #}
+{% macro block_summary(block) -%}
+{%- set code = block.get("code", "") -%}
+{%- if block.get("kind") == "ai_written" -%}AI が書いたプログラムによる分析
+{%- elif code.startswith("prepare_document(") -%}文書の読み込み（文字の取り出し）
+{%- elif code.startswith("prepare(") -%}CSV の読み込み（文字コードと列の型を確認）
+{%- elif code.startswith("profile_dataset(") -%}データの全体像を確認（列の型・欠けた値・分布）
+{%- elif code.startswith("analyze_dataset(") -%}条件を指定した群ごとの集計
+{%- elif code.startswith("cluster_segments(") -%}似た特徴の人どうしのグループ分け
+{%- elif code.startswith("verify_quotes(") -%}根拠の引用を文書と照合
+{%- else -%}分析の処理
+{%- endif -%}
 {%- endmacro %}

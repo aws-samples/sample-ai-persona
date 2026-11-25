@@ -28,19 +28,24 @@ import bisect
 import codecs
 import datetime as _dt
 import decimal
+import hashlib
 import io
 import json
+import math
 import os
 import re
+import signal
+import subprocess
 import sys
 import threading
+import time
 import unicodedata
 import urllib.error
 import urllib.request
 import warnings
 import xml.etree.ElementTree as ET
 import zipfile
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 #: Version of the fixed preparation; recorded in PrepareReport (BR4.4).
 PREPARE_VERSION = "1"
@@ -532,6 +537,8 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         report["excluded_reasons"] = {"counts": counts}
         if examples:
             report["excluded_reasons"]["examples"] = examples
+    # U6 (NFR3.35): counted before any AI-written code can run
+    report["parquet_sha256"] = _file_sha256(out)
     _write_progress(
         workdir, progress_id, phase="finished", rows=rows, rows_excluded=excluded
     )
@@ -608,6 +615,144 @@ def run_query(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         "columns": columns,
         "rows": [[_json_safe(v) for v in row] for row in fetched[:max_rows]],
         "truncated": len(fetched) > max_rows,
+    }
+
+
+# ---------------------------------------------------------------------------
+# profile_segments (U6 addendum: the features of a layer a fixed tool made)
+# ---------------------------------------------------------------------------
+
+_SEGMENT_COMPARISONS = {
+    "eq": "=",
+    "ne": "<>",
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+}
+_MAX_IN_VALUES = 100
+_MAX_LAYERS = 20
+_MISSING_KEY = "（欠損）"
+_FILTERED_KEY = "filtered"
+
+
+def _filter_value(value: Any) -> Any:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+    return value
+
+
+def _where_clause(filters: Any, names: set) -> Tuple[str, List[Any], set]:
+    """``WHERE`` text, its parameters and the columns an ``eq`` filter fixes.
+
+    The columns must be the table's, the operators are an allowlist and every
+    value is a bound parameter, so nothing the AI wrote becomes SQL text.
+    """
+    if filters is None:
+        return "", [], set()
+    if not isinstance(filters, list):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+    parts: List[str] = []
+    params: List[Any] = []
+    fixed: set = set()
+    for item in filters:
+        if not isinstance(item, dict):
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+        column, operator, value = (
+            item.get("column"),
+            item.get("operator"),
+            item.get("value"),
+        )
+        if column not in names or not isinstance(operator, str):
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+        col = _quote_ident(column)
+        if operator in _SEGMENT_COMPARISONS:
+            parts.append(f"{col} {_SEGMENT_COMPARISONS[operator]} ?")
+            params.append(_filter_value(value))
+            if operator == "eq":
+                fixed.add(column)
+        elif operator == "in":
+            if not isinstance(value, list) or not 1 <= len(value) <= _MAX_IN_VALUES:
+                raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+            parts.append(f"{col} IN ({', '.join('?' for _ in value)})")
+            params.extend(_filter_value(v) for v in value)
+            if len(value) == 1:
+                fixed.add(column)
+        elif operator == "contains":
+            parts.append(f"contains(lower(CAST({col} AS VARCHAR)), lower(?))")
+            params.append(str(_filter_value(value)))
+        else:
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+    return (" WHERE " + " AND ".join(parts)) if parts else "", params, fixed
+
+
+def profile_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Count each layer's size and features from the rows of a table.
+
+    Args: ``source_id``, ``filters`` (``{column, operator, value}`` list) and
+    ``by`` (a column). With ``by`` each value of the column (after the filters)
+    is a layer, the 20 biggest at most; without it the filtered rows are one
+    layer (``filtered``). Returns ``{population, layers: [{key, size, share,
+    features}]}``. The features are those of the recount (``mean`` with
+    ``spread`` and ``share``) against all rows of the table; the ``by`` column
+    and the columns an equal filter fixes are left out.
+    """
+    timeout = float(args.get("timeout_seconds", 30))
+    con = _open_dataset(workdir, args.get("source_id"))
+    timer = threading.Timer(timeout, con.interrupt)
+    timer.start()
+    try:
+        schema = _schema(con)
+        names = {name for name, _ in schema}
+        by = args.get("by")
+        if by is not None and by not in names:
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "by"})
+        where, params, fixed = _where_clause(args.get("filters"), names)
+        key = (
+            f"coalesce(CAST({_quote_ident(by)} AS VARCHAR), {_sql_literal(_MISSING_KEY)})"
+            if by is not None
+            else _sql_literal(_FILTERED_KEY)
+        )
+        population = int(con.execute("SELECT count(*) FROM dataset").fetchone()[0])
+        con.execute(
+            "CREATE VIEW d AS SELECT CAST(file_row_number AS VARCHAR) AS __pid, "
+            "* FROM dataset"
+        )
+        con.execute(
+            "CREATE TEMP TABLE a0 AS SELECT CAST(file_row_number AS VARCHAR) AS person_id, "
+            f"{key} AS segment FROM dataset{where}",
+            params,
+        )
+        con.execute(
+            "CREATE VIEW a AS SELECT * FROM a0 WHERE segment IN (SELECT segment "
+            f"FROM a0 GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT {_MAX_LAYERS})"
+        )
+        sizes = con.execute(
+            "SELECT segment, count(*) FROM a GROUP BY 1 ORDER BY 2 DESC, 1"
+        ).fetchall()
+        features = _profile_views(con, schema, set(fixed) | ({by} if by else set()))
+    except AnalysisError:
+        raise
+    except Exception as e:  # noqa: BLE001 - map to codes; drop the text
+        if not timer.is_alive():
+            raise AnalysisError("QUERY_TIMEOUT", {"seconds": timeout}) from None
+        if _is_out_of_memory(e):
+            raise AnalysisError("OUT_OF_MEMORY") from None
+        raise AnalysisError("QUERY_FAILED") from None
+    finally:
+        timer.cancel()
+        con.close()
+    return {
+        "population": population,
+        "layers": [
+            {
+                "key": str(key_),
+                "size": int(size),
+                "share": round(int(size) / population, 6) if population else 0.0,
+                "features": features.get(str(key_), []),
+            }
+            for key_, size in sizes
+        ],
     }
 
 
@@ -734,8 +879,10 @@ class _Tally:
                 out.append(
                     {
                         "name": name,
+                        "kind": "mean",
                         "value": round(self.sums[name][label] / size, 4),
                         "baseline": round(total / population, 4),
+                        "spread": round(float(self.features.stats[name][1]), 4),
                     }
                 )
                 continue
@@ -745,6 +892,7 @@ class _Tally:
             out.append(
                 {
                     "name": f"{name}={_short(top)}",
+                    "kind": "share",
                     "value": round(bucket[top] / size, 4),
                     "baseline": round(overall / population, 4),
                 }
@@ -774,7 +922,7 @@ def cluster_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     Args: ``source_id``, ``columns``, ``k`` (the persona count), ``seed``
     (default 42), ``sample_max_rows`` (default 1,000,000).
     Returns ``{k, seed, population, sample_rows, clusters: [{index, size,
-    share, features: [{name, value, baseline}]}]}``; sizes sum to the population.
+    share, features: [{name, kind, value, baseline}]}]}``; sizes sum to the population.
     """
     k = args.get("k")
     if not isinstance(k, int) or isinstance(k, bool) or k < 1:
@@ -1314,6 +1462,1282 @@ def verify_quotes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# U6: AI-written code (BR36), the check after it (NFR3.35) and the playbook
+# functions (BR37.3, BR37.4, BR39.2)
+# ---------------------------------------------------------------------------
+#
+# ``run_ai_code`` runs the code as its own process group in an empty folder
+# ``ai_work/<random>``; the code gets the names of :func:`_ai_namespace` and
+# hands its result to :func:`emit_result`, which writes the person IDs and
+# their segment only. ``finalize_ai_result`` is run from the source of this
+# file the app sends inside the command (``python -I -c``; nothing is written
+# to disk, so a process the code left cannot swap it): it stops the group and
+# anything else the code left, hashes the prepared Parquets and the session's
+# own copy of this file, and counts the sizes and the population again from
+# the data. Nothing the code printed or wrote as a number is used.
+
+_SOURCE_ALIAS = re.compile(r"^source_[1-3]$")
+_POPULATION_SOURCE = re.compile(
+    r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$"
+)
+_WORK_DIR = re.compile(r"^ai_work/[A-Za-z0-9_-]{1,64}$")
+_PGID_FILE = re.compile(r"^ai_work/[A-Za-z0-9_-]{1,64}\.pgid$")
+_AI_STDOUT_MAX_CHARS = 20_000
+_AI_ERROR_MAX_CHARS = 4_000
+_AI_DEFAULT_TIMEOUT_SECONDS = 120
+_ASSIGNMENT_FILE = "assignment.parquet"
+_META_FILE = "meta.json"
+_EMIT_COUNT_FILE = "emit_count"
+_MAX_STATISTICS = 50
+_MAX_METRICS = 60
+#: The columns the last ``join_tables`` of this process added (key first).
+_LAST_JOINED: List[str] = []
+_MAX_FEATURES = 20
+_JOIN_FUNCS = {
+    "count": "count({col})",
+    "count_distinct": "count(DISTINCT {col})",
+    "sum": "sum({col})",
+    "mean": "avg({col})",
+    "avg": "avg({col})",
+    "min": "min({col})",
+    "max": "max({col})",
+    "first": "min({col})",
+    "last": "max({col})",
+}
+# Characters that cannot be part of a name; letters of any script (Japanese
+# included), digits and ``_`` stay (U6 addendum).
+_NAME_PART = re.compile(r"[^\w]")
+
+
+def _unique_name(name: str, used: set) -> str:
+    """``name``, or ``name_2``, ``name_3``.. when it is taken (U6 addendum).
+
+    ``used`` holds lower-cased names: DuckDB identifiers are case-insensitive.
+    """
+    out, n = name, 1
+    while out.lower() in used:
+        n += 1
+        out = f"{name}_{n}"
+    used.add(out.lower())
+    return out
+
+
+# What the code runs with (filled in by :func:`_ai_namespace`).
+_AI_CONTEXT: Dict[str, Any] = {}
+
+_BOOTSTRAP = """
+import importlib.util, json, sys
+lib_path, workdir, work, sources, code_path = sys.argv[1:6]
+spec = importlib.util.spec_from_file_location("persona_analysis", lib_path)
+lib = importlib.util.module_from_spec(spec)
+sys.modules["persona_analysis"] = lib
+spec.loader.exec_module(lib)
+names = lib._ai_namespace(workdir, work, json.loads(sources))
+with open(code_path, encoding="utf-8") as f:
+    code = f.read()
+exec(compile(code, "ai_code.py", "exec"), names)
+"""
+
+
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _hash_or_missing(path: str) -> str:
+    return _file_sha256(path) if os.path.isfile(path) else "missing"
+
+
+def _checked_sources(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "sources"})
+    return {
+        str(alias): _checked_id(source_id, "sources")
+        for alias, source_id in value.items()
+        if _SOURCE_ALIAS.match(str(alias))
+    }
+
+
+def _checked_relative(value: Any, pattern: "re.Pattern[str]", name: str) -> str:
+    if not isinstance(value, str) or not pattern.match(value):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": name})
+    return value
+
+
+def _ai_namespace(workdir: str, work: str, sources: Dict[str, str]) -> Dict[str, Any]:
+    """The names AI-written code sees (the tested functions, bound here)."""
+    paths = {
+        str(alias): _parquet_path(workdir, _checked_id(source_id, "sources"))
+        for alias, source_id in sources.items()
+        if _SOURCE_ALIAS.match(str(alias))
+    }
+    _AI_CONTEXT.clear()
+    _AI_CONTEXT.update(workdir=workdir, work=work, paths=paths)
+
+    def read_table(alias: str) -> Any:
+        """The prepared table ``alias`` as a pandas DataFrame."""
+        import duckdb
+
+        if alias not in paths:
+            raise KeyError(f"unknown table {alias}; use one of {sorted(paths)}")
+        con = duckdb.connect(":memory:")
+        try:
+            return con.execute(
+                f"SELECT * FROM read_parquet({_sql_literal(paths[alias])})"
+            ).df()
+        finally:
+            con.close()
+
+    def emit(frame: Any, assign_column: str, population_source: str, **kw: Any) -> None:
+        emit_result(frame, assign_column, population_source, out_dir=work, **kw)
+
+    def join(axis: str, key: str, others: List[Dict[str, Any]]) -> Any:
+        return join_tables(axis, key, others, paths=paths)
+
+    return {
+        "__name__": "__ai_code__",
+        "SOURCES": dict(paths),
+        "read_table": read_table,
+        "emit_result": emit,
+        "join_tables": join,
+        "compare_groups": compare_groups,
+        "rfm": rfm,
+        "person_profile": person_profile,
+    }
+
+
+def _columns_of(frame: Any, *names: str) -> Dict[str, List[Any]]:
+    """Columns of a pandas DataFrame, a pyarrow Table or a dict of lists."""
+    if hasattr(frame, "to_pydict"):
+        data = frame.to_pydict()
+    elif hasattr(frame, "columns") and hasattr(frame, "__getitem__"):
+        data = {str(c): list(frame[c]) for c in frame.columns if str(c) in names}
+    elif isinstance(frame, dict):
+        data = {str(k): list(v) for k, v in frame.items()}
+    else:
+        raise TypeError("emit_result needs a DataFrame, a pyarrow Table or a dict")
+    missing = [n for n in names if n not in data]
+    if missing:
+        raise KeyError(f"emit_result: no column {missing[0]}")
+    return {n: data[n] for n in names}
+
+
+def _numeric_columns(frame: Any, skip: Tuple[str, ...]) -> List[str]:
+    """Names of the numeric columns of a pandas DataFrame (none for other frames)."""
+    if not (hasattr(frame, "select_dtypes") and hasattr(frame, "columns")):
+        return []
+    try:
+        numeric = frame.select_dtypes(include="number")
+    except Exception:  # noqa: BLE001 - a frame that cannot say its dtypes
+        return []
+    return [str(c) for c in numeric.columns if str(c) not in skip]
+
+
+def _metric_value(value: Any) -> Optional[float]:
+    """A number the code computed as a float; text, bools and NaN are no metric."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and abs(number) != float("inf") else None
+
+
+def _short_features(features: Any) -> Dict[str, List[Dict[str, Any]]]:
+    if not isinstance(features, dict):
+        return {}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for key, items in list(features.items())[:_MAX_FEATURES]:
+        if isinstance(items, list):
+            out[str(key)[:_VALUE_MAX_CHARS]] = [
+                {str(k)[:_VALUE_MAX_CHARS]: _short(v) for k, v in dict(i).items()}
+                for i in items[:_MAX_FEATURES]
+                if isinstance(i, dict)
+            ]
+    return out
+
+
+def emit_result(
+    frame: Any,
+    assign_column: str,
+    population_source: str,
+    *,
+    id_column: str,
+    statistics: Optional[List[Dict[str, Any]]] = None,
+    joined_columns: Optional[List[str]] = None,
+    features: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    metrics: Optional[List[str]] = None,
+    out_dir: Optional[str] = None,
+) -> None:
+    """Hand the result of AI-written code over, once (BR36.3).
+
+    ``frame`` has one row per person: ``id_column`` names the person (for a
+    joined table, the axis table's ID column) and ``assign_column`` the
+    segment of the row. Only the IDs and the segments are written; sizes and
+    the population are counted again from the data by the check.
+    ``statistics`` and ``features`` are kept as passed and are NOT recounted
+    (the app never lets them back an evidence); ``features`` is not used at all,
+    the library counts the features itself. ``metrics`` names numeric columns
+    of ``frame`` the code computed (such as ``recency``); their mean in each
+    segment is shown as ``derived`` features (the values are the code's own).
+    Left out, every numeric column of a pandas frame counts (the columns of the
+    axis table are counted by the library itself and are not repeated).
+
+    Raises:
+        RuntimeError: Called a second time.
+        KeyError / TypeError / ValueError: The frame does not fit.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    folder = out_dir or os.getcwd()
+    count_path = os.path.join(folder, _EMIT_COUNT_FILE)
+    previous = 0
+    if os.path.exists(count_path):
+        with open(count_path, encoding="utf-8") as f:
+            previous = int(f.read().strip() or 0)
+    with open(count_path, "w", encoding="utf-8") as f:
+        f.write(str(previous + 1))
+    if previous:
+        raise RuntimeError("emit_result is called once per run")
+    if not _POPULATION_SOURCE.match(str(population_source)):
+        raise ValueError("population_source is source_n or join:source_n+source_m")
+    # Those of the axis table are dropped when the features are counted.
+    if metrics is None:
+        metrics = _numeric_columns(frame, (id_column, assign_column))
+    names = [str(m) for m in metrics][:_MAX_METRICS]
+    columns = _columns_of(frame, id_column, assign_column, *names)
+    if joined_columns is None:
+        attrs = getattr(frame, "attrs", None)
+        joined_columns = list(attrs.get("joined_columns", [])) if attrs else []
+        if not joined_columns and str(population_source).startswith("join:"):
+            joined_columns = list(_LAST_JOINED)
+    data: Dict[str, Any] = {
+        "person_id": [None if v is None else str(v) for v in columns[id_column]],
+        "segment": [None if v is None else str(v) for v in columns[assign_column]],
+    }
+    for index, name in enumerate(names):
+        data[f"metric_{index}"] = [_metric_value(v) for v in columns[name]]
+    table = pa.table(data)
+    pq.write_table(table, os.path.join(folder, _ASSIGNMENT_FILE))
+    meta = {
+        "population_source": str(population_source),
+        "id_column": str(id_column),
+        "statistics": _json_safe(list(statistics or [])[:_MAX_STATISTICS]),
+        "joined_columns": [str(c)[:_VALUE_MAX_CHARS] for c in joined_columns][:50],
+        "features": _short_features(features),
+        "metrics": [str(m)[:_VALUE_MAX_CHARS] for m in names],
+    }
+    with open(os.path.join(folder, _META_FILE), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=True)
+
+
+def run_ai_code(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Run AI-written code as its own process group (BR36.1, NFR3.35).
+
+    Args: ``code``, ``work_dir`` (``ai_work/<random>``, must not exist),
+    ``pgid_file`` (``ai_work/<random>.pgid``, outside that folder),
+    ``sources`` (alias -> source_id) and ``timeout_seconds``.
+    Returns ``{status, exit_code, timed_out, stdout, error_text}``; the app
+    reads only whether it ended, the output goes to the agent as data.
+    """
+    code = args.get("code")
+    if not isinstance(code, str):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "code"})
+    work_rel = _checked_relative(args.get("work_dir"), _WORK_DIR, "work_dir")
+    pgid_rel = _checked_relative(args.get("pgid_file"), _PGID_FILE, "pgid_file")
+    sources = _checked_sources(args.get("sources"))
+    timeout = int(args.get("timeout_seconds", _AI_DEFAULT_TIMEOUT_SECONDS))
+    work = _inside(workdir, work_rel)
+    if os.path.exists(work):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "work_dir"})
+    os.makedirs(work)
+    code_path = os.path.join(work, "ai_code.py")
+    with open(code_path, "w", encoding="utf-8") as f:
+        f.write(code)
+    # Files, not pipes: a process the code leaves behind keeps a pipe open,
+    # and the wait is for the code's own process only.
+    base = _inside(workdir, pgid_rel[: -len(".pgid")])
+    with (
+        open(base + ".out", "w", encoding="utf-8") as out,
+        open(base + ".err", "w", encoding="utf-8") as err,
+    ):
+        process = subprocess.Popen(  # noqa: S603 - the sandbox's own interpreter
+            [
+                sys.executable,
+                "-c",
+                _BOOTSTRAP,
+                os.path.abspath(__file__),
+                os.path.abspath(workdir),
+                work,
+                json.dumps(sources),
+                code_path,
+            ],
+            cwd=work,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+        )
+        with open(_inside(workdir, pgid_rel), "w", encoding="utf-8") as f:
+            f.write(str(process.pid))
+        timed_out = False
+        try:
+            process.wait(timeout=max(timeout, 1))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(process.pid)
+            process.wait()
+    ok = process.returncode == 0 and not timed_out
+    return {
+        "status": "ok" if ok else "failed",
+        "exit_code": process.returncode,
+        "timed_out": timed_out,
+        "stdout": _tail(base + ".out", _AI_STDOUT_MAX_CHARS),
+        "error_text": _tail(base + ".err", _AI_ERROR_MAX_CHARS),
+    }
+
+
+def _tail(path: str, max_chars: int) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()[-max_chars:]
+    except OSError:
+        return ""
+
+
+def _kill_group(pgid: int) -> None:
+    """Stop the process group ``pgid`` (never this process's own group)."""
+    if pgid <= 1 or pgid == os.getpgrp():
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _read_recorded(workdir: str, pgid_rel: Any) -> Optional[int]:
+    """The pid in a ``.pgid`` file: also the run's session and group ID.
+
+    ``run_ai_code`` starts the code with ``start_new_session``, so the pid it
+    records leads its own session and process group.
+    """
+    if not isinstance(pgid_rel, str) or not _PGID_FILE.match(pgid_rel):
+        return None
+    path = _inside(workdir, pgid_rel)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+# Security review: AI-written code can ``fork()`` and ``setsid()`` so a child
+# survives the group stop and stays in the session (and could swap files
+# between two checks). Every check therefore lists the processes, stops those
+# the code left and reports how many there were; the app treats any as a
+# change. ``/proc`` is read in the session (Linux); ``ps`` is the fallback of
+# machines without it (macOS, tests), which knows no session ID nor folder.
+_PROC_ROOT = "/proc"
+_PS = "/bin/ps"
+_SCAN_ROUNDS = 5
+_GONE_WAIT_SECONDS = 2.0
+_GONE_POLL_SECONDS = 0.02
+
+
+def _proc_table(proc_root: str) -> Optional[Dict[int, Dict[str, Any]]]:
+    """Every process under ``proc_root``, or ``None`` when it cannot be read.
+
+    Each entry holds ``ppid``, ``pgid``, ``sid``, ``cwd`` (``""`` when hidden),
+    ``cmdline`` (arguments joined by spaces) and ``zombie``. A table without
+    this process is not trusted (``None``).
+    """
+    try:
+        names = os.listdir(proc_root)
+    except OSError:
+        return None
+    table: Dict[int, Dict[str, Any]] = {}
+    for name in names:
+        if not name.isdigit():
+            continue
+        base = os.path.join(proc_root, name)
+        try:
+            with open(
+                os.path.join(base, "stat"), encoding="utf-8", errors="replace"
+            ) as f:
+                stat = f.read()
+            # The command name may hold ")" and spaces: read after the last one.
+            fields = stat[stat.rindex(")") + 1 :].split()
+            state, ppid, pgid, sid = fields[0], *map(int, fields[1:4])
+        except (OSError, ValueError, IndexError):
+            continue  # gone meanwhile, or not a process entry
+        try:
+            cwd = os.readlink(os.path.join(base, "cwd"))
+        except OSError:
+            cwd = ""
+        try:
+            with open(os.path.join(base, "cmdline"), "rb") as f:
+                raw = f.read()
+            cmdline = raw.rstrip(b"\0").replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            cmdline = ""
+        table[int(name)] = {
+            "ppid": ppid,
+            "pgid": pgid,
+            "sid": sid,
+            "cwd": cwd,
+            "cmdline": cmdline,
+            "zombie": state in ("Z", "X"),
+        }
+    return table if os.getpid() in table else None
+
+
+def _ps_table(ps: str) -> Optional[Dict[int, Dict[str, Any]]]:
+    """The same table from ``ps`` (no session ID, no folder), or ``None``."""
+    try:
+        listed = subprocess.run(  # noqa: S603 - a fixed absolute path, no shell
+            [ps, "-A", "-o", "pid=,ppid=,pgid=,stat=,command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listed.returncode != 0:
+        return None
+    table: Dict[int, Dict[str, Any]] = {}
+    for line in listed.stdout.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        table[pid] = {
+            "ppid": ppid,
+            "pgid": pgid,
+            "sid": None,
+            "cwd": "",
+            "cmdline": parts[4] if len(parts) > 4 else "",
+            "zombie": parts[3].startswith("Z"),
+        }
+    return table if os.getpid() in table else None
+
+
+def _process_table() -> Optional[Dict[int, Dict[str, Any]]]:
+    if os.path.isdir(_PROC_ROOT):
+        return _proc_table(_PROC_ROOT)
+    return _ps_table(_PS)
+
+
+def _protected(table: Dict[int, Dict[str, Any]], self_pid: int) -> set:
+    """This process, its ancestors and pid 0 / 1: never stopped."""
+    keep = {0, 1, self_pid}
+    pid = self_pid
+    while pid in table and table[pid]["ppid"] not in keep:
+        pid = table[pid]["ppid"]
+        keep.add(pid)
+    return keep
+
+
+def _find_leftovers(
+    table: Dict[int, Dict[str, Any]],
+    recorded: set,
+    ai_root: str,
+    *,
+    self_pid: int,
+) -> List[int]:
+    """Live processes the code left: by its run, its session, group or folder.
+
+    A process counts when it is a recorded run, shares a recorded session or
+    group, descends from a recorded run, works inside ``ai_root`` or names
+    ``ai_root`` in its command. This process and its ancestors never count.
+    """
+    keep = _protected(table, self_pid)
+    runs = {r for r in recorded if r not in keep}
+    inside = ai_root.rstrip(os.sep) + os.sep
+    found: List[int] = []
+    for pid, info in table.items():
+        if pid in keep or info["zombie"]:
+            continue
+        cwd = str(info.get("cwd") or "")
+        hit = (
+            pid in runs
+            or info.get("sid") in runs
+            or info.get("pgid") in runs
+            or cwd == inside[:-1]
+            or cwd.startswith(inside)
+            or inside in str(info.get("cmdline") or "") + os.sep
+        )
+        parent, seen = info["ppid"], {pid}
+        while not hit and parent in table and parent not in seen:
+            hit = parent in runs
+            seen.add(parent)
+            parent = table[parent]["ppid"]
+        if hit:
+            found.append(pid)
+    return found
+
+
+def _wait_gone(pids: set, groups: set) -> None:
+    """Wait a little for stopped processes to end (a zombie counts as ended)."""
+    deadline = time.monotonic() + _GONE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        table = _process_table()
+        if table is None:
+            return
+        keep = _protected(table, os.getpid())
+        if not any(
+            not info["zombie"]
+            and pid not in keep
+            and (pid in pids or info.get("pgid") in groups)
+            for pid, info in table.items()
+        ):
+            return
+        time.sleep(_GONE_POLL_SECONDS)
+
+
+def _stop_leftovers(workdir: str, pgid_files: List[Any]) -> Dict[str, Any]:
+    """Stop the recorded groups, then find and stop what is still left.
+
+    Returns ``{process_scan: "ok", leftover_processes: n}``, ``n`` counting the
+    processes that survived the group stop, or ``{process_scan:
+    "unavailable"}`` when the processes cannot be listed (the app fails closed).
+    """
+    recorded = set()
+    for pgid_rel in pgid_files:
+        pid = _read_recorded(workdir, pgid_rel)
+        if pid is not None and pid > 1:
+            recorded.add(pid)
+    for pid in recorded:
+        _kill_group(pid)
+    _wait_gone(set(), recorded)
+    ai_root = os.path.join(os.path.realpath(workdir), "ai_work")
+    left: set = set()
+    for _ in range(_SCAN_ROUNDS):
+        table = _process_table()
+        if table is None:
+            return {"process_scan": "unavailable"}
+        found = _find_leftovers(table, recorded, ai_root, self_pid=os.getpid())
+        if not found:
+            break
+        for pid in found:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        left.update(found)
+        _wait_gone(set(found), set())
+    return {"process_scan": "ok", "leftover_processes": len(left)}
+
+
+def _hashes(workdir: str, sources: Dict[str, str], library: Any) -> Dict[str, Any]:
+    return {
+        "library": (
+            _hash_or_missing(str(library)) if isinstance(library, str) else "missing"
+        ),
+        "parquet": {
+            source_id: _hash_or_missing(_parquet_path(workdir, source_id))
+            for source_id in sources.values()
+        },
+    }
+
+
+_PROFILE_MAX_COLUMNS = 400
+_PROFILE_MAX_VALUES = 30
+_PROFILE_CHUNK = 40
+#: Column names that say a number or a text is a key, not a trait (kept in step
+#: with ``analysis_policy._ID_NAME`` in the app, plus codes and numbers).
+_KEY_NAME = re.compile(
+    r"(?<![A-Za-z])[Ii][Dd](?![a-z])|(?<=[a-z])I[Dd](?![a-z])|(?<=[a-z])ID(?![A-Za-z])"
+    r"|ＩＤ|番号|コード|郵便|(?<![A-Za-z])(?i:no|num|code|zip|postal)(?![A-Za-z])"
+)
+
+
+def _chunks(items: List[Any], size: int) -> Any:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _profile_features(
+    con: Any, source: str, id_column: str, metrics: Optional[List[str]] = None
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Features of each segment, counted from the axis table (U6 addendum).
+
+    Per segment and per column of the axis table (the ID column and columns
+    named like a key left out): the mean of a numeric column (``kind``
+    ``mean``, with ``spread``, the standard deviation of all rows) and the
+    share of the commonest value of a category column (``kind`` ``share``),
+    each with the figure of all rows (``baseline``). Every column is read, a
+    chunk of columns per query; which of them matter is decided by the app
+    from the sizes of the differences. The code's own ``features`` are never
+    used.
+    """
+    schema = con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet({_sql_literal(source)})"
+    ).fetchall()
+    con.execute(
+        f"CREATE VIEW d AS SELECT CAST({_quote_ident(id_column)} AS VARCHAR) "
+        f"AS __pid, * FROM read_parquet({_sql_literal(source)})"
+    )
+    return _profile_views(con, schema, {id_column}, metrics)
+
+
+def _profile_views(
+    con: Any,
+    schema: List[Any],
+    skip: set,
+    metrics: Optional[List[str]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Features per segment from the views ``d`` (all rows, with ``__pid``) and
+    ``a`` (``person_id``, ``segment``): the part shared by the recount and
+    :func:`profile_segments`. ``skip`` names the columns that are no trait."""
+    total = int(con.execute("SELECT count(*) FROM d").fetchone()[0])
+    sizes = {
+        str(k): int(n)
+        for k, n in con.execute("SELECT segment, count(*) FROM a GROUP BY 1").fetchall()
+    }
+    out: Dict[str, List[Dict[str, Any]]] = {key: [] for key in sizes}
+    numeric: List[str] = []
+    categories: List[str] = []
+    for row in schema:
+        name, type_name = str(row[0]), str(row[1])
+        if name in skip or name == "file_row_number" or _KEY_NAME.search(name):
+            continue
+        if _is_numeric(type_name):
+            numeric.append(name)
+        elif type_name in ("VARCHAR", "BOOLEAN"):
+            categories.append(name)
+    numeric = numeric[:_PROFILE_MAX_COLUMNS]
+    categories = categories[:_PROFILE_MAX_COLUMNS]
+    join = "FROM d JOIN a ON d.__pid = a.person_id"
+
+    for chunk in _chunks(numeric, _PROFILE_CHUNK):
+        cols = [_quote_ident(n) for n in chunk]
+        overall = con.execute(
+            "SELECT "
+            + ", ".join(
+                f"avg(CAST({c} AS DOUBLE)), stddev_pop(CAST({c} AS DOUBLE))"
+                for c in cols
+            )
+            + " FROM d"
+        ).fetchone()
+        per_segment = con.execute(
+            "SELECT a.segment, "
+            + ", ".join(f"avg(CAST(d.{c} AS DOUBLE))" for c in cols)
+            + f" {join} GROUP BY 1"
+        ).fetchall()
+        for index, name in enumerate(chunk):
+            mean_all, spread = overall[2 * index], overall[2 * index + 1]
+            if mean_all is None:
+                continue
+            for record in per_segment:
+                mean = record[1 + index]
+                if mean is not None:
+                    out[str(record[0])].append(
+                        {
+                            "name": _short(name),
+                            "kind": "mean",
+                            "value": round(float(mean), 4),
+                            "baseline": round(float(mean_all), 4),
+                            "spread": round(float(spread or 0.0), 4),
+                        }
+                    )
+
+    for chunk in _chunks(categories, _PROFILE_CHUNK):
+        cols = [_quote_ident(n) for n in chunk]
+        kinds = con.execute(
+            "SELECT " + ", ".join(f"count(DISTINCT {c})" for c in cols) + " FROM d"
+        ).fetchone()
+        usable = [
+            (name, col)
+            for name, col, k in zip(chunk, cols, kinds)
+            if 2 <= int(k) <= _PROFILE_MAX_VALUES and int(k) < total
+        ]
+        if not usable:
+            continue
+        union = " UNION ALL ".join(
+            f"SELECT a.segment AS seg, {_sql_literal(name)} AS col, "
+            f"CAST(d.{col} AS VARCHAR) AS val, count(*) AS n, false AS whole {join} "
+            f"WHERE d.{col} IS NOT NULL GROUP BY 1, 2, 3"
+            f" UNION ALL SELECT '', {_sql_literal(name)}, "
+            f"CAST({col} AS VARCHAR), count(*), true FROM d "
+            f"WHERE {col} IS NOT NULL GROUP BY 2, 3"
+            for name, col in usable
+        )
+        counts: Dict[str, Dict[str, Dict[str, int]]] = {}
+        everyone: Dict[str, Dict[str, int]] = {}
+        for seg, col_name, value, n, whole_row in con.execute(union).fetchall():
+            if whole_row:
+                everyone.setdefault(str(col_name), {})[str(value)] = int(n)
+            else:
+                counts.setdefault(str(col_name), {}).setdefault(str(seg), {})[
+                    str(value)
+                ] = int(n)
+        for name, _ in usable:
+            by_segment = counts.get(name, {})
+            whole = everyone.get(name, {})
+            for key, values in by_segment.items():
+                value, n = sorted(values.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+                out[key].append(
+                    {
+                        "name": f"{_short(name)}={_short(value)}",
+                        "kind": "share",
+                        "value": round(n / sizes[key], 4),
+                        "baseline": round(whole.get(value, 0) / total, 4),
+                    }
+                )
+
+    profiled = {str(row[0]) for row in schema}
+    derived = 0
+    for index, name in enumerate(metrics or []):
+        if name in profiled:
+            continue  # a column of the axis table is counted above
+        if derived >= _MAX_METRICS:
+            break
+        col = f"metric_{index}"
+        try:
+            overall_row = con.execute(
+                f"SELECT avg({col}), stddev_pop({col}) FROM a"
+            ).fetchone()
+            rows = con.execute(
+                f"SELECT segment, avg({col}) FROM a GROUP BY 1"
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001 - a result file without the column
+            if _is_out_of_memory(e):
+                raise
+            continue
+        if overall_row[0] is None:
+            continue
+        derived += 1
+        for key, mean in rows:
+            if mean is not None and str(key) in out:
+                out[str(key)].append(
+                    {
+                        "name": _short(name),
+                        "kind": "derived",
+                        "value": round(float(mean), 4),
+                        "baseline": round(float(overall_row[0]), 4),
+                        "spread": round(float(overall_row[1] or 0.0), 4),
+                    }
+                )
+    return out
+
+
+def _recount(
+    workdir: str, work: str, sources: Dict[str, str]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Count sizes and the population again from the assignment and the data."""
+    count_path = os.path.join(work, _EMIT_COUNT_FILE)
+    assignment = os.path.join(work, _ASSIGNMENT_FILE)
+    if not os.path.isfile(assignment):
+        return None, "NO_RESULT"
+    try:
+        with open(count_path, encoding="utf-8") as f:
+            calls = int(f.read().strip() or 0)
+        with open(os.path.join(work, _META_FILE), encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return None, "RESULT_INVALID"
+    if calls != 1:
+        return None, "EMIT_TWICE" if calls > 1 else "NO_RESULT"
+    population_source = str(meta.get("population_source", ""))
+    match = _POPULATION_SOURCE.match(population_source)
+    if not isinstance(meta, dict) or not match:
+        return None, "RESULT_INVALID"
+    axis = match.group(1) or population_source[len("join:") :].split("+")[0]
+    if axis not in sources:
+        return None, "RESULT_INVALID"
+    id_column = str(meta.get("id_column", ""))
+    source = _parquet_path(workdir, sources[axis])
+    con = _connect(workdir)
+    try:
+        con.execute(
+            f"CREATE VIEW a AS SELECT * FROM read_parquet({_sql_literal(assignment)})"
+        )
+        con.execute(
+            "CREATE VIEW s AS SELECT CAST("
+            f"{_quote_ident(id_column)} AS VARCHAR) AS person_id "
+            f"FROM read_parquet({_sql_literal(source)})"
+        )
+        n_a, d_a, null_a, n_s, d_s = con.execute(
+            "SELECT (SELECT count(*) FROM a), (SELECT count(DISTINCT person_id) "
+            "FROM a), (SELECT count(*) FROM a WHERE person_id IS NULL OR segment "
+            "IS NULL), (SELECT count(*) FROM s), (SELECT count(DISTINCT person_id) "
+            "FROM s WHERE person_id IS NOT NULL)"
+        ).fetchone()
+        if null_a:
+            return None, "UNASSIGNED"
+        if n_a != d_a or n_s != d_s:
+            return None, "DUPLICATE_IDS"
+        missing, unknown = con.execute(
+            "SELECT (SELECT count(*) FROM s WHERE person_id NOT IN "
+            "(SELECT person_id FROM a)), (SELECT count(*) FROM a WHERE person_id "
+            "NOT IN (SELECT person_id FROM s))"
+        ).fetchone()
+        if missing or unknown or n_a != n_s:
+            return None, "ID_MISMATCH"
+        sizes = con.execute(
+            "SELECT segment, count(*) FROM a GROUP BY segment ORDER BY 2 DESC, 1"
+        ).fetchall()
+        metric_names = meta.get("metrics")
+        try:
+            profile = _profile_features(
+                con,
+                source,
+                id_column,
+                [str(m) for m in metric_names]
+                if isinstance(metric_names, list)
+                else [],
+            )
+        except Exception as e:  # noqa: BLE001 - the features are a help, not a result
+            if _is_out_of_memory(e):
+                raise
+            profile = {}
+    except Exception as e:  # noqa: BLE001 - a missing column or a bad file
+        if _is_out_of_memory(e):
+            raise AnalysisError("OUT_OF_MEMORY") from None
+        return None, "RESULT_INVALID"
+    finally:
+        con.close()
+    result: Dict[str, Any] = {
+        "population": int(n_s),
+        "population_source": population_source,
+        "segments": [
+            {
+                "segment_key": str(key)[:_VALUE_MAX_CHARS],
+                "size": int(size),
+                "features": list(profile.get(str(key)) or []),
+            }
+            for key, size in sizes
+        ],
+    }
+    statistics = meta.get("statistics")
+    if isinstance(statistics, list) and statistics:
+        result["statistics"] = [s for s in statistics if isinstance(s, dict)]
+    joined = meta.get("joined_columns")
+    if isinstance(joined, list) and joined:
+        result["joined_columns"] = [str(c) for c in joined]
+    return result, None
+
+
+def finalize_ai_result(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """The check after one ``run_ai_code`` (NFR3.35 (4)).
+
+    Run from the source the app sent with the command (``python -I -c``).
+    Stops the code's process group and anything else it left (see
+    :func:`_stop_leftovers`), hashes the prepared Parquets and
+    ``session_library``, then recounts the assignment. Returns ``{hashes,
+    result, error, process_scan[, leftover_processes]}``.
+    """
+    work_rel = _checked_relative(args.get("work_dir"), _WORK_DIR, "work_dir")
+    sources = _checked_sources(args.get("sources"))
+    processes = _stop_leftovers(workdir, [args.get("pgid_file")])
+    hashes = _hashes(workdir, sources, args.get("session_library"))
+    result, error = _recount(workdir, _inside(workdir, work_rel), sources)
+    return {"hashes": hashes, "result": result, "error": error, **processes}
+
+
+def verify_hashes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Stop what is left and return the hashes (before the synthesis).
+
+    Returns ``{hashes, process_scan[, leftover_processes]}``.
+    """
+    sources = _checked_sources(args.get("sources"))
+    processes = _stop_leftovers(workdir, list(args.get("pgid_files") or []))
+    return {
+        "hashes": _hashes(workdir, sources, args.get("session_library")),
+        **processes,
+    }
+
+
+def key_overlap(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """How far the values of same-named columns meet (BR37.3). No values.
+
+    Args: ``axis`` and ``other`` (source IDs), ``columns``.
+    Returns ``{columns: [{column, match_rate, overlap, axis_matched}]}``:
+    ``match_rate`` is the share of the smaller table's distinct values found in
+    the other; ``axis_matched`` the axis rows whose value the other has.
+    """
+    axis = _parquet_path(workdir, _checked_id(args.get("axis"), "axis"))
+    other = _parquet_path(workdir, _checked_id(args.get("other"), "other"))
+    columns = [str(c) for c in list(args.get("columns") or [])][:20]
+    if not os.path.isfile(axis) or not os.path.isfile(other):
+        raise AnalysisError("SOURCE_UNREADABLE")
+    con = _connect(workdir)
+    out: List[Dict[str, Any]] = []
+    try:
+        con.execute(
+            f"CREATE VIEW x AS SELECT * FROM read_parquet({_sql_literal(axis)})"
+        )
+        con.execute(
+            f"CREATE VIEW y AS SELECT * FROM read_parquet({_sql_literal(other)})"
+        )
+        names_x = {str(r[0]) for r in con.execute("DESCRIBE x").fetchall()}
+        names_y = {str(r[0]) for r in con.execute("DESCRIBE y").fetchall()}
+        rows_x = int(con.execute("SELECT count(*) FROM x").fetchone()[0])
+        rows_y = int(con.execute("SELECT count(*) FROM y").fetchone()[0])
+        for name in columns:
+            if name not in names_x or name not in names_y:
+                out.append(
+                    {"column": name, "match_rate": 0.0, "overlap": 0, "axis_matched": 0}
+                )
+                continue
+            col = _quote_ident(name)
+            vx = f"SELECT DISTINCT CAST({col} AS VARCHAR) AS v FROM x WHERE {col} IS NOT NULL"
+            vy = f"SELECT DISTINCT CAST({col} AS VARCHAR) AS v FROM y WHERE {col} IS NOT NULL"
+            dx, dy, overlap = con.execute(
+                f"SELECT (SELECT count(*) FROM ({vx})), (SELECT count(*) FROM ({vy})), "
+                f"(SELECT count(*) FROM ({vx}) WHERE v IN ({vy}))"
+            ).fetchone()
+            matched = con.execute(
+                f"SELECT count(*) FROM x WHERE CAST({col} AS VARCHAR) IN ({vy})"
+            ).fetchone()[0]
+            smaller = dx if rows_x <= rows_y else dy
+            out.append(
+                {
+                    "column": name,
+                    "match_rate": round(int(overlap) / int(smaller), 4)
+                    if smaller
+                    else 0.0,
+                    "overlap": int(overlap),
+                    "axis_matched": int(matched),
+                }
+            )
+    finally:
+        con.close()
+    return {"columns": out}
+
+
+def join_tables(
+    axis: str,
+    key: str,
+    others: List[Dict[str, Any]],
+    *,
+    paths: Optional[Dict[str, str]] = None,
+) -> Any:
+    """Left join onto the axis table, one row per person (BR37.4).
+
+    Each of ``others`` is ``{"source": alias, "key": column?, "aggregations":
+    [{"column", "func", "as"?}]}``; the other table is first reduced to one
+    row per key with the aggregations (count, count_distinct, sum, mean, min,
+    max, first, last). People without a match stay: ``<alias>_rows`` is 0,
+    ``<alias>_matched`` False and the other columns empty. The result is a
+    pandas DataFrame whose ``attrs["joined_columns"]`` names the key and the
+    columns added.
+    """
+    import duckdb
+
+    tables = paths if paths is not None else dict(_AI_CONTEXT.get("paths") or {})
+    if axis not in tables:
+        raise KeyError(f"unknown table {axis}")
+    selects = ["a.*"]
+    joins: List[str] = []
+    added: List[str] = []
+    con = duckdb.connect(":memory:")
+    try:
+        described = con.execute(
+            f"SELECT * FROM read_parquet({_sql_literal(tables[axis])}) LIMIT 0"
+        ).description
+    finally:
+        con.close()
+    used = {str(d[0]).lower() for d in described or []}
+    for n, spec in enumerate(others):
+        alias = str(spec.get("source"))
+        if alias not in tables or alias == axis:
+            raise KeyError(f"unknown table {alias}")
+        other_key = _quote_ident(str(spec.get("key") or key))
+        parts = [f"{other_key} AS __k", "count(*) AS __n"]
+        for agg in list(spec.get("aggregations") or []):
+            func = str(agg.get("func", "")).lower()
+            if func not in _JOIN_FUNCS:
+                raise ValueError(f"unknown aggregation {func}")
+            column = str(agg.get("column", ""))
+            name = _unique_name(
+                str(agg.get("as") or f"{alias}_{_NAME_PART.sub('_', column)}_{func}"),
+                used,
+            )
+            parts.append(
+                _JOIN_FUNCS[func].format(col=_quote_ident(column))
+                + f" AS {_quote_ident(name)}"
+            )
+            selects.append(f"b{n}.{_quote_ident(name)}")
+            added.append(name)
+        rows_name = _unique_name(f"{alias}_rows", used)
+        matched_name = _unique_name(f"{alias}_matched", used)
+        selects += [
+            f"coalesce(b{n}.__n, 0) AS {_quote_ident(rows_name)}",
+            f"(b{n}.__k IS NOT NULL) AS {_quote_ident(matched_name)}",
+        ]
+        added += [rows_name, matched_name]
+        joins.append(
+            f"LEFT JOIN (SELECT {', '.join(parts)} FROM "
+            f"read_parquet({_sql_literal(tables[alias])}) GROUP BY {other_key}) b{n} "
+            f"ON CAST(a.{_quote_ident(key)} AS VARCHAR) = CAST(b{n}.__k AS VARCHAR)"
+        )
+    con = duckdb.connect(":memory:")
+    try:
+        frame = con.execute(
+            f"SELECT {', '.join(selects)} FROM "
+            f"read_parquet({_sql_literal(tables[axis])}) a {' '.join(joins)}"
+        ).df()
+    finally:
+        con.close()
+    frame.attrs["joined_columns"] = [key, *added]
+    # A frame built from this one (a merge, a groupby) loses its attrs; the
+    # record of what was joined must not depend on that.
+    _LAST_JOINED[:] = [key, *added]
+    return frame
+
+
+def compare_groups(
+    frame: Any, group_column: str, columns: List[str]
+) -> List[Dict[str, Any]]:
+    """Tests of differences between groups (BR39.2).
+
+    Numeric columns: Welch's t-test and Cohen's d for two groups (each group
+    against the rest for more). Other columns: the chi-square test and
+    Cramér's V. Returns ``[{name, column, value, p_value, effect_size}]``.
+    """
+    import numpy as np
+    from scipy import stats as st
+
+    groups = [g for g in frame[group_column].dropna().unique()]
+    out: List[Dict[str, Any]] = []
+    for column in columns:
+        series = frame[column]
+        numeric = str(series.dtype).startswith(("int", "float", "uint", "Int", "Float"))
+        if numeric:
+            pairs = (
+                [(groups[0], groups[1])]
+                if len(groups) == 2
+                else [(g, None) for g in groups]
+            )
+            for first, second in pairs:
+                a = series[frame[group_column] == first].dropna().astype(float)
+                b = (
+                    (
+                        series[frame[group_column] == second]
+                        if second is not None
+                        else series[frame[group_column] != first]
+                    )
+                    .dropna()
+                    .astype(float)
+                )
+                if len(a) < 2 or len(b) < 2:
+                    continue
+                test = st.ttest_ind(a, b, equal_var=False)
+                pooled = np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
+                effect = float((a.mean() - b.mean()) / pooled) if pooled > 0 else 0.0
+                out.append(
+                    _json_safe(
+                        {
+                            "name": "welch_t",
+                            "column": column,
+                            "groups": [
+                                str(first),
+                                "rest" if second is None else str(second),
+                            ],
+                            "value": float(test.statistic),
+                            "p_value": float(test.pvalue),
+                            "effect_size": effect,
+                        }
+                    )
+                )
+            continue
+        import pandas as pd
+
+        table = pd.crosstab(frame[group_column], series)
+        if table.shape[0] < 2 or table.shape[1] < 2:
+            continue
+        chi2, p_value, _, _ = st.chi2_contingency(table)
+        n = float(table.to_numpy().sum())
+        smaller = min(table.shape) - 1
+        cramers_v = float(np.sqrt(chi2 / (n * smaller))) if n and smaller else 0.0
+        out.append(
+            _json_safe(
+                {
+                    "name": "chi_square",
+                    "column": column,
+                    "value": float(chi2),
+                    "p_value": float(p_value),
+                    "effect_size": cramers_v,
+                }
+            )
+        )
+    return out
+
+
+def rfm(
+    frame: Any,
+    id_column: str,
+    date_column: str,
+    amount_column: str,
+    *,
+    as_of: Optional[str] = None,
+    bins: int = 5,
+) -> Any:
+    """Recency, frequency and monetary value per person, scored 1..bins (BR39.2).
+
+    Returns a pandas DataFrame of ``id_column``, ``recency`` (days since the
+    last date), ``frequency``, ``monetary`` and ``r_score`` / ``f_score`` /
+    ``m_score`` (a more recent, more frequent, larger customer scores higher).
+    """
+    import pandas as pd
+
+    dates = pd.to_datetime(frame[date_column], errors="coerce")
+    data = pd.DataFrame(
+        {
+            "id": frame[id_column],
+            "date": dates,
+            "amount": pd.to_numeric(frame[amount_column], errors="coerce"),
+        }
+    )
+    reference = pd.Timestamp(as_of) if as_of else data["date"].max()
+    grouped = data.groupby("id").agg(
+        last=("date", "max"), frequency=("date", "count"), monetary=("amount", "sum")
+    )
+    grouped["recency"] = (reference - grouped["last"]).dt.days
+
+    def score(values: Any, ascending: bool) -> Any:
+        # Ties share a rank (the mean of theirs), so people who behave the same
+        # get the same score; the score is the rank's place among ``bins`` parts.
+        ranked = values.rank(method="average", ascending=ascending)
+        count = max(min(bins, len(values)), 1)
+        place = (ranked / len(values) * count).apply(math.ceil)
+        return place.clip(lower=1, upper=count).astype(int)
+
+    grouped["r_score"] = score(grouped["recency"], ascending=False)
+    grouped["f_score"] = score(grouped["frequency"], ascending=True)
+    grouped["m_score"] = score(grouped["monetary"], ascending=True)
+    result = (
+        grouped.drop(columns=["last"]).reset_index().rename(columns={"id": id_column})
+    )
+    return result
+
+
+_PROFILE_NUMERIC = 8
+_PROFILE_CATEGORICAL = 6
+_PROFILE_VALUES = 5
+_PROFILE_DISTINCT = 20
+_HOUR_BINS = ((0, 6), (6, 12), (12, 18), (18, 24))
+
+
+def person_profile(
+    frame: Any,
+    id_column: str,
+    *,
+    date_column: Optional[str] = None,
+    as_of: Optional[str] = None,
+    skip: Sequence[str] = (),
+) -> Any:
+    """One row per person from a history table: what they did and when.
+
+    ``frame`` has several rows per person (orders, events, answers). Nothing
+    in the table's column names is assumed: the columns are told apart by
+    their types and their number of distinct values.
+
+    Returns a pandas DataFrame of ``id_column`` and, per person:
+
+    - ``回数（行）``: rows of the person.
+    - a date column (``date_column``, else the first one): ``最後からの日数``
+      (days since the person's last date up to ``as_of``, default the last
+      date of the table), ``期間（日）``, ``活動日数`` (distinct days), and,
+      when the dates carry a time, the share of rows per time of day
+      (``0〜5時の割合`` ...) and ``土日の割合``.
+    - numbers (up to 8 columns that are not keys): ``<列>の合計`` and
+      ``<列>の平均``.
+    - columns of 2〜20 values (up to 6 columns, 5 values each): ``<列>=<値>の割合``,
+      the share of the person's rows that have the value.
+
+    Key-like columns are left out: names that say ID or code, text columns whose
+    values all differ, and the columns named in ``skip`` (the columns the user
+    confirmed are no trait, ``data_reading``).
+    """
+    import pandas as pd
+
+    if id_column not in frame.columns:
+        raise KeyError(f"no column {id_column}")
+    data = frame[frame[id_column].notna()]
+    ids = data[id_column]
+    by = data.groupby(id_column, sort=True)
+    out = pd.DataFrame({"回数（行）": by.size()})
+
+    left_out = {str(c) for c in skip}
+
+    def is_key(name: str) -> bool:
+        column = data[name]
+        if str(name) in left_out or _KEY_NAME.search(str(name)):
+            return True
+        # text whose values all differ names a row, not a trait (a number whose
+        # values all differ may be an amount, so it is not judged here)
+        return (
+            not pd.api.types.is_numeric_dtype(column)
+            and not pd.api.types.is_datetime64_any_dtype(column)
+            and len(data) > 1
+            and column.nunique(dropna=True) == column.notna().sum()
+        )
+
+    stamp = date_column
+    if stamp is None:
+        stamp = next(
+            (c for c in data.columns if pd.api.types.is_datetime64_any_dtype(data[c])),
+            None,
+        )
+    if stamp is not None and stamp in data.columns:
+        when = pd.to_datetime(data[stamp], errors="coerce")
+        last = when.groupby(ids).max()
+        first = when.groupby(ids).min()
+        reference = pd.Timestamp(as_of) if as_of else when.max()
+        out["最後からの日数"] = (reference - last).dt.days
+        out["期間（日）"] = (last - first).dt.days
+        out["活動日数"] = when.dt.normalize().groupby(ids).nunique()
+        if (when.dt.hour.fillna(0) != 0).any():
+            for lo, hi in _HOUR_BINS:
+                inside = when.dt.hour.between(lo, hi - 1)
+                out[f"{lo}〜{hi - 1}時の割合"] = inside.groupby(ids).mean()
+        out["土日の割合"] = (when.dt.dayofweek >= 5).groupby(ids).mean()
+
+    skip = {id_column, stamp}
+    numeric = [
+        c
+        for c in data.columns
+        if c not in skip
+        and pd.api.types.is_numeric_dtype(data[c])
+        and not pd.api.types.is_bool_dtype(data[c])
+        and not is_key(c)
+        and data[c].nunique(dropna=True) > 1
+    ][:_PROFILE_NUMERIC]
+    for c in numeric:
+        values = pd.to_numeric(data[c], errors="coerce")
+        out[f"{c}の合計"] = values.groupby(ids).sum()
+        out[f"{c}の平均"] = values.groupby(ids).mean()
+
+    kinds = []
+    for c in data.columns:
+        if c in skip or c in numeric or is_key(c):
+            continue
+        if pd.api.types.is_datetime64_any_dtype(data[c]):
+            continue
+        count = data[c].nunique(dropna=True)
+        if 2 <= count <= _PROFILE_DISTINCT:
+            kinds.append((count, c))
+    for _, c in sorted(kinds, key=lambda item: item[0])[:_PROFILE_CATEGORICAL]:
+        common = data[c].value_counts().index[:_PROFILE_VALUES]
+        for value in common:
+            out[f"{c}={value}の割合"] = (data[c] == value).groupby(ids).mean()
+
+    result = out.round(4).reset_index()
+    return result
+
+
+# ---------------------------------------------------------------------------
 # entry points
 # ---------------------------------------------------------------------------
 
@@ -1323,9 +2747,15 @@ FUNCTIONS: Dict[str, Callable[[Dict[str, Any], str], Any]] = {
     "profile_dataset": profile_dataset,
     "run_query": run_query,
     "cluster_segments": cluster_segments,
+    "profile_segments": profile_segments,
     "prepare_document": prepare_document,
     "document_chunk": document_chunk,
     "verify_quotes": verify_quotes,
+    # U6
+    "run_ai_code": run_ai_code,
+    "finalize_ai_result": finalize_ai_result,
+    "verify_hashes": verify_hashes,
+    "key_overlap": key_overlap,
 }
 
 

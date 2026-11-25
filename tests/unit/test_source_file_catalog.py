@@ -179,14 +179,44 @@ class TestReadySources:
 
         assert catalog.ready_sources(OWNER, [table.source_file_id]) == [table]
 
-    def test_two_tables_are_refused_until_u6(self) -> None:
-        tables = [_file(), _file()]
+    # U6 BR37.1 replaces "one table" (U4): up to three tables, 1GB in total
+
+    def test_three_tables_are_used_in_order(self) -> None:
+        tables = [_file(), _file(), _file()]
+        catalog = self._catalog_of(*tables, _document())
+
+        found = catalog.ready_sources(OWNER, [t.source_file_id for t in tables])
+
+        assert [f.source_file_id for f in found] == [t.source_file_id for t in tables]
+
+    def test_four_tables_are_refused(self) -> None:
+        tables = [_file() for _ in range(4)]
         catalog = self._catalog_of(*tables)
 
         with raises_code(
-            _CallerError, ErrorCode.UPLOAD_SOURCE_INVALID, reason="tables"
+            _CallerError, ErrorCode.UPLOAD_SOURCE_INVALID, reason="tables", max=3
         ):
             catalog.ready_sources(OWNER, [t.source_file_id for t in tables])
+
+    def test_tables_over_1gb_in_total_are_refused(self) -> None:
+        tables = [_file(size_bytes=400_000_000) for _ in range(3)]
+        catalog = self._catalog_of(*tables)
+
+        with raises_code(
+            _CallerError, ErrorCode.GENERATION_SOURCE_TOO_LARGE, limit="tables_total"
+        ):
+            catalog.ready_sources(OWNER, [t.source_file_id for t in tables])
+
+    def test_tables_of_exactly_1gb_are_used(self) -> None:
+        tables = [
+            _file(size_bytes=500_000_000),
+            _file(size_bytes=500_000_000),
+        ]
+        catalog = self._catalog_of(*tables, _document(size_bytes=90_000_000))
+
+        assert (
+            len(catalog.ready_sources(OWNER, [t.source_file_id for t in tables])) == 2
+        )
 
     def test_nothing_chosen_is_refused(self) -> None:
         with raises_code(_CallerError, ErrorCode.UPLOAD_SOURCE_INVALID):

@@ -5,7 +5,7 @@ Service Factory
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Mapping, Optional, Sequence, TYPE_CHECKING
 from threading import Lock
 
 from .ai_service import AIService
@@ -44,8 +44,11 @@ if TYPE_CHECKING:
     from .survey_batch_service import SurveyBatchService
     from .survey_runner_service import SurveyRunnerService
     from .sandbox_service import SandboxService
-    from .dataset_analysis.analysis_tool_service import AnalysisToolService
-    from ..models.analysis import AnalysisToolPolicy
+    from .dataset_analysis.analysis_tool_service import (
+        AnalysisTable,
+        AnalysisToolService,
+    )
+    from ..models.analysis import AnalysisToolPolicy, RunCodeGate
 
 #: The fixed library written into each analysis session (read as a file, never
 #: imported; contract C9).
@@ -565,15 +568,22 @@ class ServiceFactory:
         session: Any,
         policy: "AnalysisToolPolicy",
         *,
-        source_id: str,
-        columns: list[str],
+        source_id: str = "",
+        columns: Sequence[str] = (),
         persona_count: int,
         sandbox: Optional["SandboxService"] = None,
+        tables: Optional[Sequence["AnalysisTable"]] = None,
+        gate: Optional["RunCodeGate"] = None,
+        expected_library_sha256: Optional[str] = None,
+        expected_parquet_sha256: Optional[Mapping[str, str]] = None,
     ) -> "AnalysisToolService":
         """Build the tools of one generation's analysis (never cached; ADR-012).
 
         ``sandbox`` defaults to :meth:`get_sandbox_service`; pass the one the
         session was opened on when it is another (the in-process version).
+        U6: ``tables`` are the generation's tables (``source_1``〜), ``gate``
+        decides on ``run_code`` (the Manager's budget) and the expected hashes
+        are the trust anchor of the check after each ``run_code`` (NFR3.35).
         """
         from .dataset_analysis.analysis_tool_service import AnalysisToolService
 
@@ -584,6 +594,10 @@ class ServiceFactory:
             source_id=source_id,
             columns=columns,
             persona_count=persona_count,
+            tables=tables,
+            gate=gate,
+            expected_library_sha256=expected_library_sha256,
+            expected_parquet_sha256=expected_parquet_sha256,
         )
 
     def get_persona_binding_store(self) -> "PersonaBindingStore":

@@ -18,7 +18,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
-from ...models.analysis import AnalysisMethod, Evidence, EvidenceKind, Segment
+from ...models.analysis import (
+    AnalysisMethod,
+    EmittedResult,
+    Evidence,
+    EvidenceKind,
+    Segment,
+)
 from ...models.errors import ErrorCode
 
 _SHARE_DIGITS = 3
@@ -44,17 +50,57 @@ class VerificationResult:
     reason: Optional[str] = None
 
 
-def _numbers(value: Any) -> Iterator[int]:
-    """Every integer inside a tool output (bools left out)."""
+#: Keys that hold a number of people, wherever they are in a tool output.
+_COUNT_KEYS = frozenset({"size", "count", "population", "rows", "rows_read"})
+
+
+def _is_count_label(label: object) -> bool:
+    """``count`` and ``count(column)`` count rows; ``count(distinct ..)`` does not."""
+    text = str(label)
+    return text == "count" or (
+        text.startswith("count(") and not text.startswith("count(distinct")
+    )
+
+
+def _as_int(value: Any) -> Iterator[int]:
     if isinstance(value, bool):
         return
     if isinstance(value, int):
         yield value
     elif isinstance(value, float) and value.is_integer():
         yield int(value)
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _numbers(item)
+
+
+def _numbers(value: Any) -> Iterator[int]:
+    """The integers of a tool output that count people (BR8.1, review of U6).
+
+    A size is backed only by a value that is a count: a cell of a ``count`` /
+    ``count(column)`` column, or a value under a key such as ``size`` or
+    ``population``. An average, a sum or any other number that merely equals
+    the size does not back it.
+    """
+    if isinstance(value, Mapping):
+        columns, rows = value.get("columns"), value.get("rows")
+        tabular = isinstance(rows, list)
+        if isinstance(rows, list):
+            names = columns if isinstance(columns, list) else []
+            at = [i for i, c in enumerate(names) if _is_count_label(c)]
+            for row in rows:
+                if isinstance(row, (list, tuple)):
+                    for i in at:
+                        if i < len(row):
+                            yield from _as_int(row[i])
+                elif isinstance(row, Mapping):
+                    for key, cell in row.items():
+                        if _is_count_label(key):
+                            yield from _as_int(cell)
+        for key, item in value.items():
+            if tabular and key in ("columns", "rows"):
+                continue
+            if key in _COUNT_KEYS:
+                yield from _as_int(item)
+            elif isinstance(item, (Mapping, list, tuple)):
+                yield from _numbers(item)
     elif isinstance(value, (list, tuple)):
         for item in value:
             yield from _numbers(item)
@@ -79,36 +125,97 @@ class AnalysisVerifier:
         segments: Sequence[Segment],
         evidence: Sequence[Evidence],
         persona_segment_ids: Sequence[Optional[str]],
-        population: int,
         outputs: Mapping[str, Any],
+        population: Optional[int] = None,
+        populations: Optional[Mapping[str, int]] = None,
+        emitted: Optional[Mapping[str, EmittedResult]] = None,
     ) -> VerificationResult:
-        """Check the result (BR8.1〜BR8.3).
+        """Check the result (BR8.1〜BR8.3; U6 BR36.3, BR37.5).
 
         Args:
             method: The method that ran.
             segments: Segments from the analysis agent.
             evidence: Evidence from the analysis agent.
             persona_segment_ids: The segment each synthesized persona names.
-            population: ``PrepareReport.rows_read`` of the table.
             outputs: Tool call ID -> structured tool output.
+            population: U1: ``PrepareReport.rows_read`` of the one table.
+            populations: U6: table alias -> people (``rows_read``); a segment
+                without ``source`` rests on the first table (BR37.2).
+            emitted: U6: ``run_code`` call ID -> the recounted result. Its
+                segments must match the same ``segment_key`` exactly and use
+                its population (BR36.3); the sum checks run per population.
         """
-        unverified = [
-            s.id
-            for s in segments
-            if not AnalysisVerifier._is_backed(s, evidence, population, outputs)
-        ]
-        if population < 1:
-            return _fail("population", unverified)
-        if sum(s.size for s in segments if not s.overlaps) > population:
-            return _fail("sum", unverified)
-        if method is AnalysisMethod.CLUSTER and (
-            sum(s.size for s in segments) != population
+        tables = dict(populations or {"": int(population or 0)})
+        runs = dict(emitted or {})
+        default_key = next(iter(tables))
+        groups: dict[str, list[Segment]] = {}
+        sizes: dict[str, int] = {}
+        unverified: list[str] = []
+        for segment in segments:
+            key, people, backed = AnalysisVerifier._place(
+                segment, evidence, outputs, tables, runs, default_key
+            )
+            groups.setdefault(key, []).append(segment)
+            sizes[key] = people
+            if not backed:
+                unverified.append(segment.id)
+        if any(people < 1 for people in tables.values()) or any(
+            people < 1 for people in sizes.values()
         ):
-            return _fail("cluster_sum", unverified)
+            return _fail("population", unverified)
+        for key, members in groups.items():
+            if sum(s.size for s in members if not s.overlaps) > sizes[key]:
+                return _fail("sum", unverified)
+        if method is AnalysisMethod.CLUSTER:
+            clustered = [
+                (key, members)
+                for key, members in groups.items()
+                if len(groups) == 1
+                or any(
+                    str(s.definition.get("kind")) == "cluster" or s.tool_call_id in runs
+                    for s in members
+                )
+            ]
+            for key, members in clustered:
+                if sum(s.size for s in members) != sizes[key]:
+                    return _fail("cluster_sum", unverified)
         known = {s.id for s in segments}
         if any(sid not in known for sid in persona_segment_ids):
             return _fail("persona_without_segment", unverified)
         return VerificationResult(passed=True, unverified_segment_ids=tuple(unverified))
+
+    @staticmethod
+    def _place(
+        segment: Segment,
+        evidence: Sequence[Evidence],
+        outputs: Mapping[str, Any],
+        tables: Mapping[str, int],
+        runs: Mapping[str, EmittedResult],
+        default_key: str,
+    ) -> tuple[str, int, bool]:
+        """The population a segment rests on, its people and whether it is backed."""
+        call = segment.tool_call_id
+        if call is not None and call in runs:
+            result = runs[call]
+            key = segment.segment_key
+            size = result.size_of(key) if key is not None else None
+            people = int(result.population)
+            backed = (
+                size is not None
+                and size == segment.size
+                and people >= 1
+                and round(segment.share, _SHARE_DIGITS)
+                == round(size / people, _SHARE_DIGITS)
+            )
+            return f"run:{result.population_source}", people, backed
+        source = segment.source
+        key = source if source is not None and source in tables else default_key
+        people = int(tables[key])
+        return (
+            key,
+            people,
+            AnalysisVerifier._is_backed(segment, evidence, people, outputs),
+        )
 
     @staticmethod
     def verify_documents(

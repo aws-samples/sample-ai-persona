@@ -839,6 +839,16 @@ class TestAdvancedGenerationSettings:
         assert cfg.ADVANCED_TOOL_MAX_TOTAL_SECONDS == 20 * 60
         assert cfg.ADVANCED_TOOL_MAX_OUTPUT_CHARS == 20_000
 
+    def test_detailed_analysis_limits(self):
+        # U6 NFR5.52 / NFR8.9: AI-written code, tables and the join check
+        cfg = self._config()
+        assert cfg.ADVANCED_RUN_CODE_MAX_FAILURES == 5
+        assert cfg.ADVANCED_RUN_CODE_TIMEOUT_SECONDS == 120
+        assert cfg.ADVANCED_RUN_CODE_MAX_CHARS == 20_000
+        assert cfg.ADVANCED_MAX_TABLES == 3
+        assert cfg.ADVANCED_JOIN_MIN_MATCH_RATE == 0.5
+        assert cfg.ADVANCED_JOIN_CHECK_TIMEOUT_SECONDS == 120
+
     def test_generation_control_values(self):
         # U5 NFR5.40: 15 minutes per plan card, 60 in total, stalled after
         # 5 minutes without a heartbeat, requests read every 5 seconds

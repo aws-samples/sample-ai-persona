@@ -26,10 +26,14 @@ import importlib.util
 import json
 import logging
 import os
+import shlex
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import uuid
+import zlib
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Sequence
@@ -122,6 +126,25 @@ class SandboxService(Protocol):
     ) -> dict[str, Any]: ...
 
     def cancel_command(self, session: SandboxSession, command_id: str) -> None: ...
+
+    def call_verified(
+        self,
+        session: SandboxSession,
+        function: str,
+        args: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """U6: run this app's own library isolated, sent inside one command.
+
+        The check after AI-written code (NFR3.35): the library the session
+        holds may have been changed by that code, so the copy this process
+        holds is sent compressed inside the command and run with ``python -I
+        -c`` (security review: nothing is written, so a process the code left
+        cannot swap it between a write and the run). ``session_library`` (the
+        session's own copy, to be hashed) is added to ``args``. A command
+        longer than :data:`VERIFY_COMMAND_MAX_CHARS` is not sent; the result
+        is then ``COMMAND_TOO_LONG`` (the caller fails closed).
+        """
+        ...
 
     def stop_session(self, session: SandboxSession) -> None: ...
 
@@ -230,9 +253,41 @@ def _library_command(function: str, args: Mapping[str, Any]) -> str:
     )
 
 
-def _sha256_of(path: str) -> str:
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
+#: The argument naming the session's own library copy (hashed by the check).
+SESSION_LIBRARY_ARG = "session_library"
+#: Longest check command (security review). One argument of a Linux command
+#: may be 128 KiB at most; past this bound the check fails closed.
+VERIFY_COMMAND_MAX_CHARS = 100_000
+#: Runs the library sent as the first argument (zlib + base64) as ``__main__``
+#: with the remaining arguments. Nothing is written to disk.
+_VERIFY_BOOTSTRAP = (
+    "import base64,sys,zlib;"
+    "s=zlib.decompress(base64.b64decode(sys.argv.pop(1)));"
+    'exec(compile(s,"persona_analysis.py","exec"),{"__name__":"__main__"})'
+)
+
+
+def _packed_library(source: bytes) -> str:
+    return base64.b64encode(zlib.compress(source, 9)).decode("ascii")
+
+
+def _verified_argv(
+    packed_library: str, workdir: str, function: str, args: Mapping[str, Any]
+) -> list[str]:
+    # Security review: the library travels inside the command, so a process
+    # the AI-written code left cannot swap a file between a write and the run.
+    # ``-I``: the current folder, PYTHON* variables and the user's
+    # site-packages are not read, so a module the code left cannot stand in.
+    return [
+        "-I",
+        "-c",
+        _VERIFY_BOOTSTRAP,
+        packed_library,
+        "--workdir",
+        workdir,
+        function,
+        _encode_args(args),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +355,11 @@ class CodeInterpreterSandbox:
         self._sleep = sleep
         self._commands: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
-        self._library_sha256 = _sha256_of(library_path)
+        # Read once: the hash is of the very bytes written and sent (U6).
+        with open(library_path, "rb") as f:
+            self._library_source = f.read()
+        self._library_sha256 = hashlib.sha256(self._library_source).hexdigest()
+        self._packed_library = _packed_library(self._library_source)
 
     @staticmethod
     def _create_client(region_name: str) -> Any:
@@ -321,6 +380,11 @@ class CodeInterpreterSandbox:
     @property
     def library_sha256(self) -> str:
         return self._library_sha256
+
+    @property
+    def kind(self) -> str:
+        """``code_interpreter``: AI-written code may run here (U6 ADR-004)."""
+        return "code_interpreter"
 
     # --- retries -----------------------------------------------------------
 
@@ -416,8 +480,7 @@ class CodeInterpreterSandbox:
             session.session_id,
             generation_id,
         )
-        with open(self.library_path, encoding="utf-8") as f:
-            source = f.read()
+        source = self._library_source.decode("utf-8")
         try:
             self._invoke(
                 session,
@@ -539,6 +602,27 @@ class CodeInterpreterSandbox:
         with self._lock:
             self._commands.pop((session.session_id, command_id), None)
 
+    def call_verified(
+        self,
+        session: SandboxSession,
+        function: str,
+        args: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Run this app's library sent inside one ``executeCommand``."""
+        full_args = {**dict(args), SESSION_LIBRARY_ARG: _LIBRARY_NAME}
+        argv = _verified_argv(self._packed_library, _WORKDIR, function, full_args)
+        command = " ".join(["python", *(shlex.quote(a) for a in argv)])
+        if len(command) > VERIFY_COMMAND_MAX_CHARS:
+            logger.warning(
+                "verify command not sent: length=%d limit=%d",
+                len(command),
+                VERIFY_COMMAND_MAX_CHARS,
+            )
+            return _failure("COMMAND_TOO_LONG", limit=VERIFY_COMMAND_MAX_CHARS)
+        content = self._invoke(session, "executeCommand", {"command": command})
+        result = _parse_result(str(content.get("stdout", "")))
+        return limit_output(result, self.max_output_chars)
+
     def stop_session(self, session: SandboxSession) -> None:
         """Stop the session; raises after the retries (the caller logs it)."""
         self.stop_session_by_id(session.session_id)
@@ -628,9 +712,13 @@ class InProcessSandbox:
     ) -> None:
         self.root_dir = root_dir
         self.max_output_chars = max_output_chars
+        self.library_path = library_path
         self._read_object = read_object
         self._library = _load_library(library_path)
-        self._library_sha256 = _sha256_of(library_path)
+        with open(library_path, "rb") as f:
+            source = f.read()
+        self._library_sha256 = hashlib.sha256(source).hexdigest()
+        self._packed_library = _packed_library(source)
         self._workdirs: dict[str, str] = {}
         self._commands: dict[tuple[str, str], _Command] = {}
         self._lock = threading.Lock()
@@ -638,6 +726,11 @@ class InProcessSandbox:
     @property
     def library_sha256(self) -> str:
         return self._library_sha256
+
+    @property
+    def kind(self) -> str:
+        """``in_process``: AI-written code is never given here (U6 NFR3.33)."""
+        return "in_process"
 
     def workdir_of(self, session: SandboxSession) -> str:
         with self._lock:
@@ -654,6 +747,9 @@ class InProcessSandbox:
         )
         workdir = os.path.join(self.root_dir, session.session_id)
         os.makedirs(workdir, exist_ok=False)
+        # U6: the session's own copy, as Code Interpreter holds one (the
+        # check hashes it, BR36.6); the functions here run from memory.
+        shutil.copyfile(self.library_path, os.path.join(workdir, _LIBRARY_NAME))
         with self._lock:
             self._workdirs[session.session_id] = workdir
         return session
@@ -756,6 +852,29 @@ class InProcessSandbox:
         # A Python thread cannot be stopped; the session folder goes at stop.
         with self._lock:
             self._commands.pop((session.session_id, command_id), None)
+
+    def call_verified(
+        self,
+        session: SandboxSession,
+        function: str,
+        args: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Run the library sent in the arguments of a new process (no file)."""
+        workdir = self.workdir_of(session)
+        full_args = {
+            **dict(args),
+            SESSION_LIBRARY_ARG: os.path.join(workdir, _LIBRARY_NAME),
+        }
+        argv = _verified_argv(self._packed_library, workdir, function, full_args)
+        completed = subprocess.run(  # noqa: S603 - our own library, no shell
+            [sys.executable, *argv],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            timeout=_DOWNLOAD_TIMEOUT_SECONDS,
+            check=False,
+        )
+        return limit_output(_parse_result(completed.stdout), self.max_output_chars)
 
     def stop_session(self, session: SandboxSession) -> None:
         self.stop_session_by_id(session.session_id)

@@ -15,7 +15,8 @@ Members see the knowledge bases they may use through ``PersonaManager`` (U5).
 """
 
 import logging
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
@@ -23,6 +24,7 @@ from ..models.errors import CodedError, ErrorCode
 from ..models.knowledge_base import KB_TYPE_SELF_MANAGED, KB_TYPES, KnowledgeBase
 from ..models.persona_binding import KB_TARGET_KEY
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
+from ..services.stores.app_settings_store import AppSettingsStore, AppSettingsStoreError
 from ..services.stores.knowledge_base_store import KnowledgeBaseStore
 from ..services.stores.persona_binding_store import (
     PersonaBindingStore,
@@ -30,8 +32,13 @@ from ..services.stores.persona_binding_store import (
 )
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
+from .components.advanced_generation_policy import (
+    AdvancedGenerationPolicy,
+    SettingSectionView,
+)
 from .components.data_agent_policy import DataAgentPolicy
 from .components.department_directory import DepartmentDirectory
+from .components.owner_directory import OwnerDirectory
 from .components.sharing_runtime import sharing_parts_from
 from .shared.asset_scope import scope_dialog, scope_labels
 from .shared.structured_log import log_event
@@ -43,6 +50,13 @@ _KB = ResourceType.KNOWLEDGE_BASE
 
 class SettingsManagerError(CodedError):
     pass
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _missing_kb() -> SettingsManagerError:
@@ -57,6 +71,9 @@ class SettingsManager:
         knowledge_base_store: Optional[KnowledgeBaseStore] = None,
         departments: Optional[DepartmentDirectory] = None,
         binding_store: Optional[PersonaBindingStore] = None,
+        settings_store: Optional[AppSettingsStore] = None,
+        owners: Optional[OwnerDirectory] = None,
+        clock: Optional[Callable[[], datetime]] = None,
     ) -> None:
         """Create the manager.
 
@@ -65,10 +82,17 @@ class SettingsManager:
             departments: The per-task department copy (scope choices, C4).
             binding_store: Persona bindings, removed with a deleted knowledge
                 base (the singleton on first use when omitted).
+            settings_store: U6: the advanced generation setting (C6; the
+                singleton on first use when omitted).
+            owners: U6: the owner-name copy, for "who saved last".
+            clock: U6: the time written as ``updated_at``.
         """
         self._kbs = knowledge_base_store or service_factory.get_knowledge_base_store()
         self._departments = departments
         self._binding_store = binding_store
+        self._settings_store = settings_store
+        self._owners = owners
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     @property
     def _bindings(self) -> PersonaBindingStore:
@@ -81,6 +105,106 @@ class SettingsManager:
         if self._departments is None:
             self._departments = sharing_parts_from(service_factory).departments
         return self._departments
+
+    @property
+    def _generation_policy(self) -> AdvancedGenerationPolicy:
+        if self._settings_store is None:
+            self._settings_store = service_factory.get_app_settings_store()
+        return AdvancedGenerationPolicy(self._settings_store)
+
+    def _owner_label(self, sub: Optional[str]) -> Optional[str]:
+        if not sub:
+            return None
+        if self._owners is None:
+            self._owners = sharing_parts_from(service_factory).owners
+        return self._owners.label(sub)
+
+    # --- U6: 高度な生成（ベータ）の区画（BR34、C11） ---
+
+    @staticmethod
+    def is_advanced_generation_section_offered() -> bool:
+        """Whether the settings screen shows the advanced generation section.
+
+        False where the feature is off (the closed network Stage, BR1.3).
+        """
+        return AdvancedGenerationPolicy.feature_enabled()
+
+    @classmethod
+    def _require_section_offered(cls) -> None:
+        if not cls.is_advanced_generation_section_offered():
+            raise SettingsManagerError(
+                "advanced generation is off in this environment",
+                code=ErrorCode.SETTINGS_NOT_FOUND,
+            )
+
+    def advanced_generation_section(self, principal: Principal) -> SettingSectionView:
+        """The advanced generation section of the settings screen (BR34.1, BR34.3).
+
+        Raises:
+            CodedError: ``SETTINGS_NOT_FOUND`` without ``settings:manage``
+                (nothing is read).
+            SettingsManagerError: ``SETTINGS_NOT_FOUND`` where the feature is
+                off (nothing is read), or the setting could not be read.
+        """
+        self._require_manage(principal)
+        self._require_section_offered()
+        try:
+            view = self._generation_policy.section_view(
+                self._department_directory.list_all()
+            )
+        except AppSettingsStoreError as e:
+            raise SettingsManagerError("setting unreadable", code=e.code) from e
+        return view.update(updated_by_name=self._owner_label(view.setting.updated_by))
+
+    def save_advanced_generation_setting(
+        self, principal: Principal, form: Mapping[str, Any]
+    ) -> SettingSectionView:
+        """Save the section on the version it was read at (BR34.2〜BR34.4, BR34.7).
+
+        Args:
+            principal: The administrator.
+            form: ``audience_mode``, ``department_groups``,
+                ``allow_detailed_analysis`` and ``version`` as sent.
+
+        Raises:
+            AccessDeniedError: ``ACCESS_DENIED`` without ``settings:manage``
+                (nothing is read or written).
+            SettingsManagerError: ``SETTINGS_NOT_FOUND`` where the feature is
+                off (nothing is read or written), ``REQUEST_INVALID``,
+                ``SETTINGS_VERSION_CONFLICT`` (the latest section in
+                ``context["section"]``) or a failed DynamoDB call.
+        """
+        AccessPolicy.require(principal, Permission.SETTINGS_MANAGE, resource_type=_KB)
+        self._require_section_offered()
+        try:
+            view = self._generation_policy.save_setting(
+                principal,
+                form,
+                self._department_directory.list_all(),
+                now=self._clock(),
+                error_type=SettingsManagerError,
+            )
+        except SettingsManagerError as e:
+            if e.code is ErrorCode.SETTINGS_VERSION_CONFLICT:
+                log_event(
+                    "settings.advanced_generation_conflict",
+                    actor_sub=principal.sub,
+                    sent_version=_int_or_none(form.get("version")),
+                )
+            raise
+        except AppSettingsStoreError as e:
+            raise SettingsManagerError("setting not saved", code=e.code) from e
+        setting = view.setting
+        # NFR3.38: counts and modes only, never the department names
+        log_event(
+            "settings.advanced_generation_changed",
+            actor_sub=principal.sub,
+            version=setting.version,
+            audience_mode=setting.audience_mode,
+            department_count=len(setting.department_groups),
+            allow_detailed_analysis=setting.allow_detailed_analysis,
+        )
+        return view.update(updated_by_name=self._owner_label(setting.updated_by))
 
     @staticmethod
     def _require_manage(principal: Principal) -> None:

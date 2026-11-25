@@ -70,10 +70,16 @@ from web.error_messages import (
     user_message_for_code,
 )
 
+from src.models.demographics import gender_label  # noqa: E402
+from src.services import country_service  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
+# Display helpers for the candidate cards (same as the ordinary generation page)
+templates.env.globals["gender_label"] = gender_label
+templates.env.globals["country_name"] = country_service.country_name
 
 #: Seconds between reads of the store while a generation runs (C3).
 SSE_POLL_SECONDS = 1.0
@@ -155,6 +161,8 @@ def screen_limits() -> dict[str, object]:
         "retention_days": int(config.ADVANCED_SOURCE_RETENTION_DAYS),
         # U5 NFR8.8: 計画のカードを待てる分（「15 分以内に選んでください」）
         "plan_wait_minutes": int(config.ADVANCED_GENERATION_PLAN_WAIT_SECONDS) // 60,
+        # U6 BR37.1: 1 回の生成に選べる表の数
+        "max_tables": int(config.ADVANCED_MAX_TABLES),
     }
 
 
@@ -204,6 +212,10 @@ async def advanced_generation_page(
     except Exception:
         logger.warning("advanced upload list not readable", exc_info=True)
         list_failed = True
+    # U6 BR35.4: the box shows (checked) only when the Manager offers it
+    detailed_offered = await run_in_threadpool(
+        manager.detailed_analysis_offered, principal
+    )
     return templates.TemplateResponse(
         request,
         "persona/advanced_generation.html",
@@ -217,6 +229,7 @@ async def advanced_generation_page(
             "active_tab": "advanced",
             "upload_rows": rows,
             "upload_list_failed": list_failed,
+            "detailed_analysis_offered": detailed_offered,
         },
     )
 
@@ -530,10 +543,13 @@ async def start_generation(
     purpose: str = Form(""),
     persona_count: int = Form(...),
     confirm_plan: bool = Form(False),
+    use_detailed_analysis: bool = Form(False),
 ) -> Any:
     """生成を始め、進み具合の区画を返す（W4）。``run`` は専用のプールで動く。
 
     U5: 「分析の計画を確認してから実行する」を ``confirm_plan`` で受け取る（BR29.1）。
+    U6: 「AI による詳細分析」を ``use_detailed_analysis`` で受け取る。使うかどうかは
+    Manager が開始のときに決める（BR35.2。許されていなければ送られても使わない）。
     実行中の生成があるときは、その旨と実行中の生成の進み具合を 409 で返す（BR30.2）。
     """
     principal = _principal(request)
@@ -546,6 +562,7 @@ async def start_generation(
             purpose=purpose,
             persona_count=persona_count,
             confirm_plan=confirm_plan,
+            use_detailed_analysis=use_detailed_analysis,
         )
     except CodedError as e:
         logger.info("advanced generation not started")
@@ -583,6 +600,7 @@ async def _control(
     revised_purpose: Optional[str] = None,
     *,
     plan_only: bool = False,
+    data_reading: Optional[dict[str, dict[str, Any]]] = None,
 ) -> Optional[Response]:
     """Hand one request to the Manager; the refusal as a response, else ``None``.
 
@@ -600,6 +618,7 @@ async def _control(
             generation_id,
             action,
             revised_purpose=revised_purpose,
+            **({"data_reading": data_reading} if plan_only else {}),
         )
     except CodedError as e:
         logger.info("advanced generation control refused")
@@ -625,6 +644,25 @@ async def _control(
     return None
 
 
+def _reading_choices(form: Any) -> Optional[dict[str, dict[str, Any]]]:
+    """The plan card's table choices: ``reading_kind__<alias>`` and its fellows.
+
+    The Manager checks every value against the table's own columns; here the
+    form is only put into shape.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for key in form.keys():
+        if not key.startswith("reading_kind__"):
+            continue
+        alias = key.removeprefix("reading_kind__")
+        out[alias] = {
+            "kind": str(form.get(key)),
+            "person_id": str(form.get(f"reading_person__{alias}") or "") or None,
+            "skip": [str(v) for v in form.getlist(f"reading_skip__{alias}")],
+        }
+    return out or None
+
+
 @router.post("/advanced/generations/{generation_id}/plan", response_class=HTMLResponse)
 async def decide_plan(
     request: Request,
@@ -634,7 +672,14 @@ async def decide_plan(
 ) -> Any:
     """計画の承認、または指示を直して計画し直す（W5-1、BR29.3、BR29.4）。"""
     revised = revised_purpose if action == "replan" else None
-    refused = await _control(request, generation_id, action, revised, plan_only=True)
+    refused = await _control(
+        request,
+        generation_id,
+        action,
+        revised,
+        plan_only=True,
+        data_reading=_reading_choices(await request.form()),
+    )
     if refused is not None:
         return refused
     return templates.TemplateResponse(
@@ -750,6 +795,7 @@ def render_plan_card(
     return template.render(
         generation_id=generation.generation_id,
         plan=generation.plan,
+        reading=generation.data_reading,
         purpose=generation.purpose,
         awaiting=generation.status is GenerationStatus.AWAITING_PLAN_APPROVAL,
         accepted=accepted,

@@ -816,7 +816,7 @@ async def _analysis_record_context(
     """The analysis record of a persona made by the advanced generation (U1 S13).
 
     Ordinary personas read nothing. A record that cannot be read shows as
-    "分析の記録は残っていません" and never stops the detail page.
+    "分析の詳細は残っていません" and never stops the detail page.
     """
     context = persona.generation_context or {}
     if context.get("mode") != "advanced":

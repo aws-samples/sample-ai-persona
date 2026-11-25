@@ -68,12 +68,38 @@ class ColumnMappingOutput(BaseModel):
 # --- 高度な生成（ベータ）の構造化出力（契約 C8。dict の項目は使わない: 上の注記と同じ理由） ---
 
 
+class AdvancedPlanStepOutput(BaseModel):
+    """One step of the plan (AnalysisStep, U6 addendum)."""
+
+    kind: Literal[
+        "filter",
+        "compare",
+        "cluster",
+        "join",
+        "rfm",
+        "compare_groups",
+        "person_profile",
+    ] = Field(description="手順の種類")
+    reason: str = Field(default="", description="この手順を選んだ理由")
+    table: Optional[str] = Field(
+        default=None, description="使う表の名前（source_1 など。あるとき）"
+    )
+    column: Optional[str] = Field(
+        default=None, description="使う列（プロファイルにある列名。あるとき）"
+    )
+
+
 class AdvancedPlanOutput(BaseModel):
     """The analysis plan the planning agent returns (AnalysisPlan, BR5.1)."""
 
     interpreted_purpose: str = Field(description="利用者の指示をどう読んだか")
     questions: list[str] = Field(description="分析で答える問い（1 つ以上）")
-    method: Literal["filter", "compare", "cluster"] = Field(description="手法")
+    method: Literal["filter", "compare", "cluster"] = Field(
+        description="最後に層を作る手順の手法（rfm は filter、compare_groups は compare）"
+    )
+    steps: list[AdvancedPlanStepOutput] = Field(
+        default_factory=list, description="手順の並び（最大 4 つ、行う順）"
+    )
     rationale: str = Field(description="その手法を選んだ理由")
     split_axis: Optional[str] = Field(
         default=None, description="filter で層を分ける列（プロファイルにある列名）"
@@ -84,11 +110,13 @@ class AdvancedPlanOutput(BaseModel):
 
 
 class SegmentFeatureOutput(BaseModel):
-    """One feature of a segment, as seen in a tool output."""
+    """One feature of a segment: numbers seen in a tool output (U6 addendum)."""
 
     name: str
-    value: str
-    baseline: str
+    # Not used: the app counts the features again, so a text here must not
+    # fail the whole output.
+    value: float | str = Field(description="この層の値（書かなくてよい）")
+    baseline: float | str = Field(description="全体の値（書かなくてよい）")
 
 
 class SegmentOutput(BaseModel):
@@ -104,9 +132,28 @@ class SegmentOutput(BaseModel):
     cluster_index: Optional[int] = Field(
         default=None, description="cluster のときの群の index"
     )
+    definition_source: Optional[str] = Field(
+        default=None,
+        description="層が乗る表の名前（source_1 など。結合した表は join:... ）",
+    )
+    definition_segment_key: Optional[str] = Field(
+        default=None, description="run_code の結果から作った層の segment_key"
+    )
+    profile_tool_call_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "analyze_dataset で作った層の特徴を数えた profile_segments の tool_call_id"
+        ),
+    )
+    profile_key: Optional[str] = Field(
+        default=None, description="その呼び出しの結果にある、この層の key"
+    )
     size: int = Field(description="ツールの出力に出てきた行数")
     share: float = Field(description="母数に対する割合（0〜1）")
-    features: list[SegmentFeatureOutput]
+    features: list[SegmentFeatureOutput] = Field(
+        default_factory=list,
+        description=("書かない（空のままにする。システムが数え直して付ける）"),
+    )
     evidence_ids: list[str]
     overlaps: bool = Field(default=False, description="ほかの層と重なりうるか")
 
@@ -141,11 +188,19 @@ def _analysis_to_contract(
         }
         if s.cluster_index is not None:
             spec["cluster_index"] = s.cluster_index
+        if s.definition_segment_key:
+            spec["segment_key"] = s.definition_segment_key
+        if s.profile_tool_call_id and s.profile_key is not None:
+            spec["profile_tool_call_id"] = s.profile_tool_call_id
+            spec["profile_key"] = s.profile_key
+        definition: dict[str, Any] = {"kind": s.definition_kind, "spec": spec}
+        if s.definition_source:
+            definition["source"] = s.definition_source
         segments.append(
             {
                 "id": s.id,
                 "label": s.label,
-                "definition": {"kind": s.definition_kind, "spec": spec},
+                "definition": definition,
                 "size": s.size,
                 "share": s.share,
                 "features": [f.model_dump() for f in s.features],
@@ -1625,8 +1680,12 @@ class AgentService:
         document_index: int,
         chunk_index: int,
         may_retry: Optional[Callable[[], bool]] = None,
+        purpose: str = "",
     ) -> tuple[Any, dict[str, int]]:
         """Pick evidence out of one chunk with the Manager's schema (U4 BR26.1).
+
+        A non-blank ``purpose`` (the user's instruction) is sent as its own
+        ``purpose`` data block before the chunk; a blank one sends nothing.
 
         ``agent(message, structured_output_model=...)`` is used rather than
         ``structured_output()`` because only the former returns the token
@@ -1648,17 +1707,19 @@ class AgentService:
             AgentServiceError: The model call failed
                 (``GENERATION_SANDBOX_UNAVAILABLE``, cause ``model``).
         """
-        message = "\n\n".join(
-            [
-                prompt,
-                wrap_untrusted_data(
-                    chunk_text,
-                    "document",
-                    document_index=str(document_index),
-                    chunk_index=str(chunk_index),
-                ),
-            ]
+        blocks = [prompt]
+        if purpose.strip():
+            # The prompt says the user's instruction follows as data (BR26.1)
+            blocks.append(wrap_untrusted_data(purpose, "purpose"))
+        blocks.append(
+            wrap_untrusted_data(
+                chunk_text,
+                "document",
+                document_index=str(document_index),
+                chunk_index=str(chunk_index),
+            )
         )
+        message = "\n\n".join(blocks)
 
         retries = max(0, int(config.ADVANCED_EVIDENCE_MAX_RETRIES))
         wait = float(config.ADVANCED_EVIDENCE_RETRY_BASE_SECONDS)

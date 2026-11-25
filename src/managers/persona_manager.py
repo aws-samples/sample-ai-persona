@@ -1915,7 +1915,7 @@ class PersonaManager:
         Returns:
             The record and the judgement of its files, or ``None`` for an
             ordinary persona and when the record is gone
-            ("分析の記録は残っていません").
+            ("分析の詳細は残っていません").
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing.

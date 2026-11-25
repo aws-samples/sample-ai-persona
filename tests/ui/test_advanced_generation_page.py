@@ -52,6 +52,7 @@ def _open(
         active_tab="advanced",
         upload_rows=context.get("upload_rows", []),
         upload_list_failed=False,
+        detailed_analysis_offered=context.get("detailed_analysis_offered", False),
     )
     ui.settle()
 
@@ -374,9 +375,9 @@ class TestProgress:
         log = ui.page.inner_text("[data-testid='advanced-log']")
         assert "300 行を読み込みました" in log
         mark = ui.page.inner_text(
-            "[data-testid='advanced-stage-preparing'] [data-role='mark']"
+            "[data-testid='advanced-stage-preparing'] [data-role='state']"
         )
-        assert mark == "（済）"
+        assert mark == "済"
         assert ui.page.evaluate("document.activeElement.id") == "advanced-result-title"
 
     def test_share_badges_are_text_and_dropped_values_are_not_shown(
@@ -425,6 +426,15 @@ class TestProgress:
         assert "生成が止まりました" in failure
         assert error["message"] in failure
         assert ui.page.evaluate("document.getElementById('advanced-inputs').open")
+        # the bar says it stopped, in words as well as in colour
+        label = ui.page.inner_text("[data-testid='advanced-progress-label']")
+        assert label.startswith("止まりました")
+        assert "bg-red-700" in (
+            ui.page.locator(
+                "[data-testid='advanced-progress-bar'] [data-role='fill']"
+            ).first.get_attribute("class")
+            or ""
+        )
         ui.check_a11y()
 
     def test_running_generation_collapses_the_inputs(self, ui: UiHarness) -> None:
@@ -628,7 +638,7 @@ class TestFileList:
                     s.error_file("source_not_a_table").update(
                         source_file_id="file-2", expires_at=WEEK
                     ),
-                    "表として読めませんでした",
+                    "CSV として読めませんでした",
                 ),
             ),
         )
@@ -918,3 +928,839 @@ class TestGenerationControls:
         ui.page.wait_for_selector("[data-testid='advanced-cancelling']")
 
         assert ui.page.is_disabled("[data-testid='advanced-cancel-button']")
+
+
+# ---------------------------------------------------------------------------
+# U6: the detailed analysis box, up to three tables, the record's code kinds
+# and the settings section (BR34, BR35.4, BR37.1, BR38.1, NFR3.37, NFR10.5)
+# ---------------------------------------------------------------------------
+
+GENERATE = "[data-testid='advanced-generate-button']"
+
+
+def _tables(count: int) -> list[dict[str, Any]]:
+    return [
+        _row_context(s.ready_file(source_file_id=f"table-{i}")) for i in range(count)
+    ]
+
+
+def _check_all(ui: UiHarness) -> None:
+    for box in ui.page.query_selector_all("[data-testid='advanced-upload-select']"):
+        box.check()
+    ui.settle()
+
+
+class TestDetailedAnalysisAndTables:
+    def test_the_box_is_checked_labelled_and_reachable(self, ui: UiHarness) -> None:
+        _open(ui, detailed_analysis_offered=True)
+
+        box = "[data-testid='advanced-detailed-analysis']"
+        assert ui.page.is_checked(box)
+        ui.page.focus(box)
+        ui.page.keyboard.press("Space")
+        assert not ui.page.is_checked(box)
+        label = ui.page.inner_text("label[for='advanced-detailed-analysis']")
+        assert label == "AI による詳細分析"
+        ui.check_a11y()
+
+    def test_no_box_when_not_offered(self, ui: UiHarness) -> None:
+        _open(ui)
+
+        assert (
+            ui.page.query_selector("[data-testid='advanced-detailed-analysis']") is None
+        )
+
+    def test_three_tables_may_start(self, ui: UiHarness) -> None:
+        _open(ui, upload_rows=_tables(3))
+
+        _check_all(ui)
+
+        assert not ui.page.is_disabled(GENERATE)
+
+    def test_four_tables_cannot_start_and_say_why(self, ui: UiHarness) -> None:
+        _open(ui, upload_rows=_tables(4))
+
+        _check_all(ui)
+
+        assert ui.page.is_disabled(GENERATE)
+        reason = ui.page.inner_text("[data-testid='advanced-generate-reason']")
+        assert "CSV は 3 つまで選べます" in reason
+        ui.check_a11y()
+
+
+def _record_with_ai_code() -> Any:
+    record = s.record()
+    return record.update(
+        code_blocks=(
+            *record.code_blocks,
+            {
+                "kind": "ai_written",
+                "code": f"emit_result(df, 'seg', 'source_1')  # {s.SCRIPT_TEXT}",
+                "sha256": "c" * 64,
+                "title": "結合した列: customer_id, source_2_amount_sum（source_2 の一致 80%）",
+            },
+        )
+    )
+
+
+class TestSegmentCards:
+    def test_layers_are_named_without_ids_and_compared_with_the_whole(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("result", render_result(s.result()), 4)
+                + "event: done\ndata: \n\n"
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+        cards = ui.page.locator("[data-testid='advanced-segment-row']")
+        assert cards.count() == 2
+        names = ui.page.locator("[data-testid='advanced-segment-name']")
+        assert names.nth(0).inner_text() == "若い学生"
+        for i in range(2):
+            assert names.nth(i).inner_text() not in ("S1", "S2")
+        text = ui.page.inner_text("[data-testid='advanced-segments']")
+        assert "S1" not in text and "S2" not in text
+        # S1 is below the whole, S2 is unverified (no share, no features compared)
+        assert "▼ 低い" in cards.nth(0).inner_text()
+        assert "検証で外したため" in cards.nth(1).inner_text()
+        assert (
+            ui.page.locator("[data-testid='advanced-result-summary'] dt").count() >= 1
+        )
+        ui.check_a11y()
+
+
+class TestSegmentNumbers:
+    def _result(self, sizes: tuple[int, int]) -> Any:
+        from dataclasses import replace
+
+        from src.models.analysis import Segment
+
+        def segment(n: int, size: int, features: tuple[dict, ...]) -> Segment:
+            return Segment(
+                id=f"S{n}",
+                label=f"層{n}",
+                definition={"kind": "derived", "spec": {"tool_call_id": "tc-1"}},
+                size=size,
+                share=size / 300,
+                features=features,
+                evidence_ids=("E1",),
+            )
+
+        features = (
+            {"name": "年齢", "kind": "mean", "value": 27.0, "baseline": 34.5},
+            {"name": "プラン=gold", "kind": "share", "value": 0.48, "baseline": 0.33},
+            {"name": "recency", "kind": "derived", "value": 12.0, "baseline": 45.0},
+        )
+        base = s.result()
+        return replace(
+            base,
+            segments=(segment(1, sizes[0], features), segment(2, sizes[1], ())),
+            unverified_segment_ids=(),
+        )
+
+    def _open_with(self, ui: UiHarness, result: Any) -> None:
+        SseFake(
+            ui,
+            [_frame("result", render_result(result), 4) + "event: done\ndata: \n\n"],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+    def test_a_share_is_shown_as_a_percent_and_a_mean_as_a_number(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        features = ui.page.locator("[data-testid='advanced-segment-row']").nth(0)
+        rows = [
+            r.inner_text().replace("\n", " ").replace("\t", " ")
+            for r in features.locator(
+                "[data-testid='advanced-segment-features'] tbody tr"
+            ).all()
+        ]
+        # the same table as the data part of a candidate
+        assert any("プラン=gold" in r and "48%" in r and "33%" in r for r in rows)
+        assert any("年齢" in r and "27.0" in r and "34.5" in r for r in rows)
+        assert any("最後の購入からの日数" in r and "AI の計算" in r for r in rows)
+        assert any("▼ 低い" in r for r in rows) and any("▲ 高い" in r for r in rows)
+        ui.check_a11y()
+
+    def test_people_in_no_layer_are_told_with_their_number(self, ui: UiHarness) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        rest = ui.page.inner_text("[data-testid='advanced-segments-rest']")
+        assert "80 人（27%）" in rest
+
+    def test_several_files_show_their_rows_one_by_one(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        first = replace(result.prepare_reports[0], rows_read=1_471_388, rows_excluded=3)
+        second = replace(result.prepare_reports[0], source_id="other", rows_read=8_000)
+        names = {
+            **result.source_names,
+            first.source_id: "pos.csv",
+            "other": "members.csv",
+        }
+        result = replace(result, prepare_reports=(first, second), source_names=names)
+
+        self._open_with(ui, result)
+
+        box = ui.page.inner_text("[data-testid='advanced-result-rows-by-file']")
+        assert "pos.csv" in box and "1,471,388" in box and "除外 3" in box
+        assert "members.csv" in box and "8,000" in box
+        ui.check_a11y()
+
+    def test_the_population_is_told_when_it_differs_from_the_rows(
+        self, ui: UiHarness
+    ) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        report = replace(result.prepare_reports[0], rows_read=3335)
+        self._open_with(ui, replace(result, prepare_reports=(report,)))
+
+        tile = ui.page.inner_text("[data-testid='advanced-population']")
+        assert "300" in tile and "人数" in tile
+
+    def test_the_population_is_told_with_several_tables_too(
+        self, ui: UiHarness
+    ) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        first = replace(result.prepare_reports[0], rows_read=3335)
+        second = replace(result.prepare_reports[0], rows_read=300)
+        self._open_with(ui, replace(result, prepare_reports=(first, second)))
+
+        assert "300" in ui.page.inner_text("[data-testid='advanced-population']")
+
+    def test_the_population_is_not_repeated_when_it_equals_the_rows(
+        self, ui: UiHarness
+    ) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        report = replace(result.prepare_reports[0], rows_read=300)
+        self._open_with(ui, replace(result, prepare_reports=(report,)))
+
+        assert ui.page.locator("[data-testid='advanced-population']").count() == 0
+
+    def test_fewer_layers_than_personas_are_told(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        # three personas were asked for, two layers were made
+        result = replace(result, generation=result.generation.update(persona_count=3))
+        self._open_with(ui, result)
+
+        note = ui.page.inner_text("[data-testid='advanced-segments-few']")
+        assert "2 個" in note and "3 人" in note
+
+    def test_as_many_layers_as_personas_tell_nothing(self, ui: UiHarness) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        assert ui.page.locator("[data-testid='advanced-segments-few']").count() == 0
+
+    def test_a_result_counted_in_rows_says_so(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        run = result.generation.analysis_run
+        marked = run.update(params={**run.params, "rows_are_not_people": True})
+        result = replace(
+            result, generation=result.generation.update(analysis_run=marked)
+        )
+        self._open_with(ui, result)
+
+        note = ui.page.inner_text("[data-testid='advanced-rows-notice']")
+        assert "行" in note and "人" in note
+        ui.check_a11y()
+
+    def test_a_result_counted_in_people_says_nothing_of_rows(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        assert ui.page.locator("[data-testid='advanced-rows-notice']").count() == 0
+
+    def test_the_data_part_is_a_table_with_readable_names_and_units(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 120)))
+        first = ui.page.locator("[data-testid='advanced-candidate']").nth(0)
+        first.locator("[data-testid='advanced-evidence'] summary").click()
+
+        rows = first.locator("[data-testid='advanced-candidate-basis'] tbody tr")
+        texts = [
+            r.inner_text().replace("\n", " ").replace("\t", " ") for r in rows.all()
+        ]
+
+        assert any("最後の購入からの日数 AI の計算" in t and "12.0" in t for t in texts)
+        assert any(
+            "プラン=gold その人の割合" in t and "48%" in t and "33%" in t for t in texts
+        )
+        assert any("年齢" in t and "▼ 低い" in t for t in texts)
+        # the evidence has its own heading below the table
+        assert (
+            "分析の根拠"
+            in first.locator("[data-testid='advanced-evidence-list']").inner_text()
+        )
+        ui.check_a11y()
+
+    def test_nothing_is_told_when_there_are_several_tables(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        # a joined result: the first table's rows are not the people counted
+        result = replace(
+            result, prepare_reports=(*result.prepare_reports, result.prepare_reports[0])
+        )
+        self._open_with(ui, result)
+
+        assert ui.page.locator("[data-testid='advanced-segments-rest']").count() == 0
+
+    def test_nothing_is_told_when_every_person_is_in_a_layer(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 200)))
+
+        assert ui.page.locator("[data-testid='advanced-segments-rest']").count() == 0
+
+
+class TestCandidateShowsWhatIsData:
+    def test_the_data_part_and_the_imagined_part_are_told_apart(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("result", render_result(s.result()), 4)
+                + "event: done\ndata: \n\n"
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+        cards = ui.page.locator("[data-testid='advanced-candidate']")
+        first = cards.nth(0)
+        evidence = first.locator("[data-testid='advanced-evidence']")
+        basis = first.locator("[data-testid='advanced-candidate-basis']")
+        # the data part is inside the evidence, which is closed at first
+        assert basis.count() == 1
+        assert evidence.locator("[data-testid='advanced-candidate-basis']").count() == 1
+        assert not basis.is_visible()
+        evidence.locator("summary").click()
+        assert basis.is_visible()
+        assert "データに基づく点" in basis.inner_text()
+        # a table: item, this layer, the whole, the comparison
+        cells = basis.locator("tbody tr").nth(0).locator("th, td").all_inner_texts()
+        assert cells[0].startswith("年齢") and cells[1] == "26.0" and cells[2] == "44.5"
+        assert cells[3] == "▼ 低い"
+        assert basis.locator("thead th").all_inner_texts() == [
+            "項目",
+            "この層",
+            "全体",
+            "比べると",
+        ]
+        # the data part comes before the list of evidence
+        order = first.evaluate(
+            """el => {
+                const pos = id => el.querySelector(`[data-testid='${id}']`)
+                    .getBoundingClientRect().top;
+                return [pos('advanced-candidate-imagined'),
+                        pos('advanced-candidate-basis')];
+            }"""
+        )
+        assert order == sorted(order)
+        note = first.locator("[data-testid='advanced-candidate-imagined']").inner_text()
+        assert "想像" in note
+        # the note points where the data part is: inside the evidence, below
+        assert "下の「根拠」にある「データに基づく点」" in note and "上の" not in note
+        # the layer dropped by the verification shows no figures as data
+        assert (
+            cards.nth(1).locator("[data-testid='advanced-candidate-basis']").count()
+            == 0
+        )
+        second = cards.nth(1).locator("[data-testid='advanced-candidate-imagined']")
+        assert second.count() == 1
+        # no data part to point at: the note does not refer to one
+        assert "データに基づく点" not in second.inner_text()
+        ui.check_a11y()
+
+
+class TestStageStepper:
+    def test_stages_show_done_current_and_pending_in_words_and_marks(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("stage", json.dumps({"status": "running"}), 1)
+                + _frame("progress", json.dumps({"message": "x"}), 2)
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_function(
+            "document.querySelector(\"[data-testid='advanced-stage-running']\")"
+            ".dataset.state === 'current'"
+        )
+
+        def stage(key: str, role: str) -> str:
+            return ui.page.inner_text(
+                f"[data-testid='advanced-stage-{key}'] [data-role='{role}']"
+            )
+
+        assert stage("preparing", "mark") == "✓" and stage("preparing", "state") == "済"
+        assert stage("running", "mark") == "●" and stage("running", "state") == "進行中"
+        # the current stage carries a filled label, apart from the plain stage names
+        cls = ui.page.get_attribute(
+            "[data-testid='advanced-stage-running'] [data-role='state']", "class"
+        )
+        assert "bg-blue-600" in (cls or "") and "rounded-full" in (cls or "")
+        assert stage("verifying", "mark") == ""
+        # the label of the bar names the stage without the marks
+        assert (
+            ui.page.inner_text("[data-testid='advanced-progress-label']")
+            == "現在: 実行"
+        )
+        ui.check_a11y()
+
+
+class TestProgressBar:
+    def test_bar_follows_the_stages_in_words_and_value(self, ui: UiHarness) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("stage", json.dumps({"status": "running"}), 1)
+                + _frame("progress", json.dumps({"message": "x"}), 2)
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_function(
+            "document.querySelector(\"[data-testid='advanced-progress-count']\")"
+            ".textContent.includes('/')"
+        )
+
+        count = ui.page.inner_text("[data-testid='advanced-progress-count']")
+        assert count == "3 / 5 段階"
+        assert "実行" in ui.page.inner_text("[data-testid='advanced-progress-label']")
+        bar = ui.page.locator("[data-testid='advanced-progress-bar']")
+        assert bar.get_attribute("aria-valuenow") == "40"
+        assert bar.get_attribute("role") == "progressbar"
+        ui.check_a11y()
+
+
+class TestCandidateCardHasTheOrdinaryProfile:
+    def test_background_values_pain_points_and_goals_are_shown(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("result", render_result(s.result()), 4)
+                + "event: done\ndata: \n\n"
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+        card = ui.page.locator("[data-testid='advanced-candidate']").first
+        assert (
+            "背景"
+            in card.locator(
+                "[data-testid='advanced-candidate-background']"
+            ).inner_text()
+        )
+        assert (
+            "効率"
+            in card.locator("[data-testid='advanced-candidate-values']").inner_text()
+        )
+        assert (
+            "時間"
+            in card.locator(
+                "[data-testid='advanced-candidate-pain_points']"
+            ).inner_text()
+        )
+        assert (
+            "成長"
+            in card.locator("[data-testid='advanced-candidate-goals']").inner_text()
+        )
+        assert (
+            "歳"
+            in card.locator("[data-testid='advanced-candidate-profile']").inner_text()
+        )
+        ui.check_a11y()
+
+
+class TestRecordReadsAsTheFlowOfTheAnalysis:
+    """The record is for looking back: purpose, plan, what ran, files, code."""
+
+    def test_flow_is_shown_and_internal_values_are_not(self, ui: UiHarness) -> None:
+        record = s.record().update(
+            tool_calls=(
+                {"tool_call_id": "t1", "tool": "profile_dataset", "ok": True},
+                {"tool_call_id": "t2", "tool": "run_code", "ok": False},
+            ),
+            source_display_names=("members.csv",),
+        )
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            fragment="<h2>分析の詳細</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html", record=record
+            ),
+        )
+        ui.settle()
+
+        text = ui.page.inner_text("[data-testid='advanced-record']")
+        for heading in (
+            "読み取った目的",
+            "分析の計画",
+            "実際に行った分析",
+            "使ったファイル",
+        ):
+            assert heading in text
+        assert "members.csv" in text
+        calls = ui.page.locator("[data-testid='advanced-record-call']")
+        assert calls.count() == 2
+        assert "データの全体像を確認" in calls.nth(0).inner_text()
+        assert (
+            ui.page.locator("[data-testid='advanced-record-call-failed']").count() == 1
+        )
+        for hidden in ("チェックサム", "ハッシュ", "乱数のシード", "前準備の版"):
+            assert hidden not in text
+        ui.check_a11y()
+
+
+class TestRecordCodeKinds:
+    def test_kinds_are_written_and_code_is_text(self, ui: UiHarness) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            # the dialog's own title stands above its content
+            fragment="<h2>分析の詳細</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html",
+                record=_record_with_ai_code(),
+            ),
+        )
+        ui.settle()
+
+        kinds = ui.page.locator("[data-testid='advanced-record-code-kind']")
+        assert "事前定義された関数" in kinds.nth(0).inner_text()
+        # what was done is told in words, not by the function name
+        assert "似た特徴の人どうしのグループ分け" in kinds.nth(0).inner_text()
+        assert "cluster_segments" not in kinds.nth(0).inner_text()
+        assert "AI が書いたプログラムによる分析" in kinds.nth(1).inner_text()
+        assert "AI による詳細分析" in kinds.nth(1).inner_text()
+        joined = ui.page.inner_text("[data-testid='advanced-record-joined']")
+        assert "customer_id" in joined and "80%" in joined
+        ui.page.locator("[data-testid='advanced-record-code']").nth(1).locator(
+            "summary"
+        ).click()
+        assert s.SCRIPT_TEXT in ui.page.locator("pre code").nth(1).inner_text()
+        assert ui.page.query_selector("script:has-text('alert(1)')") is None
+        ui.check_a11y()
+
+
+def _load_plan_card(ui: UiHarness, plan: Any) -> None:
+    ui.load_component(
+        "fragment.html",
+        container_id="advanced-plan-area",
+        fragment="<h2>計画</h2>"
+        + render_page(
+            "persona/partials/advanced_plan_card.html",
+            generation_id=s.GENERATION_ID,
+            plan=plan,
+            purpose="",
+            awaiting=False,
+            accepted=None,
+            limits=screen_limits(),
+        ),
+    )
+    ui.settle()
+
+
+class TestDataReadingCard:
+    """U6 addendum: the plan card shows how the tables read, as text."""
+
+    @staticmethod
+    def _load(ui: UiHarness, reading: Any) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-plan-area",
+            fragment="<h2>計画</h2>"
+            + render_page(
+                "persona/partials/advanced_plan_card.html",
+                generation_id=s.GENERATION_ID,
+                plan=s.PLAN,
+                purpose="",
+                awaiting=True,
+                accepted=None,
+                limits=screen_limits(),
+                reading=reading,
+            ),
+        )
+        ui.settle()
+
+    @staticmethod
+    def _reading(name: str = "顧客.csv") -> Any:
+        from src.models.advanced_generation import TableReading
+
+        return (
+            TableReading(
+                alias="source_1",
+                name=name,
+                kind="history",
+                person_id="user_id",
+                skip=("user_id",),
+                columns=("user_id", "利用日", "store_id"),
+            ),
+        )
+
+    def test_the_card_shows_each_table_with_the_proposed_reading(
+        self, ui: UiHarness
+    ) -> None:
+        self._load(ui, self._reading())
+
+        box = "[data-testid='advanced-reading-table']"
+        assert "顧客.csv" in ui.page.inner_text(box)
+        assert ui.page.is_checked(
+            "input[name='reading_kind__source_1'][value='history']"
+        )
+        assert not ui.page.is_checked(
+            "input[name='reading_kind__source_1'][value='people']"
+        )
+        assert (
+            ui.page.input_value("select[name='reading_person__source_1']") == "user_id"
+        )
+        assert ui.page.is_checked(
+            "input[name='reading_skip__source_1'][value='user_id']"
+        )
+        assert not ui.page.is_checked(
+            "input[name='reading_skip__source_1'][value='store_id']"
+        )
+        ui.check_a11y()
+
+    def test_a_file_name_is_text_never_markup(self, ui: UiHarness) -> None:
+        self._load(ui, self._reading('<img src=x onerror="window.__xss=1">.csv'))
+
+        assert ui.page.evaluate("window.__xss === undefined")
+        assert "<img" in ui.page.inner_text("[data-testid='advanced-reading-table']")
+
+    def test_a_guess_is_marked_for_the_user_to_check(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        (guessed,) = self._reading()
+        self._load(ui, (replace(guessed, uncertain=True),))
+
+        notice = ui.page.inner_text("[data-testid='advanced-reading-uncertain']")
+        assert "確かめて" in notice
+        ui.check_a11y()
+
+    def test_a_sure_reading_has_no_notice(self, ui: UiHarness) -> None:
+        self._load(ui, self._reading())
+
+        assert (
+            ui.page.locator("[data-testid='advanced-reading-uncertain']").count() == 0
+        )
+
+    def test_no_reading_shows_no_section(self, ui: UiHarness) -> None:
+        self._load(ui, None)
+
+        assert ui.page.locator("[data-testid='advanced-reading']").count() == 0
+
+
+class TestPlanSteps:
+    """U6 addendum: the plan card numbers the steps; the record names playbooks."""
+
+    def test_the_card_numbers_the_steps_with_their_names_and_reasons(
+        self, ui: UiHarness
+    ) -> None:
+        from src.models.analysis import AnalysisStep, AnalysisStepKind
+
+        plan = s.PLAN.update(
+            steps=(
+                AnalysisStep(AnalysisStepKind.JOIN, "購入の表を足す"),
+                AnalysisStep(AnalysisStepKind.RFM, s.SCRIPT_TEXT),
+                AnalysisStep(AnalysisStepKind.COMPARE_GROUPS, "差を確かめる"),
+            )
+        )
+
+        _load_plan_card(ui, plan)
+
+        steps = ui.page.locator("[data-testid='advanced-plan-step']")
+        assert steps.count() == 3
+        assert [steps.nth(i).get_attribute("data-kind") for i in range(3)] == [
+            "join",
+            "rfm",
+            "compare_groups",
+        ]
+        assert steps.nth(0).inner_text() == "CSV を結合: 購入の表を足す"
+        assert "新しさ・頻度・金額で点数化" in steps.nth(1).inner_text()
+        assert s.SCRIPT_TEXT in steps.nth(1).inner_text()  # text, never run
+        assert ui.page.evaluate("window.__xss === undefined")
+        assert "群の差を検定" in steps.nth(2).inner_text()
+        tag = ui.page.eval_on_selector(
+            "[data-testid='advanced-plan-steps']", "e => e.tagName"
+        )
+        assert tag == "OL"
+        # the method stays as before
+        assert ui.page.is_visible("[data-testid='advanced-plan-method']")
+        ui.check_a11y()
+
+    def test_a_plan_without_steps_shows_its_method_as_one_step(
+        self, ui: UiHarness
+    ) -> None:
+        _load_plan_card(ui, s.PLAN)
+
+        steps = ui.page.locator("[data-testid='advanced-plan-step']")
+        assert steps.count() == 1
+        assert steps.nth(0).inner_text() == "似た人をまとめる: 指示が空欄のため"
+
+    def test_the_record_names_the_playbooks_read(self, ui: UiHarness) -> None:
+        record = s.record().update(
+            tool_calls=(
+                {
+                    "tool_call_id": "tc-1",
+                    "tool": "load_playbook",
+                    "ok": True,
+                    "playbook": "rfm",
+                },
+                {
+                    "tool_call_id": "tc-2",
+                    "tool": "load_playbook",
+                    "ok": True,
+                    "playbook": "join",
+                },
+                {
+                    "tool_call_id": "tc-3",
+                    "tool": "load_playbook",
+                    "ok": True,
+                    "playbook": "rfm",
+                },
+            )
+        )
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            fragment="<h2>分析の詳細</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html", record=record
+            ),
+        )
+        ui.settle()
+
+        names = ui.page.locator("[data-testid='advanced-record-playbook']")
+        assert [names.nth(i).get_attribute("data-name") for i in range(2)] == [
+            "rfm",
+            "join",
+        ]
+        assert names.count() == 2
+        assert "新しさ・頻度・金額で点数化" in names.nth(0).inner_text()
+        ui.check_a11y()
+
+    def test_a_record_without_playbooks_says_nothing_of_them(
+        self, ui: UiHarness
+    ) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            fragment="<h2>分析の詳細</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html", record=s.record()
+            ),
+        )
+        ui.settle()
+
+        assert ui.page.locator("[data-testid='advanced-record-playbooks']").count() == 0
+
+
+def _section_view(**setting: Any) -> Any:
+    from src.managers.components.advanced_generation_policy import (
+        AdvancedGenerationSetting,
+        SettingSectionView,
+    )
+    from src.models.authz import Department
+
+    values: dict[str, Any] = {
+        "audience_mode": "departments",
+        "department_groups": ("sales", "gone"),
+        "allow_detailed_analysis": False,
+        "version": 4,
+        "updated_by": "admin-1",
+        "updated_at": "2026-11-20T09:00:00+00:00",
+    }
+    values.update(setting)
+    return SettingSectionView(
+        setting=AdvancedGenerationSetting(**values),
+        departments=(Department("sales", "営業部"), Department("hr", "人事部")),
+        missing_groups=("gone",),
+        updated_by_name="管理 太郎",
+    )
+
+
+class TestSettingsSection:
+    def _open(self, ui: UiHarness, **setting: Any) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-generation-settings",
+            fragment=render_page(
+                "settings/partials/advanced_generation_settings.html",
+                view=_section_view(**setting),
+                error=None,
+                form=None,
+            ),
+        )
+        ui.settle()
+
+    def test_the_section_shows_its_values_and_the_version(self, ui: UiHarness) -> None:
+        self._open(ui)
+
+        assert ui.page.is_checked("[data-testid='advanced-setting-departments']")
+        assert ui.page.input_value("input[name='version']") == "4"
+        assert "（見つからないグループ）" in ui.page.inner_text(
+            "[data-testid='department-picker']"
+        )
+        assert "管理 太郎" in ui.page.inner_text(
+            "[data-testid='advanced-setting-updated']"
+        )
+        assert "最終更新者" in ui.page.inner_text(
+            "[data-testid='advanced-setting-updated']"
+        )
+        text = ui.page.inner_text("#advanced-generation-settings")
+        assert "利用範囲" in text and "許可グループ" in text
+        assert "使える人" not in text and "利用できるグループ" not in text
+        ui.check_a11y()
+
+    def test_the_switch_is_a_labelled_toggle_not_only_a_colour(
+        self, ui: UiHarness
+    ) -> None:
+        self._open(ui)
+        switch = "[data-testid='advanced-setting-detailed']"
+
+        assert ui.page.get_attribute(switch, "aria-checked") == "false"
+        assert "OFF" in ui.page.inner_text(switch)
+        ui.page.focus(switch)
+        ui.page.keyboard.press("Enter")
+        ui.settle()
+
+        assert ui.page.get_attribute(switch, "aria-checked") == "true"
+        assert "ON" in ui.page.inner_text(switch)
+        hidden = "input[name='allow_detailed_analysis']"
+        assert ui.page.input_value(hidden) == "true"
+        ui.check_a11y()
+
+    def test_the_save_button_stays_usable_without_a_department_change(
+        self, ui: UiHarness
+    ) -> None:
+        self._open(ui)
+
+        assert not ui.page.is_disabled("[data-testid='advanced-setting-save']")

@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from ...config import config
 from ...models.advanced_generation import AdvancedGeneration
 from ...models.analysis import (
     DEFAULT_SEED,
     DOCUMENT_PREPARE_VERSION,
+    PLAYBOOK_NAMES,
     AnalysisPlan,
     AnalysisRecord,
     AnalysisRun,
@@ -44,11 +45,15 @@ def build_analysis_run(
     library_sha256: str,
     unverified_segment_ids: Sequence[str],
     document_mode: Optional[DocumentMode] = None,
+    ai_code_sha256: Sequence[str] = (),
+    extra_params: Optional[Mapping[str, Any]] = None,
 ) -> AnalysisRun:
     """The summary kept on the generation and each candidate (contract C8).
 
     U4: ``report`` is ``None`` for documents alone; every source's checksum is
     kept in ``source_file_ids`` order, and the document mode is a parameter.
+    U6: the hashes of the successful AI-written code follow the library's,
+    and ``extra_params`` adds ``detailed_analysis`` and ``join`` (BR37.4).
     """
     params: dict[str, Any] = {
         "persona_count": generation.persona_count,
@@ -57,10 +62,11 @@ def build_analysis_run(
     }
     if document_mode is not None:
         params["document_mode"] = document_mode.value
+    params.update(extra_params or {})
     return AnalysisRun(
         method=plan.method.value,
         plan_ref=generation.generation_id,
-        code_sha256=(library_sha256,),
+        code_sha256=(library_sha256, *ai_code_sha256),
         params=params,
         source_checksums=tuple(s.checksum or "" for s in sources),
         prepare_version=(
@@ -81,17 +87,21 @@ def build_record(
     library_sha256: str,
     now: datetime,
     document_mode: Optional[DocumentMode] = None,
+    ai_code: Sequence[tuple[str, str, str, Optional[str]]] = (),
 ) -> AnalysisRecord:
-    """The analysis record: the fixed functions that ran and their hash (BR9.1).
+    """The analysis record: the code that ran and its hash (BR9.1, BR38.2).
 
     ``calls`` are the tool calls (``tool_call_id``, ``tool``, ``ok``,
     ``error_code``); their outputs are not kept. No URL goes in. U4: one
-    ``prepare_document`` block per document, then the quote check.
+    ``prepare_document`` block per document, then the quote check. U6: one
+    ``prepare`` per table, and ``ai_code`` (``tool_call_id``, code, sha256 of
+    the successful ``run_code`` calls only) as ``ai_written`` blocks in the
+    order they ran; failed calls stay in ``tool_calls`` with their code only.
     """
     blocks: list[dict[str, Any]] = []
-    table = next((s for s in sources if s.kind is SourceKind.TABLE), None)
-    metadata = table.table_metadata if table else None
-    if table is not None:
+    tables = [s for s in sources if s.kind is SourceKind.TABLE]
+    for table in tables:
+        metadata = table.table_metadata
         prepare_args = (
             {"encoding": metadata.encoding.value, "delimiter": metadata.delimiter}
             if metadata
@@ -123,14 +133,30 @@ def build_record(
                 "sha256": library_sha256,
             }
         )
-    blocks += [
-        {
-            "kind": "fixed",
-            "code": f"{c.tool}()  # {c.tool_call_id}",
-            "sha256": library_sha256,
-        }
-        for c in calls
-    ]
+    written = {call_id: (code, sha, title) for call_id, code, sha, title in ai_code}
+    for c in calls:
+        if c.tool == "run_code":
+            if c.tool_call_id in written:
+                code, sha, title = written[c.tool_call_id]
+                block: dict[str, Any] = {
+                    "kind": "ai_written",
+                    "code": code,
+                    "sha256": sha,
+                }
+                if title:
+                    # BR37.4: the joined columns and the match rates (S9)
+                    block["title"] = title
+                blocks.append(block)
+            continue
+        if c.tool == "load_playbook":
+            continue
+        blocks.append(
+            {
+                "kind": "fixed",
+                "code": f"{c.tool}()  # {c.tool_call_id}",
+                "sha256": library_sha256,
+            }
+        )
     return AnalysisRecord.create_new(
         record_id=generation.generation_id,
         owner_sub=generation.owner_sub,
@@ -150,10 +176,19 @@ def build_record(
                 "tool": c.tool,
                 "ok": c.ok,
                 **({"error_code": c.error_code} if c.error_code else {}),
+                **_playbook_of(c),
             }
             for c in calls
         ],
     )
+
+
+def _playbook_of(call: Any) -> dict[str, str]:
+    """U6 addendum: the playbook a ``load_playbook`` read (a fixed name only)."""
+    name = getattr(call, "playbook", None)
+    if call.tool == "load_playbook" and name in PLAYBOOK_NAMES:
+        return {"playbook": str(name)}
+    return {}
 
 
 def build_candidates(

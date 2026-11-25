@@ -34,7 +34,25 @@
     // U5: 計画の確認待ちは、計画を確かめる生成でだけ出す（その段に入ったら表示する）
     var AWAITING = 'awaiting_plan_approval';
     var STAGES = ['preparing', 'planning', AWAITING, 'running', 'synthesizing', 'verifying'];
-    var MARKS = { pending: '（未）', current: '（中）', done: '（済）', failed: '（×）' };
+    var MARKS = { pending: '', current: '●', done: '✓', failed: '×' };
+    var STATE_WORDS = { pending: '未', current: '進行中', done: '済', failed: '失敗' };
+    // 段階の丸・線・文字のクラス（Tailwind が拾えるよう、全体を書く）
+    var MARK_CLASS = {
+        pending: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-gray-300 bg-white text-xs font-bold text-gray-500',
+        current: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-blue-600 bg-white text-xs font-bold text-blue-700',
+        done: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-blue-600 bg-blue-600 text-xs font-bold text-white',
+        failed: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-red-700 bg-red-700 text-xs font-bold text-white'
+    };
+    var LINE_CLASS = {
+        reached: 'absolute top-3 right-1/2 w-full h-0.5 bg-blue-600',
+        pending: 'absolute top-3 right-1/2 w-full h-0.5 bg-gray-300'
+    };
+    // 進行中・失敗は、段階の名前と区別できるラベル（塗りの角丸）にする
+    var STATE_CLASS = {
+        current: 'inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-600 text-white',
+        failed: 'inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-700 text-white',
+        hidden: 'sr-only'
+    };
     var METHOD_LABELS = { filter: '絞り込み', compare: '群どうしの比較', cluster: 'クラスタ分析' };
     var FAILURE_TITLES = {
         generation_timeout: '生成が止まりました',
@@ -140,6 +158,10 @@
             document.querySelectorAll('[name="source_file_ids"]:checked')
         );
         var tables = chosen.filter(function (input) { return input.dataset.kind !== 'document'; });
+        // U6 BR37.1: up to three tables (the limit comes from the page; the server refuses too)
+        var form = generateButton.form;
+        var maxTables = Number((form && form.dataset.maxTables) || 3);
+        var tooMany = tables.length > maxTables;
         var reason = '';
         if (submitting) {
             reason = '開始しています';
@@ -147,10 +169,10 @@
             reason = '実行中の生成があります。終わるか中止してから始めてください';
         } else if (!chosen.length) {
             reason = '準備OK のファイルを選んでください';
-        } else if (tables.length > 1) {
-            reason = '表は 1 つだけ選んでください（文書はいくつでも一緒に選べます）';
+        } else if (tooMany) {
+            reason = 'CSV は ' + maxTables + ' つまで選べます（文書はいくつでも一緒に選べます）';
         }
-        generateButton.disabled = submitting || running || !chosen.length || tables.length > 1;
+        generateButton.disabled = submitting || running || !chosen.length || tooMany;
         generateReason.textContent = reason;
         updateDocumentEstimate(chosen);
     }
@@ -205,7 +227,7 @@
             return '上げられません: 古い Word の形式（.doc）は使えません。.docx で保存し直して上げてください';
         }
         if (!isDocument && TABLE_EXTENSIONS.indexOf(extension) === -1) {
-            return '上げられません: CSV・TSV の表か、PDF・Word（.docx）・テキスト（.txt・.md）の文書を選んでください';
+            return '上げられません: CSV・TSV か、PDF・Word（.docx）・テキスト（.txt・.md）の文書を選んでください';
         }
         if (file.size > maxBytes) {
             return '上げられません: 1 ファイル ' + maxSizeMb + 'MB までです。分けて上げてください';
@@ -609,14 +631,62 @@
             if (current === 'done' || position < index) state = 'done';
             else if (position === index) state = failed ? 'failed' : 'current';
             item.dataset.state = state;
-            item.querySelector('[data-role="mark"]').textContent = MARKS[state];
+            var mark = item.querySelector('[data-role="mark"]');
+            mark.textContent = MARKS[state];
+            mark.className = MARK_CLASS[state];
+            var line = item.querySelector('[data-role="line"]');
+            if (line) line.className = state === 'pending' ? LINE_CLASS.pending : LINE_CLASS.reached;
+            var word = item.querySelector('[data-role="state"]');
+            if (word) {
+                word.textContent = STATE_WORDS[state];
+                word.className = STATE_CLASS[state] || STATE_CLASS.hidden;
+            }
         });
+        updateBar(panel, current, failed);
+    }
+
+    // 段階の数から出す目安の棒（実際の割合ではない）。表示している段階だけを数える
+    function updateBar(panel, current, failed) {
+        var bar = panel.querySelector('[data-testid="advanced-progress-bar"]');
+        if (!bar) return;
+        var shown = Array.prototype.filter.call(
+            panel.querySelectorAll('[data-stage]'), function (item) { return !item.hidden; });
+        var total = shown.length;
+        var finished = current === 'done';
+        var at = 0;
+        shown.forEach(function (item, i) { if (item.dataset.stage === current) at = i + 1; });
+        var done = finished ? total : Math.max(at - 1, 0);
+        var percent = total ? Math.round(done * 100 / total) : 0;
+        bar.setAttribute('aria-valuenow', String(percent));
+        var fill = bar.querySelector('[data-role="fill"]');
+        var label = panel.querySelector('[data-testid="advanced-progress-label"]');
+        var count = panel.querySelector('[data-testid="advanced-progress-count"]');
+        if (fill) {
+            fill.style.width = percent + '%';
+            fill.className = 'h-2 rounded transition-all duration-500 ' + (failed ? 'bg-red-700' : (finished ? 'bg-green-700' : 'bg-blue-600'));
+        }
+        if (!label || !count) return;
+        if (finished) {
+            label.textContent = '完了';
+            count.textContent = total + ' / ' + total + ' 段階';
+        } else if (at) {
+            var nameNode = shown[at - 1].querySelector('[data-role="label"]');
+            var name = nameNode ? nameNode.textContent.trim() : '';
+            label.textContent = (failed ? '止まりました: ' : '現在: ') + name;
+            count.textContent = at + ' / ' + total + ' 段階';
+        } else if (failed) {
+            // the failing stage is not one of the shown stages
+            label.textContent = '止まりました';
+            count.textContent = '';
+        }
     }
 
     function addLog(panel, text) {
         var item = document.createElement('li');
         item.textContent = text;
-        panel.querySelector('[data-testid="advanced-log"]').appendChild(item);
+        var list = panel.querySelector('[data-testid="advanced-log"]');
+        list.appendChild(item);
+        list.scrollTop = list.scrollHeight;  // the newest line stays in view
     }
 
     function parseData(evt) {

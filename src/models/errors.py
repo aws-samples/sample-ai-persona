@@ -495,6 +495,9 @@ class ErrorCode(StrEnum):
     # A settings screen or API for a user without ``settings:manage``: the same
     # 404 as a missing page, so the screen's existence is not revealed.
     SETTINGS_NOT_FOUND = ("settings_not_found", ErrorKind.NOT_FOUND)
+    # U6 BR34.4: someone saved the advanced generation setting first; the
+    # section is shown again with the latest values and saved once more.
+    SETTINGS_VERSION_CONFLICT = ("settings_version_conflict", ErrorKind.TRANSIENT)
 
     # --- Personas ---
     # Field-level validation is expressed as a validation *kind* plus a stable

@@ -18,10 +18,10 @@
      data-inspect-stop-seconds="{{ limits.inspect_stop_seconds }}">
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
     {% include "persona/partials/generation_tabs.html" %}
-    <p class="text-gray-600 mb-4">表のデータやインタビューの記録などの文書をアップロードし、AI が分析した結果からペルソナを生成します。</p>
-    <p data-testid="advanced-beta-notice" class="mb-6 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3">
-        試験的な機能です。結果の形や仕様は予告なく変わることがあります
+    <p data-testid="advanced-beta-notice" class="mb-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3">
+        現在、高度な生成は試験的な機能です。
     </p>
+    <p class="text-gray-600 mb-4">CSV のデータやインタビューの記録などの文書をアップロードし、AI が分析した結果からペルソナを生成します。</p>
 
     <details id="advanced-inputs" data-testid="advanced-inputs" open class="mb-6">
         <summary class="cursor-pointer text-sm font-medium text-gray-700 mb-4" data-testid="advanced-inputs-summary">データと指示</summary>
@@ -31,11 +31,11 @@
                 <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold" aria-hidden="true">1</span>
                 データファイルのアップロード
             </h2>
-            <p class="text-sm text-gray-500 mb-4 ml-9">ペルソナ生成の元となる表や文書のファイルを選択してください。表は 1 つまで、文書は表と一緒にも文書だけでも使えます</p>
+            <p class="text-sm text-gray-500 mb-4 ml-9">ペルソナ生成の元となる CSV や文書のファイルを選択してください。CSV は {{ limits.max_tables }} つまで、文書は CSV と一緒にも文書だけでも使えます</p>
             <div class="mb-3 p-3 bg-gray-50 rounded-md ml-9">
                 <p id="advanced-file-limits" class="text-xs text-gray-500">
-                    <strong>表:</strong> .csv, .tsv（{{ limits.max_size_mb }}MB/ファイルまで）　｜　<strong>文書:</strong> .pdf, .docx, .txt, .md（{{ limits.max_document_size_mb }}MB/ファイルまで）　｜　<strong>合計:</strong> {{ limits.max_files }} ファイルまで<br>
-                    Excel のファイルは CSV で、古い Word（.doc）は .docx で保存し直して上げてください。パスワード付きのファイルと、文字のない画像だけの PDF は使えません
+                    <strong>CSV:</strong> .csv, .tsv（{{ limits.max_size_mb }}MB/ファイルまで）　｜　<strong>文書:</strong> .pdf, .docx, .txt, .md（{{ limits.max_document_size_mb }}MB/ファイルまで）　｜　<strong>合計:</strong> {{ limits.max_files }} ファイルまで<br>
+                    パスワード付きのファイルと、文字のない画像だけの PDF は使えません
                 </p>
             </div>
 
@@ -57,10 +57,10 @@
                     <caption class="text-left text-sm font-medium text-gray-700 mb-2">上げたファイル</caption>
                     <thead class="text-left text-xs text-gray-500 border-b">
                         <tr>
-                            <th scope="col" class="py-2 pr-2 font-medium">使う</th>
-                            <th scope="col" class="py-2 pr-2 font-medium">ファイル</th>
-                            <th scope="col" class="py-2 pr-2 font-medium">状態</th>
-                            <th scope="col" class="py-2 pr-2 font-medium">消える予定の日</th>
+                            <th scope="col" class="py-2 pr-3 font-medium whitespace-nowrap">使う</th>
+                            <th scope="col" class="py-2 pr-3 font-medium">ファイル</th>
+                            <th scope="col" class="py-2 pr-3 font-medium">状態</th>
+                            <th scope="col" class="py-2 pr-3 font-medium whitespace-nowrap">消える予定の日</th>
                             <th scope="col" class="py-2"><span class="sr-only">操作</span></th>
                         </tr>
                     </thead>
@@ -96,6 +96,7 @@
         </section>
 
         <form id="advanced-generation-form" data-testid="advanced-generation-form"
+              data-max-tables="{{ limits.max_tables }}"
               hx-post="/persona/advanced/generations"
               hx-target="#advanced-progress-area"
               hx-swap="innerHTML"
@@ -106,13 +107,13 @@
                     ペルソナ作成の指示
                     <span class="text-xs text-gray-500 font-normal">（任意）</span>
                 </h2>
-                <p class="text-sm text-gray-500 mb-4 ml-9">目的や切り口を自然言語で指定できます。空欄なら、データから切り口を決めます</p>
+                <p class="text-sm text-gray-500 mb-4 ml-9">知りたいこと（目的）と、分けたい・比べたい切り口を書きます。空欄なら、データから切り口を決めます</p>
                 <div class="ml-9">
                     <div class="advanced-form-error" aria-live="polite"></div>
                     <label for="advanced-purpose" class="sr-only">目的・切り口</label>
-                    <textarea id="advanced-purpose" name="purpose" rows="3" maxlength="{{ limits.purpose_max_chars }}"
+                    <textarea id="advanced-purpose" name="purpose" rows="4" maxlength="{{ limits.purpose_max_chars }}"
                               data-testid="advanced-purpose" aria-describedby="advanced-purpose-help"
-                              placeholder="例:&#10;・購入頻度の高い顧客層の違いが分かるように&#10;・地域ごとの特徴を比べたい"
+                              placeholder="例:&#10;・よく買う人と、離れそうな人の違いを知りたい&#10;・ゴールドとベーシックの会員で、年齢や利用の違いを比べたい&#10;・地域ごとの特徴を知りたい"
                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-y"></textarea>
                     <p id="advanced-purpose-help" class="text-xs text-gray-500 mt-1">{{ limits.purpose_max_chars }} 文字まで</p>
                     {# U5 BR29.1: 既定 OFF。待てる時間は config から（NFR8.8） #}
@@ -121,10 +122,22 @@
                                data-testid="advanced-confirm-plan" aria-describedby="advanced-confirm-plan-help"
                                class="mt-1 h-4 w-4 border-gray-300 rounded focus:ring-2 focus:ring-blue-500">
                         <div>
-                            <label for="advanced-confirm-plan" class="text-sm text-gray-800">分析の計画を確認してから実行する</label>
+                            <label for="advanced-confirm-plan" class="text-sm text-gray-800">分析の計画を確認してから実行</label>
                             <p id="advanced-confirm-plan-help" class="text-xs text-gray-600">計画を確かめてから分析を始めます。{{ limits.plan_wait_minutes }} 分のうちに承認してください</p>
                         </div>
                     </div>
+                    {# U6 BR35.4: 管理者が許していて実行先が Code Interpreter のときだけ。最初からチェック #}
+                    {% if detailed_analysis_offered %}
+                    <div class="mt-3 flex items-start gap-2">
+                        <input type="checkbox" id="advanced-detailed-analysis" name="use_detailed_analysis" value="true" checked
+                               data-testid="advanced-detailed-analysis" aria-describedby="advanced-detailed-analysis-help"
+                               class="mt-1 h-4 w-4 border-gray-300 rounded focus:ring-2 focus:ring-blue-500">
+                        <div>
+                            <label for="advanced-detailed-analysis" class="text-sm text-gray-800">AI による詳細分析</label>
+                            <p id="advanced-detailed-analysis-help" class="text-xs text-gray-600">AI が分析用のプログラムを作り、安全な環境で動かして深く分析します</p>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </section>
 

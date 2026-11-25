@@ -8,8 +8,9 @@
     awaiting ... 計画の確認を待っているか（ボタンを出す）
     accepted ... None、"approve"（承認した）、"replan"（計画し直している）
     limits ... screen_limits()（plan_wait_minutes、purpose_max_chars）
+    reading ... TableReading の並び（データの解釈。ファイル名・列名は利用者のデータなので自動エスケープのまま出す）
 #}
-{% from "persona/partials/advanced_labels.html" import method_label %}
+{% from "persona/partials/advanced_labels.html" import method_label, step_label %}
 <section data-testid="advanced-plan-card" aria-labelledby="advanced-plan-title"
          class="mt-4 border border-blue-200 bg-blue-50 rounded-md p-4">
     <h3 id="advanced-plan-title" tabindex="-1" class="font-semibold text-gray-900">分析の計画</h3>
@@ -35,6 +36,14 @@
             <dt class="font-medium text-gray-700">手法と選んだ理由</dt>
             <dd data-testid="advanced-plan-method">{{ method_label(plan.method.value) }}: {{ plan.rationale }}</dd>
         </div>
+        <div>
+            <dt class="font-medium text-gray-700">手順</dt>
+            <dd>
+                <ol class="list-decimal ml-5" data-testid="advanced-plan-steps">
+                    {% for step in plan.plan_steps() %}<li data-testid="advanced-plan-step" data-kind="{{ step.kind.value }}">{{ step_label(step.kind.value) }}{% if step.reason %}: {{ step.reason }}{% endif %}</li>{% endfor %}
+                </ol>
+            </dd>
+        </div>
         {% if plan.deviation_reason %}
         <div>
             <dt class="font-medium text-gray-700">目安から外れた理由</dt>
@@ -55,6 +64,39 @@
           hx-post="/persona/advanced/generations/{{ generation_id | urlencode }}/plan"
           hx-target="closest [data-testid='advanced-plan-card']" hx-swap="outerHTML">
         <div class="advanced-plan-error" aria-live="polite"></div>
+        {% if reading %}
+        <section data-testid="advanced-reading" aria-labelledby="advanced-reading-title" class="mb-4">
+            <h4 id="advanced-reading-title" class="text-sm font-medium text-gray-900">データの解釈</h4>
+            <p class="text-xs text-gray-700 mt-1">CSVのデータを以下のように解釈しました。誤りがあれば訂正してください。</p>
+            {% for r in reading %}
+            <fieldset class="mt-2 border border-blue-200 bg-white rounded-md p-3" data-testid="advanced-reading-table" data-alias="{{ r.alias }}">
+                <legend class="px-1 text-sm font-medium text-gray-900">{{ r.name }}</legend>
+                {% if r.uncertain %}
+                <p class="mb-2 text-xs text-amber-900 bg-amber-50 border border-amber-300 rounded px-2 py-1" data-testid="advanced-reading-uncertain">{% if r.person_id %}人を特定する列を、列の名前でなく値の形から推測しました。合っているか確かめてください。{% else %}人を特定する列を自動で判定できませんでした。確かめて、選んでください。{% endif %}</p>
+                {% endif %}
+                <div role="radiogroup" aria-label="表の解釈（{{ r.name }}）" class="text-sm text-gray-800 space-y-1">
+                    <label class="flex items-start gap-2"><input type="radio" class="mt-1" name="reading_kind__{{ r.alias }}" value="people" {% if r.kind == "people" %}checked{% endif %}> 1 人が 1 行のデータのみ（顧客の一覧、会員名簿、社員名簿、アンケートの回答（1 人 1 回答）、ユーザーの登録情報など）</label>
+                    <label class="flex items-start gap-2"><input type="radio" class="mt-1" name="reading_kind__{{ r.alias }}" value="history" {% if r.kind == "history" %}checked{% endif %}> 1 人に複数行のデータが存在（注文・購買・利用履歴、アクセスログ、問い合わせ履歴、アンケートの回答（1 人が複数回）など）</label>
+                </div>
+                <div class="mt-2 text-sm text-gray-800">
+                    <label for="reading-person-{{ r.alias }}" class="block text-xs text-gray-700">人を特定する列（顧客ID、ユーザーID、会員番号など）</label>
+                    <select id="reading-person-{{ r.alias }}" name="reading_person__{{ r.alias }}" class="mt-1 px-2 py-1 border border-gray-300 rounded-md text-sm">
+                        <option value="" {% if not r.person_id %}selected{% endif %}>なし（特定する列がありません）</option>
+                        {% for column in r.columns %}<option value="{{ column }}" {% if column == r.person_id %}selected{% endif %}>{{ column }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="mt-2 text-sm text-gray-800">
+                    <p class="text-xs text-gray-700">特徴に含めない列（ID、コード、郵便番号、電話番号、メールアドレス、氏名など）</p>
+                    <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                        {% for column in r.columns %}
+                        <label class="flex items-center gap-1"><input type="checkbox" name="reading_skip__{{ r.alias }}" value="{{ column }}" {% if column in r.skip %}checked{% endif %}> {{ column }}</label>
+                        {% endfor %}
+                    </div>
+                </div>
+            </fieldset>
+            {% endfor %}
+        </section>
+        {% endif %}
         <label for="advanced-plan-revised" class="block text-sm font-medium text-gray-700">指示（直して計画し直せます）</label>
         <textarea id="advanced-plan-revised" name="revised_purpose" rows="2" maxlength="{{ limits.purpose_max_chars }}"
                   data-testid="advanced-plan-revised" aria-describedby="advanced-plan-revised-help"
@@ -62,9 +104,9 @@
         <p id="advanced-plan-revised-help" class="text-xs text-gray-600">{{ limits.purpose_max_chars }} 文字まで</p>
         <div class="flex flex-wrap gap-3 mt-3">
             <button type="submit" name="action" value="approve" data-testid="advanced-plan-approve"
-                    class="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">この計画で実行</button>
+                    class="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">計画を承認</button>
             <button type="submit" name="action" value="replan" data-testid="advanced-plan-replan"
-                    class="border border-blue-600 text-blue-700 px-4 py-2 rounded-md text-sm hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500">指示を直して計画し直す</button>
+                    class="border border-blue-600 text-blue-700 px-4 py-2 rounded-md text-sm hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500">指示を修正して再計画</button>
             <button type="button" data-testid="advanced-plan-cancel"
                     hx-post="/persona/advanced/generations/{{ generation_id | urlencode }}/cancel"
                     hx-target="#advanced-cancel-area" hx-swap="innerHTML"

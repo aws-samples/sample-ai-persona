@@ -14,6 +14,9 @@ from src.models.analysis import (
     LIMIT_MAX_CALLS,
     LIMIT_MAX_OUTPUT_CHARS,
     LIMIT_MAX_TOTAL_SECONDS,
+    LIMIT_RUN_CODE_MAX_CHARS,
+    LIMIT_RUN_CODE_MAX_FAILURES,
+    LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     AnalysisMethod,
     AnalysisTool,
 )
@@ -32,13 +35,14 @@ AREA = {"name": "地域", "type": "VARCHAR", "all_distinct": False}
 
 
 class TestTools:
-    def test_only_the_three_fixed_tools(self) -> None:
+    def test_only_the_four_fixed_tools(self) -> None:
         policy = AnalysisPolicy.tool_policy()
 
         assert policy.tools == (
             AnalysisTool.PROFILE_DATASET,
             AnalysisTool.ANALYZE_DATASET,
             AnalysisTool.CLUSTER_SEGMENTS,
+            AnalysisTool.PROFILE_SEGMENTS,
         )
 
     def test_limits_come_from_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,3 +153,335 @@ class TestSettlePlan:
         )
 
         assert plan is not None and len(plan.questions) == 1
+
+
+# --- U6: run_code and several tables (BR35.3, BR36.2, BR37.2, NFR3.33) ------
+
+SOURCES = ("source_1", "source_2")
+
+
+class TestToolsU6:
+    def test_detailed_outside_the_process_adds_run_code_and_playbooks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_RUN_CODE_MAX_FAILURES", 4)
+        monkeypatch.setattr(config, "ADVANCED_RUN_CODE_TIMEOUT_SECONDS", 90)
+        monkeypatch.setattr(config, "ADVANCED_RUN_CODE_MAX_CHARS", 12_345)
+
+        policy = AnalysisPolicy.tool_policy(
+            detailed=True, in_process=False, sources=SOURCES
+        )
+
+        assert policy.tools[-2:] == (AnalysisTool.RUN_CODE, AnalysisTool.LOAD_PLAYBOOK)
+        assert policy.limits[LIMIT_RUN_CODE_MAX_FAILURES] == 4
+        assert policy.limits[LIMIT_RUN_CODE_TIMEOUT_SECONDS] == 90
+        assert policy.limits[LIMIT_RUN_CODE_MAX_CHARS] == 12_345
+        assert policy.sources == SOURCES
+
+    @pytest.mark.parametrize(
+        ("detailed", "in_process"), [(False, False), (True, True), (False, True)]
+    )
+    def test_otherwise_the_fixed_tools_only(
+        self, detailed: bool, in_process: bool
+    ) -> None:
+        policy = AnalysisPolicy.tool_policy(
+            detailed=detailed, in_process=in_process, sources=SOURCES
+        )
+
+        assert AnalysisTool.RUN_CODE not in policy.tools
+        assert AnalysisTool.LOAD_PLAYBOOK not in policy.tools
+        assert LIMIT_RUN_CODE_MAX_FAILURES not in policy.limits
+
+    def test_no_table_no_run_code(self) -> None:
+        policy = AnalysisPolicy.tool_policy(detailed=True, in_process=False, sources=())
+
+        assert AnalysisTool.RUN_CODE not in policy.tools
+
+
+class TestGuideTable:
+    def test_the_first_one_row_per_person_table_decides(self) -> None:
+        tables = [
+            ("source_1", _profile(AGE, SPEND)),
+            ("source_2", _profile(ID_COLUMN, AREA)),
+            ("source_3", _profile(ID_COLUMN)),
+        ]
+
+        assert AnalysisPolicy.guide_table(tables) == "source_2"
+
+    def test_without_one_source_1_decides(self) -> None:
+        tables = [("source_1", _profile(AREA)), ("source_2", _profile(AGE, SPEND))]
+
+        assert AnalysisPolicy.guide_table(tables) == "source_1"
+
+
+ORDER_ID = {"name": "注文ID", "type": "VARCHAR", "all_distinct": True}
+BUYER_ID = {"name": "顧客ID", "type": "VARCHAR", "all_distinct": False}
+BOUGHT_ON = {"name": "注文日", "type": "DATE", "all_distinct": False}
+AMOUNT = {"name": "金額", "type": "BIGINT", "all_distinct": False}
+
+
+class TestRowsAreNotPeople:
+    def test_a_table_where_the_person_id_repeats_counts_rows(self) -> None:
+        orders = _profile(ORDER_ID, BUYER_ID, BOUGHT_ON, AMOUNT)
+
+        assert AnalysisPolicy.rows_are_not_people([("source_1", orders)]) is True
+
+    def test_a_table_with_one_row_per_person_counts_people(self) -> None:
+        customers = _profile(ID_COLUMN, AGE)
+
+        assert AnalysisPolicy.rows_are_not_people([("source_1", customers)]) is False
+
+    def test_a_people_table_next_to_a_history_counts_people(self) -> None:
+        tables = [
+            ("source_1", _profile(BUYER_ID, BOUGHT_ON, AMOUNT)),
+            ("source_2", _profile({**ID_COLUMN, "name": "顧客ID"}, AGE)),
+        ]
+
+        assert AnalysisPolicy.rows_are_not_people(tables) is False
+
+    def test_a_table_without_an_id_column_is_not_told_as_rows(self) -> None:
+        assert (
+            AnalysisPolicy.rows_are_not_people([("source_1", _profile(AGE))]) is False
+        )
+
+    def test_the_order_id_is_not_taken_for_the_person_in_the_guide(self) -> None:
+        orders = _profile(ORDER_ID, BUYER_ID, BOUGHT_ON, AMOUNT)
+
+        # no purpose: it would cluster on "people" when the order ID passed as one
+        method = AnalysisPolicy.guide_method("", orders)
+
+        assert method is AnalysisMethod.FILTER
+
+    def test_the_guide_table_skips_a_history(self) -> None:
+        tables = [
+            ("source_1", _profile(ORDER_ID, BUYER_ID, BOUGHT_ON, AMOUNT)),
+            ("source_2", _profile(ID_COLUMN, AGE)),
+        ]
+
+        assert AnalysisPolicy.guide_table(tables) == "source_2"
+
+
+class TestIdNames:
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "id",
+            "ID",
+            "customer_id",
+            "customerId",
+            "customerID",
+            "顧客ID",
+            "user id",
+            "注文番号",
+            "ＩＤ",
+            "ID番号",
+            "id_customer",
+        ],
+    )
+    def test_names_that_say_id_are_ids(self, name: str) -> None:
+        from src.managers.advanced_generation.analysis_policy import is_id_name
+
+        assert is_id_name(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "residence",
+            "paid",
+            "video",
+            "width",
+            "side",
+            "kids",
+            "provider",
+            "median",
+            "identity_theft_flag_x",
+            "Idea",
+            "年齢",
+            "地域",
+            "",
+        ],
+    )
+    def test_names_that_merely_contain_id_are_not(self, name: str) -> None:
+        from src.managers.advanced_generation.analysis_policy import is_id_name
+
+        assert is_id_name(name) is False
+
+    def test_a_table_of_people_with_a_residence_column_counts_people(self) -> None:
+        people = _profile(
+            {"name": "社員ID", "type": "VARCHAR", "all_distinct": True},
+            {"name": "residence", "type": "VARCHAR", "all_distinct": False},
+            AGE,
+        )
+
+        assert AnalysisPolicy.rows_are_not_people([("source_1", people)]) is False
+        assert AnalysisPolicy.guide_method("", people) is AnalysisMethod.CLUSTER
+
+
+def _col(name: str, *, distinct: bool, type_: str = "VARCHAR") -> dict:
+    return {"name": name, "type": type_, "all_distinct": distinct}
+
+
+class TestReadTables:
+    """The proposal of how each table reads (U6 addendum)."""
+
+    def test_a_customer_table_with_a_repeating_store_id_is_people(self) -> None:
+        profile = {
+            "columns": [
+                _col("customer_id", distinct=True),
+                _col("store_id", distinct=False),
+                _col("age", distinct=False, type_="BIGINT"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "c.csv", profile)])
+
+        assert reading.kind == "people"
+        assert reading.person_id == "customer_id"
+        assert "store_id" in reading.skip and "customer_id" in reading.skip
+        assert not AnalysisPolicy.readings_count_rows([reading])
+
+    def test_a_repeating_person_id_is_a_history(self) -> None:
+        profile = {
+            "columns": [
+                _col("user_id", distinct=False),
+                _col("利用日", distinct=False, type_="DATE"),
+                _col("利用分", distinct=False, type_="BIGINT"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "e.csv", profile)])
+
+        assert reading.kind == "history" and reading.person_id == "user_id"
+        assert AnalysisPolicy.readings_count_rows([reading])
+
+    def test_an_order_table_points_at_the_customer_not_the_order(self) -> None:
+        profile = {
+            "columns": [
+                _col("order_id", distinct=True),
+                _col("customer_id", distinct=False),
+                _col("金額", distinct=False, type_="BIGINT"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "o.csv", profile)])
+
+        assert reading.kind == "history" and reading.person_id == "customer_id"
+
+    def test_codes_and_ids_are_not_traits(self) -> None:
+        profile = {
+            "columns": [
+                _col("id", distinct=True),
+                _col("郵便番号", distinct=False),
+                _col("zip", distinct=False),
+                _col("paid", distinct=False, type_="BOOLEAN"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "x.csv", profile)])
+
+        assert set(reading.skip) == {"id", "郵便番号", "zip"}
+
+    def test_the_guide_reads_the_people_table(self) -> None:
+        history = {"columns": [_col("user_id", distinct=False)]}
+        people = {"columns": [_col("user_id", distinct=True)]}
+        readings = AnalysisPolicy.read_tables(
+            [("source_1", "e.csv", history), ("source_2", "u.csv", people)]
+        )
+
+        assert AnalysisPolicy.guide_alias(readings) == "source_2"
+
+
+class TestSeveralTablesReadOneByOne:
+    """Real data: a member table beside a purchase history stayed 'history'."""
+
+    def test_a_table_of_people_stays_people_beside_a_history(self) -> None:
+        members = {
+            "columns": [
+                _col("会員ID", distinct=True),
+                _col("年齢", distinct=False, type_="BIGINT"),
+                _col("登録日", distinct=False, type_="DATE"),
+            ]
+        }
+        pos = {
+            "columns": [
+                _col("明細ID", distinct=True),
+                _col("会員ID", distinct=False),
+                _col("購入日時", distinct=False, type_="TIMESTAMP"),
+                _col("金額", distinct=False, type_="BIGINT"),
+            ]
+        }
+
+        readings = AnalysisPolicy.read_tables(
+            [("source_1", "pos.csv", pos), ("source_2", "members.csv", members)]
+        )
+
+        assert [r.kind for r in readings] == ["history", "people"]
+        assert AnalysisPolicy.guide_alias(readings) == "source_2"
+        assert not AnalysisPolicy.readings_count_rows(readings)
+
+
+class TestReadingDecidesTheGuide:
+    """What the user confirmed on the card decides, not the column names."""
+
+    HISTORY = {
+        "columns": [
+            _col("uid", distinct=False),
+            _col("日付", distinct=False, type_="DATE"),
+            _col("金額", distinct=False, type_="BIGINT"),
+        ]
+    }
+
+    def test_a_corrected_reading_brings_the_history_steps_back(self) -> None:
+        tables = [("source_1", self.HISTORY)]
+        proposal = AnalysisPolicy.read_tables([("source_1", "e.csv", self.HISTORY)])
+        assert proposal[0].kind == "people"  # the name tells nothing
+
+        wrong = [
+            c.kind.value
+            for c in AnalysisPolicy.guide_candidates("", tables, [], True, proposal)
+        ]
+        right = [
+            c.kind.value
+            for c in AnalysisPolicy.guide_candidates(
+                "", tables, [], True, (proposal[0].choose("history", "uid", ["uid"]),)
+            )
+        ]
+
+        assert "person_profile" not in wrong and "rfm" not in wrong
+        assert "person_profile" in right and "rfm" in right
+
+    def test_the_guide_method_follows_the_reading(self) -> None:
+        proposal = AnalysisPolicy.read_tables([("source_1", "e.csv", self.HISTORY)])[0]
+        people = proposal.choose("people", "uid", ["uid"])
+
+        # no person found: one number only, so a filter; the user says people: cluster
+        assert (
+            AnalysisPolicy.guide_method("", self.HISTORY, proposal)
+            is AnalysisMethod.FILTER
+        )
+        assert (
+            AnalysisPolicy.guide_method("", self.HISTORY, people)
+            is AnalysisMethod.CLUSTER
+        )
+
+    def test_a_proposal_that_names_no_person_is_marked_uncertain(self) -> None:
+        def read(columns):
+            return AnalysisPolicy.read_tables([("s", "t", {"columns": columns})])[0]
+
+        named = read(
+            [
+                _col("customer_id", distinct=True),
+                _col("age", distinct=False, type_="BIGINT"),
+            ]
+        )
+        guessed = read(
+            [_col("email", distinct=True), _col("age", distinct=False, type_="BIGINT")]
+        )
+        none = read(
+            [
+                _col("age", distinct=False, type_="BIGINT"),
+                _col("score", distinct=False, type_="BIGINT"),
+            ]
+        )
+
+        assert not named.uncertain
+        assert guessed.uncertain and guessed.person_id == "email"
+        assert none.uncertain and none.person_id is None
+        # what the user chose is no longer a guess
+        assert not guessed.choose("people", "email", []).uncertain

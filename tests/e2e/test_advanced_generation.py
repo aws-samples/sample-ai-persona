@@ -113,7 +113,7 @@ def test_upload_generate_save_and_badge(
     expect(result.get_by_test_id("advanced-segment-row").first).to_be_visible()
 
     # The analysis record opens before saving (US10.2)
-    result.get_by_role("button", name="分析の記録").click()
+    result.get_by_role("button", name="分析の詳細").click()
     expect(page.get_by_test_id("advanced-record")).to_be_visible()
     page.keyboard.press("Escape")
 
@@ -644,3 +644,161 @@ def test_a_running_generation_is_cancelled_and_started_again(
         timeout=CANCEL_TIMEOUT_MS
     )
     page.close()
+
+
+# ---------------------------------------------------------------------------
+# U6: the administrator's setting and the AI detailed analysis (NFR9.12)
+# ---------------------------------------------------------------------------
+#
+# The local user is an administrator. ① changes the setting and puts the
+# values it read back at the end. ② turns the AI detailed analysis on (and
+# off again at the end), and generates from two CSVs with a common ID column
+# (made-up values: customers, one row each, and their purchases).
+
+CUSTOMERS_CSV = DATA_DIR / "advanced_customers.csv"
+PURCHASES_CSV = DATA_DIR / "advanced_purchases.csv"
+SETTINGS_TIMEOUT_MS = 30 * 1000
+
+
+def _open_section(page: Page) -> Locator:
+    page.goto("/settings/")
+    form = page.get_by_test_id("advanced-setting-form")
+    expect(form).to_be_visible(timeout=SETTINGS_TIMEOUT_MS)
+    return form
+
+
+def _section_state(form: Locator) -> dict:
+    switch = form.get_by_test_id("advanced-setting-detailed")
+    return {
+        "everyone": form.get_by_test_id("advanced-setting-everyone").is_checked(),
+        "detailed": switch.get_attribute("aria-checked") == "true",
+        "departments": [
+            o.get_attribute("value")
+            for o in form.get_by_test_id("department-option").all()
+            if o.is_checked()
+        ],
+        "version": int(form.locator("input[name='version']").input_value()),
+    }
+
+
+def _save_section(page: Page, form: Locator) -> Locator:
+    form.get_by_test_id("advanced-setting-save").click()
+    expect(page.locator("#flash-messages")).to_contain_text(
+        "保存しました", timeout=SETTINGS_TIMEOUT_MS
+    )
+    return page.get_by_test_id("advanced-setting-form")
+
+
+def _real_options(form: Locator) -> Locator:
+    """Department choices that exist now (a vanished one cannot be saved, BR34.3)."""
+    return form.locator(
+        "[data-testid='department-option']:not([data-department-vanished])"
+    )
+
+
+def _vanished_checked(form: Locator) -> int:
+    return form.locator(
+        "[data-testid='department-option'][data-department-vanished]:checked"
+    ).count()
+
+
+def _restore_section(page: Page, before: dict) -> None:
+    form = _open_section(page)
+    if _section_state(form) == before:
+        return  # nothing was changed: leave the stored setting as it is
+    radio = (
+        "advanced-setting-everyone"
+        if before["everyone"]
+        else ("advanced-setting-departments")
+    )
+    form.get_by_test_id(radio).check()
+    for option in form.get_by_test_id("department-option").all():
+        option.set_checked(option.get_attribute("value") in before["departments"])
+    switch = form.get_by_test_id("advanced-setting-detailed")
+    if (switch.get_attribute("aria-checked") == "true") != before["detailed"]:
+        switch.click()
+    _save_section(page, form)
+
+
+def test_settings_section_saves_departments_and_the_version(
+    session_context: BrowserContext,
+) -> None:
+    """① A department is opened, the version goes up, the notice shows (US11.1)."""
+    page = session_context.new_page()
+    form = _open_section(page)
+    before = _section_state(form)
+    options = _real_options(form)
+    if options.count() == 0:
+        pytest.skip("no department (Cognito group:) exists in the dev environment")
+    if _vanished_checked(form):
+        pytest.skip(
+            "the stored setting holds a department this environment does not have;"
+            " saving it would be refused (BR34.3)"
+        )
+    try:
+        form.get_by_test_id("advanced-setting-departments").check()
+        first = options.first
+        if not first.is_checked():
+            first.check()
+        saved = _save_section(page, form)
+        after = _section_state(saved)
+        assert after["version"] == before["version"] + 1
+        assert not after["everyone"]
+        assert first.get_attribute("value") in after["departments"]
+        page.reload()
+        assert _section_state(_open_section(page))["version"] == after["version"]
+    finally:
+        _restore_section(page, before)
+        page.close()
+
+
+def _upload_named(page: Page, path: Path) -> Locator:
+    page.get_by_test_id("advanced-file-input").set_input_files(path)
+    row = page.get_by_test_id("advanced-upload-row").filter(has_text=path.name).first
+    expect(row).to_have_attribute("data-state", "ready", timeout=INSPECT_TIMEOUT_MS)
+    row.get_by_test_id("advanced-upload-select").check()
+    return row
+
+
+def test_detailed_analysis_joins_two_tables_and_records_the_code(
+    session_context: BrowserContext, run_tag: str
+) -> None:
+    """② With the detailed analysis on, two CSVs join on customer_id (US5.3, US5.4)."""
+    page = session_context.new_page()
+    form = _open_section(page)
+    before = _section_state(form)
+    try:
+        switch = form.get_by_test_id("advanced-setting-detailed")
+        if switch.get_attribute("aria-checked") != "true":
+            if _vanished_checked(form):
+                pytest.skip(
+                    "the stored setting holds a department this environment does"
+                    " not have; turn the detailed analysis on by hand first"
+                )
+            switch.click()
+            _save_section(page, form)
+
+        _open_advanced_page(page)
+        box = page.get_by_test_id("advanced-detailed-analysis")
+        expect(box).to_be_checked()  # AC5.4.4
+        _upload_named(page, CUSTOMERS_CSV)
+        _upload_named(page, PURCHASES_CSV)
+        started = time.monotonic()
+        _generate(page, run_tag)
+        print(
+            f"\n[U6 E2E] detailed generation seconds: {time.monotonic() - started:.0f}"
+        )
+
+        result = page.get_by_test_id("advanced-result")
+        result.get_by_role("button", name="分析の詳細").click()
+        record = page.get_by_test_id("advanced-record")
+        expect(record).to_be_visible()
+        kinds = record.get_by_test_id("advanced-record-code-kind")
+        expect(kinds.filter(has_text="AI による詳細分析").first).to_be_visible()
+        expect(record.get_by_test_id("advanced-record-joined").first).to_contain_text(
+            "customer_id"
+        )
+        page.keyboard.press("Escape")
+    finally:
+        _restore_section(page, before)
+        page.close()

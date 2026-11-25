@@ -31,6 +31,7 @@ from src.models.sharing import ScopedAssets
 from web import asset_scope_views
 from web.error_messages import (
     error_kind_of,
+    error_payload,
     is_correctable,
     mark_renderable,
     toast_response,
@@ -133,6 +134,9 @@ async def settings_page(request: Request) -> Any:
             **_dataset_context(datasets),
             **_kb_context(knowledge_bases),
             **data_agent,
+            "show_advanced_generation_settings": (
+                settings_manager.is_advanced_generation_section_offered()
+            ),
         },
     )
 
@@ -483,6 +487,96 @@ async def save_asset_scope(request: Request, kind: str, asset_id: str) -> Any:
 
 
 # ==================== データ分析エージェント連携設定 ====================
+
+
+# --- U6: 高度な生成（ベータ）の区画（C11、BR34） ---
+
+#: The toast of a saved section (functional-spec.md W6-1).
+_SAVED_TOAST = "保存しました。次に開いたページから反映されます"
+
+
+def _advanced_section(
+    request: Request,
+    view: Any,
+    *,
+    status_code: int = 200,
+    error: Optional[str] = None,
+    form: Optional[dict[str, Any]] = None,
+    headers: Optional[dict[str, str]] = None,
+) -> Any:
+    return templates.TemplateResponse(
+        request,
+        "settings/partials/advanced_generation_settings.html",
+        {"request": request, "view": view, "error": error, "form": form},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.get("/advanced-generation", response_class=HTMLResponse)
+async def advanced_generation_section(request: Request) -> Any:
+    """高度な生成の区画（settings:manage がなければ 404。BR34.1）"""
+    view = await _run(
+        get_settings_manager().advanced_generation_section, _principal(request)
+    )
+    return _advanced_section(request, view)
+
+
+@router.post("/advanced-generation", response_class=HTMLResponse)
+async def save_advanced_generation(
+    request: Request,
+    audience_mode: str = Form(""),
+    departments: list[str] = Form(default=[]),
+    allow_detailed_analysis: str = Form(""),
+    version: str = Form(""),
+) -> Any:
+    """高度な生成の区画を保存する（BR34.2〜BR34.4。権限がなければ 403）。
+
+    入力の誤りは 400 で区画に理由を出し、入力した値を残す。版の衝突は 409 で
+    最新の値の区画を返す。成功は新しい版の区画とトースト。
+    """
+    principal = _principal(request)
+    manager = get_settings_manager()
+    form = {
+        "audience_mode": audience_mode,
+        "department_groups": list(departments),
+        "allow_detailed_analysis": allow_detailed_analysis == "true",
+        "version": version,
+    }
+    try:
+        view = await _run(manager.save_advanced_generation_setting, principal, form)
+    except SettingsManagerError as e:
+        if error_kind_of(e) in _ACCESS_KINDS:
+            raise
+        code = error_payload(e)["error_code"]
+        if code == ErrorCode.SETTINGS_VERSION_CONFLICT.value:
+            # BR34.4: the latest values and version, read again
+            logger.info("advanced generation setting lost its version")
+            latest = await _run(manager.advanced_generation_section, principal)
+            return mark_renderable(
+                _advanced_section(
+                    request,
+                    latest.update(notice="conflict"),
+                    status_code=409,
+                    error=user_message_for(e),
+                )
+            )
+        if is_correctable(e):
+            logger.info("advanced generation setting refused")
+            current = await _run(manager.advanced_generation_section, principal)
+            return mark_renderable(
+                _advanced_section(
+                    request,
+                    current,
+                    status_code=400,
+                    error=user_message_for(e),
+                    form=form,
+                )
+            )
+        logger.warning("advanced generation setting not saved", exc_info=True)
+        return toast_response(e, status_code=500)
+    trigger = {"showToast": {"message": _SAVED_TOAST, "type": "success"}}
+    return _advanced_section(request, view, headers={"HX-Trigger": json.dumps(trigger)})
 
 
 @router.get("/data-agent/status", response_class=HTMLResponse)

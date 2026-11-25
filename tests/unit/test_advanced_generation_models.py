@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import pytest
 
 from src.models.advanced_generation import (
@@ -26,7 +28,13 @@ from src.models.advanced_generation import (
     ResultPartName,
 )
 from src.models.analysis import (
+    LIMIT_RUN_CODE_MAX_FAILURES,
+    LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     U1_ANALYSIS_TOOLS,
+    EmittedResult,
+    JoinPlan,
+    RunCodeGate,
+    RunCodeOutcome,
     AnalysisMethod,
     AnalysisPlan,
     AnalysisRecord,
@@ -40,6 +48,8 @@ from src.models.analysis import (
     PrepareReport,
     ReportColumn,
     Segment,
+    processes_left,
+    CHANGED_PROCESS,
 )
 from src.models.errors import ErrorCode, ErrorKind
 from src.models.source_file import (
@@ -424,7 +434,7 @@ class TestGenerationControl:
     def test_defaults_of_a_new_generation(self):
         gen = self._new()
 
-        assert gen.options == {"confirm_plan": False}
+        assert gen.options == {"confirm_plan": False, "use_detailed_analysis": False}
         assert gen.confirm_plan is False
         assert gen.waited_seconds == 0 and gen.replan_count == 0
         for name in ("control_request", "awaiting_since", "original_purpose"):
@@ -434,13 +444,16 @@ class TestGenerationControl:
     def test_confirm_plan_is_kept_in_the_options(self):
         gen = self._new(confirm_plan=True)
 
-        assert gen.options == {"confirm_plan": True} and gen.confirm_plan
+        assert gen.options["confirm_plan"] is True and gen.confirm_plan
         assert AdvancedGeneration.from_dict(gen.to_dict()).confirm_plan
 
     def test_to_dict_leaves_out_none_but_keeps_the_counters(self):
         data = self._new().to_dict()
 
-        assert data["options"] == {"confirm_plan": False}
+        assert data["options"] == {
+            "confirm_plan": False,
+            "use_detailed_analysis": False,
+        }
         assert data["waited_seconds"] == 0 and data["replan_count"] == 0
         for name in (
             "control_request",
@@ -474,7 +487,7 @@ class TestGenerationControl:
 
         gen = AdvancedGeneration.from_dict(data)
 
-        assert gen.options == {"confirm_plan": False}
+        assert gen.options == {"confirm_plan": False, "use_detailed_analysis": False}
         assert gen.waited_seconds == 0 and gen.replan_count == 0
 
     def test_negative_counters_are_refused(self):
@@ -610,11 +623,12 @@ class TestAnalysisModels:
         assert run.seed == 42
         assert AnalysisRun.from_dict(run.to_dict()) == run
 
-    def test_u1_tools_are_the_three_fixed_tools(self):
+    def test_u1_tools_are_the_four_fixed_tools(self):
         assert U1_ANALYSIS_TOOLS == (
             AnalysisTool.PROFILE_DATASET,
             AnalysisTool.ANALYZE_DATASET,
             AnalysisTool.CLUSTER_SEGMENTS,
+            AnalysisTool.PROFILE_SEGMENTS,
         )
 
     def test_tool_policy_round_trip(self):
@@ -626,7 +640,8 @@ class TestAnalysisModels:
 
     def test_tool_policy_rejects_unknown_tools(self):
         with pytest.raises(ValueError):
-            AnalysisToolPolicy.from_dict({"tools": ["run_code"], "limits": {}})
+            # U6 BR35.3 replaced BR5.2: run_code is a tool now, write_sql never
+            AnalysisToolPolicy.from_dict({"tools": ["write_sql"], "limits": {}})
 
 
 class TestAdvancedGenerationErrorCodes:
@@ -1047,3 +1062,359 @@ class TestAdvancedGenerationU4:
     @pytest.mark.parametrize("mode", ["full_text", "extraction"])
     def test_modes(self, mode):
         assert DocumentMode(mode).value == mode
+
+
+# --- U6: detailed analysis and several tables (entities.md U6) -----------------
+
+
+class TestAdvancedGenerationU6:
+    def _new(self, **overrides) -> AdvancedGeneration:
+        values = dict(
+            owner_sub="user-1",
+            source_file_ids=["sf-1", "sf-2"],
+            purpose="",
+            persona_count=2,
+            now=NOW,
+            ttl_seconds=3600,
+        )
+        values.update(overrides)
+        return AdvancedGeneration.create_new(**values)
+
+    def test_detailed_analysis_is_off_by_default(self):
+        gen = self._new()
+
+        assert gen.use_detailed_analysis is False
+        assert gen.options == {"confirm_plan": False, "use_detailed_analysis": False}
+
+    def test_the_choice_made_at_the_start_is_kept(self):
+        gen = self._new(use_detailed_analysis=True)
+
+        again = AdvancedGeneration.from_dict(gen.to_dict())
+        assert again.use_detailed_analysis is True
+        assert again.options["use_detailed_analysis"] is True
+
+    def test_a_u5_item_without_the_option_still_reads(self):
+        data = self._new().to_dict()
+        data["options"] = {"confirm_plan": True}
+
+        gen = AdvancedGeneration.from_dict(data)
+        assert gen.confirm_plan is True
+        assert gen.use_detailed_analysis is False
+
+
+class TestAnalysisModelsU6:
+    def test_run_code_and_load_playbook_are_tools(self):
+        policy = AnalysisToolPolicy(
+            tools=(*U1_ANALYSIS_TOOLS, "run_code", "load_playbook"),
+            limits={
+                LIMIT_RUN_CODE_MAX_FAILURES: 5,
+                LIMIT_RUN_CODE_TIMEOUT_SECONDS: 120,
+            },
+            sources=("source_1", "source_2"),
+        )
+
+        again = AnalysisToolPolicy.from_dict(policy.to_dict())
+        assert AnalysisTool.RUN_CODE in again.tools
+        assert AnalysisTool.LOAD_PLAYBOOK in again.tools
+        assert again.limits["run_code_max_failures"] == 5
+        assert again.limits["run_code_timeout_seconds"] == 120
+        assert again.sources == ("source_1", "source_2")
+
+    def test_a_u1_policy_has_no_sources_in_its_dict(self):
+        policy = AnalysisToolPolicy(tools=U1_ANALYSIS_TOOLS, limits={})
+
+        assert policy.sources == ()
+        assert "sources" not in policy.to_dict()
+
+    def test_an_unknown_tool_is_refused(self):
+        with pytest.raises(ValueError):
+            AnalysisToolPolicy(tools=("write_sql",), limits={})
+
+    def test_prepare_report_keeps_the_parquet_hash(self):
+        report = PrepareReport(
+            source_id="sf-1",
+            rows_read=10,
+            rows_excluded=0,
+            columns=(ReportColumn("age", "BIGINT"),),
+            encoding=SourceEncoding.UTF8,
+            prepare_version="1",
+            parquet_sha256="ab" * 32,
+        )
+
+        assert PrepareReport.from_dict(report.to_dict()).parquet_sha256 == "ab" * 32
+
+    def test_prepare_report_without_the_hash_leaves_it_out(self):
+        report = PrepareReport(
+            source_id="sf-1",
+            rows_read=10,
+            rows_excluded=0,
+            columns=(),
+            encoding=SourceEncoding.UTF8,
+            prepare_version="1",
+        )
+
+        assert "parquet_sha256" not in report.to_dict()
+        assert PrepareReport.from_dict(report.to_dict()).parquet_sha256 is None
+
+    def test_analysis_run_params_carry_detailed_analysis_and_join(self):
+        params = {
+            "persona_count": 3,
+            "detailed_analysis": {"used": True, "fell_back": False, "failures": 2},
+            "join": {
+                "axis": "source_1",
+                "tables": [
+                    {
+                        "table": "source_2",
+                        "key_column": "customer_id",
+                        "match_rate": 0.9,
+                        "matched_people": 90,
+                    }
+                ],
+                "joined_columns": ["customer_id", "amount_sum"],
+            },
+        }
+        run = AnalysisRun(
+            method="cluster",
+            plan_ref="g-1",
+            code_sha256=("a", "b"),
+            params=params,
+            source_checksums=("c1", "c2"),
+            prepare_version="1",
+            tool_call_ids=("tc-1",),
+        )
+
+        assert AnalysisRun.from_dict(run.to_dict()).params == params
+
+
+class TestJoinPlan:
+    def test_round_trip(self):
+        plan = JoinPlan(
+            axis="source_1", table="source_2", key_column="customer_id", match_rate=0.8
+        )
+
+        assert JoinPlan.from_dict(plan.to_dict()) == plan
+        assert plan.to_dict() == {
+            "axis": "source_1",
+            "table": "source_2",
+            "key_column": "customer_id",
+            "match_rate": 0.8,
+        }
+
+    @pytest.mark.parametrize("rate", [-0.1, 1.5])
+    def test_a_rate_outside_0_1_is_refused(self, rate):
+        with pytest.raises(ValueError):
+            JoinPlan(axis="source_1", table="source_2", key_column="k", match_rate=rate)
+
+    def test_a_table_is_not_joined_to_itself(self):
+        with pytest.raises(ValueError):
+            JoinPlan(axis="source_1", table="source_1", key_column="k", match_rate=1)
+
+
+class TestEmittedResult:
+    def _result(self, **overrides) -> EmittedResult:
+        values = dict(
+            population=100,
+            population_source="source_1",
+            segments=(
+                {"segment_key": "a", "size": 60, "features": []},
+                {"segment_key": "b", "size": 40, "features": []},
+            ),
+            statistics=({"name": "t", "value": 2.5, "p_value": 0.01},),
+        )
+        values.update(overrides)
+        return EmittedResult(**values)
+
+    def test_round_trip_leaves_out_empty_values(self):
+        result = self._result()
+
+        data = result.to_dict()
+        assert "joined_columns" not in data
+        assert EmittedResult.from_dict(data) == result
+
+    def test_size_of_a_segment_key(self):
+        result = self._result()
+
+        assert result.size_of("a") == 60
+        assert result.size_of("missing") is None
+
+    def test_a_joined_result_keeps_its_columns(self):
+        result = self._result(
+            population_source="join:source_1+source_2",
+            joined_columns=("customer_id", "source_2_amount_sum"),
+        )
+
+        again = EmittedResult.from_dict(result.to_dict())
+        assert again.joined_columns == ("customer_id", "source_2_amount_sum")
+        assert again.population_source == "join:source_1+source_2"
+
+    @pytest.mark.parametrize(
+        "source", ["", "dataset", "join:source_1", "join:source_1+x", "source_4"]
+    )
+    def test_an_unknown_population_source_is_refused(self, source):
+        with pytest.raises(ValueError):
+            self._result(population_source=source)
+
+    def test_negative_counts_are_refused(self):
+        with pytest.raises(ValueError):
+            self._result(population=-1)
+        with pytest.raises(ValueError):
+            self._result(segments=({"segment_key": "a", "size": -1},))
+
+    def test_recounted_holds_only_what_the_library_counted(self):
+        """review-01 R-02: statistics and features are the code's own numbers."""
+        result = self._result(
+            segments=(
+                {
+                    "segment_key": "a",
+                    "size": 60,
+                    "features": [{"name": "spend", "value": 512}],
+                },
+                {"segment_key": "b", "size": 40, "features": []},
+            ),
+        )
+
+        assert result.recounted() == {
+            "population": 100,
+            "population_source": "source_1",
+            "segments": [
+                {"segment_key": "a", "size": 60},
+                {"segment_key": "b", "size": 40},
+            ],
+        }
+
+
+class TestRunCodeOutcomeAndGate:
+    def test_outcome_flags(self):
+        failed = RunCodeOutcome(ok=False, error_code="RUN_CODE_TIMEOUT", timed_out=True)
+        tampered = RunCodeOutcome(ok=False, tampered=True, changed=("parquet",))
+        unchecked = RunCodeOutcome(ok=False, verify_failed=True)
+
+        assert failed.cancel_failed is False and failed.timed_out is True
+        assert tampered.tampered is True and tampered.changed == ("parquet",)
+        assert failed.verify_failed is False
+        assert unchecked.verify_failed is True and unchecked.tampered is False
+
+    def test_a_class_with_the_three_methods_is_a_gate(self):
+        class Gate:
+            def allows_run_code(self) -> bool:
+                return True
+
+            def halted(self) -> bool:
+                return False
+
+            def record(self, outcome: RunCodeOutcome) -> None:
+                return None
+
+        assert isinstance(Gate(), RunCodeGate)
+        assert not isinstance(object(), RunCodeGate)
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ({"process_scan": "ok", "leftover_processes": 0}, False),
+            ({"process_scan": "ok", "leftover_processes": 3}, True),
+            ({"process_scan": "unavailable"}, None),
+            ({"process_scan": "ok"}, None),
+            ({"leftover_processes": 0}, None),
+            ({"process_scan": "ok", "leftover_processes": True}, None),
+            ({"process_scan": "ok", "leftover_processes": "1"}, None),
+            ({"process_scan": "ok", "leftover_processes": -1}, None),
+        ],
+    )
+    def test_processes_left_reads_the_scan_fail_closed(self, value, expected):
+        """Security review: only a readable scan answers; else ``None``."""
+        assert processes_left(value) is expected
+        assert CHANGED_PROCESS == "process"
+
+
+class TestSegmentSourceAndKey:
+    def test_source_and_segment_key_survive_the_round_trip(self):
+        segment = _segment(
+            definition={
+                "kind": "derived",
+                "source": "join:source_1+source_2",
+                "spec": {"tool_call_id": "tc-3", "segment_key": "high"},
+            }
+        )
+
+        again = Segment.from_dict(segment.to_dict())
+        assert again.source == "join:source_1+source_2"
+        assert again.segment_key == "high"
+        assert again.tool_call_id == "tc-3"
+
+    def test_a_u1_segment_has_neither(self):
+        segment = _segment()
+
+        assert segment.source is None
+        assert segment.segment_key is None
+
+
+class TestTableReading:
+    def _reading(self) -> Any:
+        from src.models.advanced_generation import TableReading
+
+        return TableReading(
+            alias="source_1",
+            name="a.csv",
+            kind="people",
+            person_id="id",
+            skip=("id",),
+            columns=("id", "age", "zip"),
+        )
+
+    def test_the_person_id_is_never_a_trait(self) -> None:
+        chosen = self._reading().choose("history", "id", ["zip"])
+
+        assert chosen.kind == "history" and chosen.skip == ("id", "zip")
+
+    def test_a_choice_the_table_cannot_take_is_an_error(self) -> None:
+        reading = self._reading()
+
+        with pytest.raises(ValueError):
+            reading.choose("weird", "id", [])
+        with pytest.raises(ValueError):
+            reading.choose("people", "nope", [])
+        with pytest.raises(ValueError):
+            reading.choose("people", None, ["nope"])
+
+    def test_it_round_trips_through_the_generation_and_the_request(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.models.advanced_generation import (
+            AdvancedGeneration,
+            ControlAction,
+            ControlRequest,
+            TableReading,
+        )
+
+        reading = self._reading()
+        assert TableReading.from_dict(reading.to_dict()) == reading
+        now = datetime(2026, 11, 24, tzinfo=timezone.utc)
+        generation = AdvancedGeneration.create_new(
+            owner_sub="u",
+            source_file_ids=["s"],
+            purpose="",
+            persona_count=2,
+            now=now,
+            ttl_seconds=3600,
+        ).update(data_reading=(reading,))
+        assert AdvancedGeneration.from_dict(generation.to_dict()).data_reading == (
+            reading,
+        )
+        request = ControlRequest(
+            action=ControlAction.APPROVE,
+            requested_at=now,
+            data_reading={"source_1": {"kind": "people", "skip": []}},
+        )
+        assert ControlRequest.from_dict(request.to_dict()) == request
+
+
+def test_the_uncertain_mark_is_kept_and_only_written_when_true() -> None:
+    from src.models.advanced_generation import TableReading
+
+    base = TableReading("a", "n", "people", None, (), ("x",))
+    guessed = TableReading("a", "n", "people", None, (), ("x",), uncertain=True)
+
+    assert "uncertain" not in base.to_dict()
+    assert TableReading.from_dict(guessed.to_dict()).uncertain is True
+    assert TableReading.from_dict(base.to_dict()).uncertain is False
