@@ -508,6 +508,40 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
+class TestTallyIgnoresMissingValues:
+    """The shown mean counts only the cells that have a value."""
+
+    def _tally(self, lib: ModuleType, labels: list[int], values: list[Any]):
+        batch = {"x": values}
+        features = lib._Features([("x", True)], {"x": [10.0, 20.0, 30.0]})
+        tally = lib._Tally(2, features)
+        tally.add(labels, batch)
+        return tally
+
+    def test_a_blank_does_not_pull_the_mean_to_the_overall_mean(self, lib) -> None:
+        # The overall mean of the sample is 20; the blank must not count as 20.
+        tally = self._tally(lib, [0, 0, 1], [100.0, None, 40.0])
+
+        (first,) = tally.features_of(0, 3)
+        (second,) = tally.features_of(1, 3)
+
+        assert first["value"] == 100.0
+        assert second["value"] == 40.0
+        assert first["baseline"] == round((100.0 + 40.0) / 2, 4)
+
+    def test_a_cluster_of_only_blanks_shows_no_mean(self, lib) -> None:
+        # "mean 0" would read as "lower than everyone"; there is nothing to say
+        tally = self._tally(lib, [0, 1], [None, 5.0])
+
+        assert tally.features_of(0, 2) == []
+        assert [f["value"] for f in tally.features_of(1, 2)] == [5.0]
+
+    def test_a_column_blank_for_everyone_shows_no_mean(self, lib) -> None:
+        tally = self._tally(lib, [0, 1], [None, None])
+
+        assert tally.features_of(0, 2) == [] and tally.features_of(1, 2) == []
+
+
 @pytest.fixture()
 def http_base() -> Iterator[str]:
     server = HTTPServer(("127.0.0.1", 0), _Handler)

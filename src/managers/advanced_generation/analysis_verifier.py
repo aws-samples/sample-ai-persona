@@ -106,6 +106,11 @@ def _numbers(value: Any) -> Iterator[int]:
             yield from _numbers(item)
 
 
+def _is_cluster_output(value: Any) -> bool:
+    """A cluster tool output: its sizes belong to numbered clusters."""
+    return isinstance(value, Mapping) and isinstance(value.get("clusters"), list)
+
+
 def _fail(reason: str, unverified: Iterable[str] = ()) -> VerificationResult:
     return VerificationResult(
         passed=False,
@@ -247,9 +252,35 @@ class AnalysisVerifier:
         population: int,
         outputs: Mapping[str, Any],
     ) -> bool:
-        calls = {str(segment.definition.get("spec", {}).get("tool_call_id", ""))}
+        spec = segment.definition.get("spec", {})
+        own = outputs.get(str(spec.get("tool_call_id", "")))
+        clusters = own.get("clusters") if isinstance(own, Mapping) else None
+        if isinstance(clusters, list):
+            # A cluster output backs a size only through its own cluster: without
+            # the index (or with one the output lacks) nothing says whose 60 or 40
+            # it is, so the size is unverified.
+            index = spec.get("cluster_index")
+            sizes = {
+                n
+                for c in clusters
+                if index is not None and isinstance(c, Mapping)
+                if c.get("index") == index
+                for n in _as_int(c.get("size"))
+            }
+            return (
+                segment.size in sizes
+                and population >= 1
+                and round(segment.share, _SHARE_DIGITS)
+                == round(segment.size / population, _SHARE_DIGITS)
+            )
+        calls = {str(spec.get("tool_call_id", ""))}
         calls |= {e.location for e in evidence if e.id in set(segment.evidence_ids)}
-        seen = {n for call in calls if call in outputs for n in _numbers(outputs[call])}
+        seen = {
+            n
+            for call in calls
+            if call in outputs and not _is_cluster_output(outputs[call])
+            for n in _numbers(outputs[call])
+        }
         if segment.size not in seen or population < 1:
             return False
         expected = round(segment.size / population, _SHARE_DIGITS)

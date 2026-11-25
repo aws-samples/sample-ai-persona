@@ -31,11 +31,22 @@ CLUSTER_OUTPUT = {
 }
 
 
-def _segment(sid: str, size: int, share: float, *, overlaps=False, call="tc-1"):
+def _segment(
+    sid: str,
+    size: int,
+    share: float,
+    *,
+    overlaps=False,
+    call="tc-1",
+    cluster_index: int | None = None,
+):
+    spec: dict = {"tool_call_id": call}
+    if cluster_index is not None:
+        spec["cluster_index"] = cluster_index
     return Segment(
         id=sid,
         label=sid,
-        definition={"kind": "cluster", "spec": {"tool_call_id": call}},
+        definition={"kind": "cluster", "spec": spec},
         size=size,
         share=share,
         features=(),
@@ -67,7 +78,13 @@ def _verify(segments, persona_ids, *, outputs=None, method=AnalysisMethod.CLUSTE
 
 class TestPasses:
     def test_values_seen_in_the_output_pass(self) -> None:
-        result = _verify([_segment("a", 60, 0.6), _segment("b", 40, 0.4)], ["a", "b"])
+        result = _verify(
+            [
+                _segment("a", 60, 0.6, cluster_index=0),
+                _segment("b", 40, 0.4, cluster_index=1),
+            ],
+            ["a", "b"],
+        )
 
         assert result.passed and result.failure is None
         assert result.unverified_segment_ids == ()
@@ -114,10 +131,67 @@ class TestOnlyCountsBackASize:
     def test_the_size_of_a_cluster_backs_it(self) -> None:
         assert (
             _verify(
-                [_segment("a", 60, 0.6), _segment("b", 40, 0.4)], ["a", "b"]
+                [
+                    _segment("a", 60, 0.6, cluster_index=0),
+                    _segment("b", 40, 0.4, cluster_index=1),
+                ],
+                ["a", "b"],
             ).unverified_segment_ids
             == ()
         )
+
+
+class TestClusterIndexPinsTheCluster:
+    def test_the_size_of_its_own_cluster_passes(self) -> None:
+        result = _verify(
+            [
+                _segment("a", 60, 0.6, cluster_index=0),
+                _segment("b", 40, 0.4, cluster_index=1),
+            ],
+            ["a", "b"],
+        )
+
+        assert result.unverified_segment_ids == ()
+
+    def test_the_size_of_another_cluster_is_unverified(self) -> None:
+        # 60 and 40 both appear in the output, but A is cluster 0 (60 people)
+        result = _verify(
+            [
+                _segment("a", 40, 0.4, cluster_index=0),
+                _segment("b", 60, 0.6, cluster_index=1),
+            ],
+            ["a", "b"],
+        )
+
+        assert result.unverified_segment_ids == ("a", "b")
+
+    def test_a_cluster_output_without_an_index_does_not_back_a_size(self) -> None:
+        # 60 and 40 are both in the output, but nothing says which cluster is whose
+        result = _verify([_segment("a", 40, 0.4), _segment("b", 60, 0.6)], ["a", "b"])
+
+        assert result.unverified_segment_ids == ("a", "b")
+
+    def test_a_cluster_output_named_only_by_evidence_does_not_back_a_size(
+        self,
+    ) -> None:
+        # The segment points at another call; the evidence names the cluster call
+        segments = [_segment("a", 40, 0.4, call="other")]
+
+        result = AnalysisVerifier.verify(
+            method=AnalysisMethod.CLUSTER,
+            segments=segments,
+            evidence=[_evidence("a")],
+            persona_segment_ids=["a"],
+            population=POPULATION,
+            outputs={"tc-1": CLUSTER_OUTPUT},
+        )
+
+        assert result.unverified_segment_ids == ("a",)
+
+    def test_an_index_the_output_does_not_have_is_unverified(self) -> None:
+        result = _verify([_segment("a", 60, 0.6, cluster_index=7)], ["a"])
+
+        assert result.unverified_segment_ids == ("a",)
 
 
 class TestUnverified:
@@ -343,7 +417,7 @@ class TestPopulationsPerTable:
         assert result.passed
 
     def test_a_segment_without_a_source_uses_the_first_table(self) -> None:
-        segments = [_segment("a", 60, 0.6)]
+        segments = [_segment("a", 60, 0.6, cluster_index=0)]
 
         result = _verify_u6(
             segments,

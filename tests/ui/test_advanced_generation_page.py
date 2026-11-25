@@ -615,6 +615,36 @@ class TestFileList:
         assert ui.page.locator("[role='dialog']:visible").count() == 0
         assert ui.page.locator("[data-testid='advanced-upload-select']").count() == 0
 
+    def test_a_file_in_use_becomes_selectable_when_the_generation_ends(
+        self, ui: UiHarness
+    ) -> None:
+        busy = _second_ready(in_use_by=s.GENERATION_ID, in_use_until=WEEK)
+        frames = (
+            _frame("stage", json.dumps({"status": "verifying"}), 1)
+            + _frame("result", render_result(s.result()), 2)
+            + "event: done\ndata: \n\n"
+        )
+        SseFake(ui, [frames])
+        ui.respond(
+            f"/persona/advanced/generations/{s.GENERATION_ID}/record",
+            body=render_page(
+                "persona/partials/advanced_record_dialog.html", record=s.record()
+            ),
+        )
+        # The server now reports the file as free
+        ui.respond(f"/persona/advanced/uploads/{s.FILE_ID}", body=_row(_second_ready()))
+
+        _open(ui, generation_id=s.GENERATION_ID, upload_rows=_listed((busy, None)))
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+        # The inputs fold while it runs, so the checkbox is attached, not visible
+        ui.page.wait_for_selector(
+            "[data-testid='advanced-upload-select']", state="attached"
+        )
+        assert ui.page.locator("[data-testid='advanced-upload-in-use']").count() == 0
+        button = ui.page.locator("[data-testid='advanced-source-delete-open']")
+        assert button.get_attribute("aria-disabled") != "true"
+
     def test_the_list_has_no_axe_violations(self, ui: UiHarness) -> None:
         _open(
             ui,

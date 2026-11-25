@@ -849,10 +849,13 @@ class _Tally:
         self.features = features
         self.sizes = [0] * k
         self.sums: Dict[str, List[float]] = {}
+        # Cells that have a value, per cluster: the shown mean divides by these
+        self.valid: Dict[str, List[int]] = {}
         self.cats: Dict[str, List[Dict[str, int]]] = {}
         for name, numeric in features.columns:
             if numeric:
                 self.sums[name] = [0.0] * k
+                self.valid[name] = [0] * k
             else:
                 self.cats[name] = [{} for _ in range(k)]
 
@@ -861,9 +864,13 @@ class _Tally:
             self.sizes[int(label)] += 1
         for name, numeric in self.features.columns:
             if numeric:
-                values = self.features.numbers(name, batch[name])
-                for label, v in zip(labels, values):
+                # The clustering fills blanks with the mean; the shown
+                # statistics must not (a blank is not a value)
+                for label, v in zip(labels, batch[name]):
+                    if v is None:
+                        continue
                     self.sums[name][int(label)] += float(v)
+                    self.valid[name][int(label)] += 1
             else:
                 for label, v in zip(labels, batch[name]):
                     bucket = self.cats[name][int(label)]
@@ -876,12 +883,17 @@ class _Tally:
         for name, numeric in self.features.columns:
             if numeric:
                 total = sum(self.sums[name])
+                have = self.valid[name][label]
+                have_all = sum(self.valid[name])
+                if not have:
+                    # Nothing to average: a "mean 0" would read as lower than all
+                    continue
                 out.append(
                     {
                         "name": name,
                         "kind": "mean",
-                        "value": round(self.sums[name][label] / size, 4),
-                        "baseline": round(total / population, 4),
+                        "value": round(self.sums[name][label] / have, 4),
+                        "baseline": round(total / have_all, 4),
                         "spread": round(float(self.features.stats[name][1]), 4),
                     }
                 )

@@ -1614,6 +1614,18 @@ class TestAdvancedGenerationAgents:
         assert mock_agent.call_args.kwargs["name"] == "AdvancedAnalyst"
         assert mock_agent.call_args.kwargs["callback_handler"] is None
 
+    def test_analysis_tools_run_one_at_a_time(self, strands):
+        """Two run_ai_code calls at once would stop each other's process group."""
+        from strands.tools.executors import SequentialToolExecutor
+
+        mock_agent, _ = strands
+
+        AgentService().create_advanced_analysis_agent("分析する", [Mock()])
+
+        assert isinstance(
+            mock_agent.call_args.kwargs["tool_executor"], SequentialToolExecutor
+        )
+
     def test_data_is_passed_inside_markers(self, strands):
         agent = Mock()
         agent.structured_output.return_value = _plan_output()

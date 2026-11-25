@@ -23,11 +23,13 @@ from typing import (
 try:
     from strands import Agent
     from strands.models import BedrockModel
+    from strands.tools.executors import SequentialToolExecutor
     from strands.types.exceptions import StructuredOutputException
 except ImportError:
     # Strands SDKがインストールされていない場合のフォールバック
     Agent = None  # type: ignore[assignment,misc]
     BedrockModel = None  # type: ignore[assignment,misc]
+    SequentialToolExecutor = None  # type: ignore[assignment,misc]
 
     class StructuredOutputException(Exception):  # type: ignore[no-redef]
         """Stand-in when the Strands SDK is not installed."""
@@ -1525,6 +1527,10 @@ class AgentService:
                 model=self._build_advanced_model(model_id),
                 system_prompt=f"{ADVANCED_DATA_RULES}\n\n{instructions}",
                 tools=list(tools) if tools else None,
+                # One tool at a time: the sandbox checks after run_ai_code stop
+                # every process in the work folder, so a second call running at
+                # the same time would be stopped as a leftover.
+                tool_executor=SequentialToolExecutor() if tools else None,
                 # The default handler prints the model's output (row values)
                 # to stdout, i.e. into the logs (NFR6.4).
                 callback_handler=None,

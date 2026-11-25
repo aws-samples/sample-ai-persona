@@ -499,6 +499,24 @@
         return rows.querySelector('[data-testid="advanced-upload-row"][data-source-file-id="' + CSS.escape(id) + '"]');
     }
 
+    // 生成が終わったら、「生成中」で選べなかった行をサーバーから読み直して差し替える。
+    // 読み直さないと、ページを開き直すまで再利用も削除もできない
+    function refreshInUseRows() {
+        if (!rows) return;
+        var busy = rows.querySelectorAll('[data-testid="advanced-upload-in-use"]');
+        Array.prototype.forEach.call(busy, function (mark) {
+            var row = mark.closest('[data-testid="advanced-upload-row"]');
+            var id = row && row.dataset.sourceFileId;
+            if (!id) return;
+            fetchRow(id).then(function (fresh) {
+                var current = currentRow(id);
+                if (!fresh || !current) return; // 読めなければそのまま残す
+                current.replaceWith(fresh);
+                updateGenerateState();
+            });
+        });
+    }
+
     // 検査中の行を間隔ごとに読み直し、打ち切りの時間がたったら止めて「確定し直す」を出す（NFR1.11）。
     // 2 つ目のタブの確定（BR11.4）や開き直したページの検査中の行も、ここで検査の終わりを待つ
     var watching = {};
@@ -782,6 +800,7 @@
             if (planArea) planArea.innerHTML = '';
             if (state.source) state.source.close();
             updateGenerateState();
+            refreshInUseRows();
         };
 
         var handlers = {
