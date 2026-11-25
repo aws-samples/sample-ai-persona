@@ -562,7 +562,7 @@ class TestMultipartUpload:
         )
         assert [u["Key"] for u in listed["Uploads"]] == [SOURCE_KEY]
 
-    def test_part_urls_sign_only_bucket_key_upload_id_and_part_number(
+    def test_part_urls_sign_only_bucket_key_upload_id_part_number_and_length(
         self, s3_service, s3_bucket_name
     ):
         from urllib.parse import urlsplit
@@ -570,7 +570,9 @@ class TestMultipartUpload:
         upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
 
         urls = s3_service.generate_upload_part_urls(
-            f"s3://{s3_bucket_name}/{SOURCE_KEY}", upload_id, [1, 3]
+            f"s3://{s3_bucket_name}/{SOURCE_KEY}",
+            upload_id,
+            {1: 5 * MIB, 3: 10},
         )
 
         assert [u.part_number for u in urls] == [1, 3]
@@ -582,15 +584,16 @@ class TestMultipartUpload:
             assert query["partNumber"] == str(part.part_number)
             assert query["uploadId"] == upload_id
             assert query["X-Amz-Expires"] == "3600"
-            # Only the host header is signed: no Content-MD5 / checksum headers.
-            assert query["X-Amz-SignedHeaders"] == "host"
+            # The part length is signed so a larger body is refused; no
+            # Content-MD5 / checksum headers.
+            assert query["X-Amz-SignedHeaders"] == "content-length;host"
             assert not any("checksum" in k.lower() for k in query)
 
     def test_part_urls_take_a_custom_expiration(self, s3_service, s3_bucket_name):
         upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
 
         (part,) = s3_service.generate_upload_part_urls(
-            f"s3://{s3_bucket_name}/{SOURCE_KEY}", upload_id, [2], expiration=60
+            f"s3://{s3_bucket_name}/{SOURCE_KEY}", upload_id, {2: 7}, expiration=60
         )
 
         assert _query(part.url)["X-Amz-Expires"] == "60"

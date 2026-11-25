@@ -71,6 +71,7 @@ from src.models.source_file import (
     UploadSession,
     format_of_filename,
     part_count_for,
+    part_sizes_for,
     source_key,
 )
 
@@ -264,6 +265,15 @@ class TestUploadSession:
         assert part_count_for(part, part) == 1
         assert part_count_for(part + 1, part) == 2
         assert part_count_for(1_000_000_000, part) == 60
+
+    def test_part_sizes_are_full_except_the_last(self):
+        assert part_sizes_for(2 * 16 + 5, 16) == {1: 16, 2: 16, 3: 5}
+        assert part_sizes_for(32, 16) == {1: 16, 2: 16}
+        assert part_sizes_for(1, 16) == {1: 1}
+
+    def test_part_sizes_reject_bad_sizes(self):
+        with pytest.raises(ValueError):
+            part_sizes_for(0, 16)
 
     def test_part_count_rejects_bad_sizes(self):
         with pytest.raises(ValueError):

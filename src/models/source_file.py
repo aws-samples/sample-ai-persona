@@ -121,6 +121,21 @@ def part_count_for(size_bytes: int, part_size_bytes: int) -> int:
     return math.ceil(size_bytes / part_size_bytes)
 
 
+def part_sizes_for(size_bytes: int, part_size_bytes: int) -> dict[int, int]:
+    """Expected byte length of every part, keyed by part number (from 1).
+
+    All parts are ``part_size_bytes`` except the last, which holds the rest.
+
+    Raises:
+        ValueError: Either value is not positive.
+    """
+    count = part_count_for(size_bytes, part_size_bytes)
+    return {
+        n: min(part_size_bytes, size_bytes - (n - 1) * part_size_bytes)
+        for n in range(1, count + 1)
+    }
+
+
 def _clean_filename(name: str) -> str:
     """Drop control characters and cut to :data:`FILENAME_MAX_CHARS`."""
     cleaned = "".join(ch for ch in name if ch.isprintable())

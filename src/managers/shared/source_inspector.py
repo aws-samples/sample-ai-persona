@@ -42,6 +42,10 @@ from ...models.source_file import (
 
 #: Rows used to infer column types (enough for a stable guess, cheap to scan).
 TYPE_SAMPLE_ROWS = 1000
+#: Most columns a table may have; the type scan costs columns x rows.
+MAX_COLUMNS = 1000
+#: Longest column name; with MAX_COLUMNS this bounds the stored metadata.
+MAX_COLUMN_NAME_CHARS = 100
 
 _BOM = b"\xef\xbb\xbf"
 _DECODE_ORDER = (SourceEncoding.UTF8, SourceEncoding.CP932, SourceEncoding.EUC_JP)
@@ -65,6 +69,8 @@ _REASON_CODES = {
     "binary": ErrorCode.SOURCE_NOT_A_TABLE,
     "empty": ErrorCode.SOURCE_NOT_A_TABLE,
     "line_too_long": ErrorCode.SOURCE_NOT_A_TABLE,
+    "too_many_columns": ErrorCode.SOURCE_NOT_A_TABLE,
+    "column_name_too_long": ErrorCode.SOURCE_NOT_A_TABLE,
 }
 
 
@@ -109,7 +115,11 @@ def _records(text: str, delimiter: str) -> list[list[str]]:
 
 
 def _check_header(header: Sequence[str]) -> list[str]:
+    if len(header) > MAX_COLUMNS:
+        raise _invalid("too_many_columns")
     names = [name.strip() for name in header]
+    if any(len(name) > MAX_COLUMN_NAME_CHARS for name in names):
+        raise _invalid("column_name_too_long")
     if not names or any(not name for name in names):
         raise _invalid("empty_column_name")
     if len(set(names)) != len(names):

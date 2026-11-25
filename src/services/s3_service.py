@@ -403,14 +403,22 @@ class S3Service:
         self,
         s3_path: str,
         upload_id: str,
-        part_numbers: Sequence[int],
+        part_sizes: Mapping[int, int],
         expiration: int = 3600,
     ) -> list[PartUrl]:
         """Presigned ``UploadPart`` URLs for the given part numbers (BR2.3, BR2.4).
 
-        Only ``Bucket``, ``Key``, ``UploadId`` and ``PartNumber`` are signed;
-        no Content-MD5 or checksum header is part of the signature, because the
-        browser sends none (PoC Q6). A URL writes to this one key only.
+        ``Bucket``, ``Key``, ``UploadId``, ``PartNumber`` and the part's
+        ``Content-Length`` are signed, so S3 refuses a body of another size
+        (the browser sets Content-Length itself). No Content-MD5 or checksum
+        header is part of the signature, because the browser sends none
+        (PoC Q6). A URL writes to this one key only.
+
+        Args:
+            s3_path: The object's ``s3://`` path.
+            upload_id: The multipart upload.
+            part_sizes: Expected byte length per part number to sign.
+            expiration: Seconds the URLs stay valid.
 
         Raises:
             S3ServiceError: ``S3_OPERATION_FAILED``.
@@ -418,7 +426,7 @@ class S3Service:
         s3_key = self._extract_key_from_path(s3_path)
         urls: list[PartUrl] = []
         try:
-            for number in part_numbers:
+            for number, size in part_sizes.items():
                 url = self.s3_client.generate_presigned_url(
                     "upload_part",
                     Params={
@@ -426,6 +434,7 @@ class S3Service:
                         "Key": s3_key,
                         "UploadId": upload_id,
                         "PartNumber": int(number),
+                        "ContentLength": int(size),
                     },
                     ExpiresIn=expiration,
                 )

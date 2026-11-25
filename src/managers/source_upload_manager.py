@@ -46,6 +46,7 @@ from ..models.source_file import (
     SourceMetadata,
     UploadSession,
     part_count_for,
+    part_sizes_for,
 )
 from ..services.s3_service import S3ServiceError
 from ..services.service_factory import service_factory
@@ -547,11 +548,16 @@ class SourceUploadManager:
     ) -> UploadSession:
         expiration = int(config.ADVANCED_UPLOAD_URL_EXPIRATION_SECONDS)
         upload_id = source_file.multipart_upload_id or ""
+        # The signature carries each part's length, so S3 refuses a larger body.
+        expected = part_sizes_for(
+            source_file.size_bytes, int(config.ADVANCED_UPLOAD_PART_SIZE_BYTES)
+        )
+        part_sizes = {n: expected[n] for n in numbers}
         urls = self._s3_call(
             lambda: self._s3.generate_upload_part_urls(
                 self._s3.path_of(source_file.s3_key),
                 upload_id,
-                list(numbers),
+                part_sizes,
                 expiration=expiration,
             )
         )

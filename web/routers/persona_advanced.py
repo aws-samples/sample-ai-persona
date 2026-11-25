@@ -89,6 +89,9 @@ SSE_KEEPALIVE_SECONDS = 15.0
 UNAVAILABLE_NOTICE = "advanced_unavailable"
 #: The parallel uploads of one file in the browser (BR2.5, performance-design.md §2).
 UPLOAD_CONCURRENCY = 4
+#: Inspections (head read + parse) running at once in this process; the rest wait.
+INSPECT_CONCURRENCY = 4
+_inspect_slots = asyncio.Semaphore(INSPECT_CONCURRENCY)
 
 #: The generations' own pool, apart from the other routers' pools (NFR2.2).
 generation_executor = ThreadPoolExecutor(
@@ -329,9 +332,10 @@ async def complete_upload(
     manager = get_source_upload_manager()
     parts = [(p.part_number, p.etag) for p in body.parts]
     try:
-        source_file = await run_in_threadpool(
-            manager.complete_upload, _principal(request), source_file_id, parts
-        )
+        async with _inspect_slots:
+            source_file = await run_in_threadpool(
+                manager.complete_upload, _principal(request), source_file_id, parts
+            )
     except CodedError as e:
         logger.info("advanced upload not completed")
         return json_error_response(

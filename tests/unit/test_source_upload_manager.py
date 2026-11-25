@@ -132,6 +132,17 @@ class TestStart:
         # The URLs themselves are never logged.
         assert all(p.url not in caplog.text for p in session.part_urls)
 
+    def test_every_part_url_signs_the_part_length(self, env) -> None:
+        from urllib.parse import parse_qs, urlsplit
+
+        manager, _, _, _ = env
+
+        session = _start(manager, size=2 * PART + 1)
+
+        for part in session.part_urls:
+            signed = parse_qs(urlsplit(part.url).query)["X-Amz-SignedHeaders"]
+            assert signed == ["content-length;host"]
+
     def test_exact_limit_is_accepted(self, env, monkeypatch) -> None:
         manager, *_ = env
         monkeypatch.setattr(config, "ADVANCED_UPLOAD_MAX_BYTES", PART)

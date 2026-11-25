@@ -13,6 +13,8 @@ import pytest
 from src.managers.shared.source_inspector import (
     SourceInspectionError,
     inspect_document,
+    MAX_COLUMNS,
+    MAX_COLUMN_NAME_CHARS,
     inspect_table_head,
 )
 from src.models.errors import ErrorCode
@@ -331,3 +333,26 @@ class TestInspectText:
     def test_a_table_format_is_not_inspected_as_a_document(self) -> None:
         with pytest.raises(ValueError):
             _doc(b"a,b\n", SourceFormat.CSV)
+
+
+class TestLoadLimits:
+    """A narrow first line must not make the inspection do unbounded work."""
+
+    def test_too_many_columns_is_refused(self) -> None:
+        header = ",".join(f"c{i}" for i in range(MAX_COLUMNS + 1))
+
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_NOT_A_TABLE):
+            _inspect(f"{header}\n{'1,' * MAX_COLUMNS}1\n".encode())
+
+    def test_the_column_limit_itself_is_accepted(self) -> None:
+        header = ",".join(f"c{i}" for i in range(MAX_COLUMNS))
+
+        meta = _inspect(f"{header}\n{'1,' * (MAX_COLUMNS - 1)}1\n".encode())
+
+        assert len(meta.columns) == MAX_COLUMNS
+
+    def test_a_long_column_name_is_refused(self) -> None:
+        name = "n" * (MAX_COLUMN_NAME_CHARS + 1)
+
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_NOT_A_TABLE):
+            _inspect(f"{name},b\n1,2\n".encode())
