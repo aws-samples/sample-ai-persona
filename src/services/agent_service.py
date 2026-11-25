@@ -71,9 +71,15 @@ class ColumnMappingOutput(BaseModel):
 class AdvancedPlanStepOutput(BaseModel):
     """One step of the plan (AnalysisStep, U6 addendum)."""
 
-    kind: Literal["filter", "compare", "cluster", "join", "rfm", "compare_groups"] = (
-        Field(description="手順の種類")
-    )
+    kind: Literal[
+        "filter",
+        "compare",
+        "cluster",
+        "join",
+        "rfm",
+        "compare_groups",
+        "person_profile",
+    ] = Field(description="手順の種類")
     reason: str = Field(default="", description="この手順を選んだ理由")
     table: Optional[str] = Field(
         default=None, description="使う表の名前（source_1 など。あるとき）"

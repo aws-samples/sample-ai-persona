@@ -1001,11 +1001,13 @@ class TestLoadPlaybook:
     def playbooks(self, tmp_path: Path) -> Path:
         folder = tmp_path / "playbooks"
         folder.mkdir()
-        for name in ("join", "compare_groups", "rfm"):
+        for name in ("join", "compare_groups", "rfm", "person_profile"):
             (folder / f"{name}.md").write_text(f"# {name}\n手順", encoding="utf-8")
         return folder
 
-    @pytest.mark.parametrize("name", ["join", "compare_groups", "rfm"])
+    @pytest.mark.parametrize(
+        "name", ["join", "compare_groups", "rfm", "person_profile"]
+    )
     def test_returns_the_named_document(self, playbooks: Path, name: str) -> None:
         service = _detailed(_CodeSandbox(), playbooks_dir=playbooks)
 
@@ -1038,13 +1040,15 @@ class TestLoadPlaybook:
         text = _by_name(service)["load_playbook"](name="../secrets")
 
         assert "UNKNOWN_PLAYBOOK" in text
-        assert all(n in text for n in ("join", "compare_groups", "rfm"))
+        assert all(
+            n in text for n in ("join", "compare_groups", "rfm", "person_profile")
+        )
         assert gate.outcomes == []
 
     def test_the_real_playbooks_are_in_the_repository(self) -> None:
         service = _detailed(_CodeSandbox())
 
-        for name in ("join", "compare_groups", "rfm"):
+        for name in ("join", "compare_groups", "rfm", "person_profile"):
             text = _by_name(service)["load_playbook"](name=name)
             assert "emit_result" in text
 

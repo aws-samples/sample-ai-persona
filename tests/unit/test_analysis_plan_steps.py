@@ -145,7 +145,17 @@ class TestGuideCandidates:
     def test_history_with_a_date_and_a_number_suggests_rfm(self) -> None:
         kinds = _kinds("", [CUSTOMERS, PURCHASES], [JOIN])
 
-        assert kinds[:2] == ["join", "rfm"]
+        assert kinds[:3] == ["join", "person_profile", "rfm"]
+
+    def test_a_history_suggests_the_person_profile_only_with_the_detailed_analysis(
+        self,
+    ) -> None:
+        assert "person_profile" in _kinds("", [CUSTOMERS, PURCHASES], [JOIN])
+        assert "person_profile" not in _kinds(
+            "", [CUSTOMERS, PURCHASES], [JOIN], detailed=False
+        )
+        # a table of one row per person has no history to sum up
+        assert "person_profile" not in _kinds("", [CUSTOMERS])
 
     def test_purchase_words_suggest_rfm(self) -> None:
         kinds = _kinds("優良なお客さまを知りたい", [CUSTOMERS])
@@ -288,9 +298,13 @@ class TestSettleSteps:
         assert [s.kind for s in plan.plan_steps()] == [K.FILTER]
 
     def test_steps_are_capped_at_four(self) -> None:
-        plan = _settle([{"kind": k, "reason": k} for k in ("filter", "compare") * 3])
+        kinds = ("rfm", "compare_groups", "join", "compare", "filter")
 
-        assert len(plan.plan_steps()) == MAX_PLAN_STEPS
+        plan = _settle([{"kind": k, "reason": k} for k in kinds])
+
+        steps = plan.plan_steps()
+        assert len(steps) == MAX_PLAN_STEPS
+        assert step_method(steps[-1].kind) is plan.method
 
     def test_no_step_left_falls_back_to_one_step_of_the_method(self) -> None:
         plan = _settle([{"kind": "join", "reason": "x"}], detailed=False)
@@ -309,13 +323,63 @@ class TestSettleSteps:
 
     def test_cutting_to_four_keeps_the_step_that_makes_the_segments(self) -> None:
         plan = _settle(
-            [{"kind": k, "reason": k} for k in ("compare", "cluster") * 3],
+            [
+                {"kind": k, "reason": k}
+                for k in ("rfm", "compare_groups", "join", "compare", "cluster")
+            ],
             method="cluster",
         )
 
         kinds = [s.kind for s in plan.plan_steps()]
         assert len(kinds) == MAX_PLAN_STEPS
         assert step_method(kinds[-1]) is AnalysisMethod.CLUSTER
+
+    def test_a_kind_is_listed_once_and_the_method_step_moves_to_the_end(self) -> None:
+        # real data: "cluster" came twice, once with the whole rationale as reason
+        plan = _settle(
+            [
+                {"kind": "rfm", "reason": "点数化"},
+                {"kind": "cluster", "reason": "まとめる"},
+                {"kind": "compare_groups", "reason": "比べる"},
+                {"kind": "cluster", "reason": "全文の理由" * 20},
+            ],
+            method="cluster",
+        )
+
+        steps = plan.plan_steps()
+        assert [s.kind for s in steps] == [K.RFM, K.COMPARE_GROUPS, K.CLUSTER]
+        assert steps[-1].reason == "まとめる"
+
+    def test_a_plan_over_joined_tables_starts_with_the_join(self) -> None:
+        raw = {
+            "interpreted_purpose": "p",
+            "questions": ["q"],
+            "method": "cluster",
+            "rationale": "r",
+            "deviation_reason": "層を見つけたい",
+            "steps": [
+                {"kind": "rfm", "reason": "点数化"},
+                {"kind": "cluster", "reason": "まとめる"},
+            ],
+        }
+
+        def settle(*, joined: bool, detailed: bool = True):
+            plan = AnalysisPolicy.settle_plan(
+                raw,
+                guide=AnalysisMethod.CLUSTER,
+                attempt=1,
+                columns=TABLES["source_1"],
+                detailed=detailed,
+                tables=TABLES,
+                joined=joined,
+            )
+            assert plan is not None
+            return [s.kind for s in plan.plan_steps()]
+
+        assert settle(joined=True) == [K.JOIN, K.RFM, K.CLUSTER]
+        assert settle(joined=False) == [K.RFM, K.CLUSTER]
+        # without the detailed analysis there is no join to run
+        assert K.JOIN not in settle(joined=True, detailed=False)
 
     def test_a_method_forced_to_the_guide_rewrites_the_last_step(self) -> None:
         # code review: guide cluster, the agent answered filter twice

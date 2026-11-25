@@ -1096,6 +1096,26 @@ class TestSegmentNumbers:
         rest = ui.page.inner_text("[data-testid='advanced-segments-rest']")
         assert "80 人（27%）" in rest
 
+    def test_several_files_show_their_rows_one_by_one(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        first = replace(result.prepare_reports[0], rows_read=1_471_388, rows_excluded=3)
+        second = replace(result.prepare_reports[0], source_id="other", rows_read=8_000)
+        names = {
+            **result.source_names,
+            first.source_id: "pos.csv",
+            "other": "members.csv",
+        }
+        result = replace(result, prepare_reports=(first, second), source_names=names)
+
+        self._open_with(ui, result)
+
+        box = ui.page.inner_text("[data-testid='advanced-result-rows-by-file']")
+        assert "pos.csv" in box and "1,471,388" in box and "除外 3" in box
+        assert "members.csv" in box and "8,000" in box
+        ui.check_a11y()
+
     def test_the_population_is_told_when_it_differs_from_the_rows(
         self, ui: UiHarness
     ) -> None:
@@ -1534,6 +1554,23 @@ class TestDataReadingCard:
 
         assert ui.page.evaluate("window.__xss === undefined")
         assert "<img" in ui.page.inner_text("[data-testid='advanced-reading-table']")
+
+    def test_a_guess_is_marked_for_the_user_to_check(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        (guessed,) = self._reading()
+        self._load(ui, (replace(guessed, uncertain=True),))
+
+        notice = ui.page.inner_text("[data-testid='advanced-reading-uncertain']")
+        assert "確かめて" in notice
+        ui.check_a11y()
+
+    def test_a_sure_reading_has_no_notice(self, ui: UiHarness) -> None:
+        self._load(ui, self._reading())
+
+        assert (
+            ui.page.locator("[data-testid='advanced-reading-uncertain']").count() == 0
+        )
 
     def test_no_reading_shows_no_section(self, ui: UiHarness) -> None:
         self._load(ui, None)

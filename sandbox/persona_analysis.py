@@ -45,7 +45,7 @@ import urllib.request
 import warnings
 import xml.etree.ElementTree as ET
 import zipfile
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 #: Version of the fixed preparation; recorded in PrepareReport (BR4.4).
 PREPARE_VERSION = "1"
@@ -1489,8 +1489,7 @@ _ASSIGNMENT_FILE = "assignment.parquet"
 _META_FILE = "meta.json"
 _EMIT_COUNT_FILE = "emit_count"
 _MAX_STATISTICS = 50
-_MAX_METRICS = 10
-_MAX_DEFAULT_METRICS = 60
+_MAX_METRICS = 60
 #: The columns the last ``join_tables`` of this process added (key first).
 _LAST_JOINED: List[str] = []
 _MAX_FEATURES = 20
@@ -1606,6 +1605,7 @@ def _ai_namespace(workdir: str, work: str, sources: Dict[str, str]) -> Dict[str,
         "join_tables": join,
         "compare_groups": compare_groups,
         "rfm": rfm,
+        "person_profile": person_profile,
     }
 
 
@@ -1706,12 +1706,10 @@ def emit_result(
         raise RuntimeError("emit_result is called once per run")
     if not _POPULATION_SOURCE.match(str(population_source)):
         raise ValueError("population_source is source_n or join:source_n+source_m")
-    # Left out, many columns are taken: those of the axis table are dropped
-    # when the features are counted, and the first ten that are left stay.
-    cap = _MAX_METRICS if metrics is not None else _MAX_DEFAULT_METRICS
+    # Those of the axis table are dropped when the features are counted.
     if metrics is None:
         metrics = _numeric_columns(frame, (id_column, assign_column))
-    names = [str(m) for m in metrics][:cap]
+    names = [str(m) for m in metrics][:_MAX_METRICS]
     columns = _columns_of(frame, id_column, assign_column, *names)
     if joined_columns is None:
         attrs = getattr(frame, "attrs", None)
@@ -2621,6 +2619,121 @@ def rfm(
     result = (
         grouped.drop(columns=["last"]).reset_index().rename(columns={"id": id_column})
     )
+    return result
+
+
+_PROFILE_NUMERIC = 8
+_PROFILE_CATEGORICAL = 6
+_PROFILE_VALUES = 5
+_PROFILE_DISTINCT = 20
+_HOUR_BINS = ((0, 6), (6, 12), (12, 18), (18, 24))
+
+
+def person_profile(
+    frame: Any,
+    id_column: str,
+    *,
+    date_column: Optional[str] = None,
+    as_of: Optional[str] = None,
+    skip: Sequence[str] = (),
+) -> Any:
+    """One row per person from a history table: what they did and when.
+
+    ``frame`` has several rows per person (orders, events, answers). Nothing
+    in the table's column names is assumed: the columns are told apart by
+    their types and their number of distinct values.
+
+    Returns a pandas DataFrame of ``id_column`` and, per person:
+
+    - ``回数（行）``: rows of the person.
+    - a date column (``date_column``, else the first one): ``最後からの日数``
+      (days since the person's last date up to ``as_of``, default the last
+      date of the table), ``期間（日）``, ``活動日数`` (distinct days), and,
+      when the dates carry a time, the share of rows per time of day
+      (``0〜5時の割合`` ...) and ``土日の割合``.
+    - numbers (up to 8 columns that are not keys): ``<列>の合計`` and
+      ``<列>の平均``.
+    - columns of 2〜20 values (up to 6 columns, 5 values each): ``<列>=<値>の割合``,
+      the share of the person's rows that have the value.
+
+    Key-like columns are left out: names that say ID or code, text columns whose
+    values all differ, and the columns named in ``skip`` (the columns the user
+    confirmed are no trait, ``data_reading``).
+    """
+    import pandas as pd
+
+    if id_column not in frame.columns:
+        raise KeyError(f"no column {id_column}")
+    data = frame[frame[id_column].notna()]
+    ids = data[id_column]
+    by = data.groupby(id_column, sort=True)
+    out = pd.DataFrame({"回数（行）": by.size()})
+
+    left_out = {str(c) for c in skip}
+
+    def is_key(name: str) -> bool:
+        column = data[name]
+        if str(name) in left_out or _KEY_NAME.search(str(name)):
+            return True
+        # text whose values all differ names a row, not a trait (a number whose
+        # values all differ may be an amount, so it is not judged here)
+        return (
+            not pd.api.types.is_numeric_dtype(column)
+            and not pd.api.types.is_datetime64_any_dtype(column)
+            and len(data) > 1
+            and column.nunique(dropna=True) == column.notna().sum()
+        )
+
+    stamp = date_column
+    if stamp is None:
+        stamp = next(
+            (c for c in data.columns if pd.api.types.is_datetime64_any_dtype(data[c])),
+            None,
+        )
+    if stamp is not None and stamp in data.columns:
+        when = pd.to_datetime(data[stamp], errors="coerce")
+        last = when.groupby(ids).max()
+        first = when.groupby(ids).min()
+        reference = pd.Timestamp(as_of) if as_of else when.max()
+        out["最後からの日数"] = (reference - last).dt.days
+        out["期間（日）"] = (last - first).dt.days
+        out["活動日数"] = when.dt.normalize().groupby(ids).nunique()
+        if (when.dt.hour.fillna(0) != 0).any():
+            for lo, hi in _HOUR_BINS:
+                inside = when.dt.hour.between(lo, hi - 1)
+                out[f"{lo}〜{hi - 1}時の割合"] = inside.groupby(ids).mean()
+        out["土日の割合"] = (when.dt.dayofweek >= 5).groupby(ids).mean()
+
+    skip = {id_column, stamp}
+    numeric = [
+        c
+        for c in data.columns
+        if c not in skip
+        and pd.api.types.is_numeric_dtype(data[c])
+        and not pd.api.types.is_bool_dtype(data[c])
+        and not is_key(c)
+        and data[c].nunique(dropna=True) > 1
+    ][:_PROFILE_NUMERIC]
+    for c in numeric:
+        values = pd.to_numeric(data[c], errors="coerce")
+        out[f"{c}の合計"] = values.groupby(ids).sum()
+        out[f"{c}の平均"] = values.groupby(ids).mean()
+
+    kinds = []
+    for c in data.columns:
+        if c in skip or c in numeric or is_key(c):
+            continue
+        if pd.api.types.is_datetime64_any_dtype(data[c]):
+            continue
+        count = data[c].nunique(dropna=True)
+        if 2 <= count <= _PROFILE_DISTINCT:
+            kinds.append((count, c))
+    for _, c in sorted(kinds, key=lambda item: item[0])[:_PROFILE_CATEGORICAL]:
+        common = data[c].value_counts().index[:_PROFILE_VALUES]
+        for value in common:
+            out[f"{c}={value}の割合"] = (data[c] == value).groupby(ids).mean()
+
+    result = out.round(4).reset_index()
     return result
 
 

@@ -3634,6 +3634,38 @@ class TestDataReading:
         assert reading.skip == ("id", "income")
         assert '"income"' in env.agents.analysis_data["data_reading"]
 
+    def test_a_replan_with_a_corrected_reading_suggests_the_history_steps(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = manager.start_generation(
+            ADMIN,
+            source_file_ids=[env.ready_file().source_file_id],
+            purpose="30 代",
+            persona_count=2,
+            confirm_plan=True,
+            use_detailed_analysis=True,
+        )
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+        assert "person_profile:" not in env.agents.planning_prompts[0]
+
+        manager.decide_plan(
+            ADMIN,
+            generation_id,
+            "replan",
+            revised_purpose="30 代",
+            data_reading={
+                "source_1": {"kind": "history", "person_id": "id", "skip": ["id"]}
+            },
+        )
+        _await_card(env, generation_id, replans=1)
+
+        assert "person_profile:" in env.agents.planning_prompts[-1]
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
     @pytest.mark.parametrize(
         "choice",
         [

@@ -1407,3 +1407,14 @@ class TestTableReading:
             data_reading={"source_1": {"kind": "people", "skip": []}},
         )
         assert ControlRequest.from_dict(request.to_dict()) == request
+
+
+def test_the_uncertain_mark_is_kept_and_only_written_when_true() -> None:
+    from src.models.advanced_generation import TableReading
+
+    base = TableReading("a", "n", "people", None, (), ("x",))
+    guessed = TableReading("a", "n", "people", None, (), ("x",), uncertain=True)
+
+    assert "uncertain" not in base.to_dict()
+    assert TableReading.from_dict(guessed.to_dict()).uncertain is True
+    assert TableReading.from_dict(base.to_dict()).uncertain is False

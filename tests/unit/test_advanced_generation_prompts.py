@@ -139,6 +139,12 @@ class TestAnalysisInstructionsU6:
     def test_several_tables_are_named(self) -> None:
         assert "source_2" in prompts.analysis_instructions(tables=2)
 
+    def test_a_missing_value_is_not_filled_in_by_the_detailed_analysis(self) -> None:
+        text = prompts.analysis_instructions(detailed=True)
+
+        assert "補完" in text
+        assert "補完" not in prompts.analysis_instructions(detailed=False)
+
     def test_layers_of_a_detailed_step_come_from_run_code(self) -> None:
         from src.models.analysis import (
             AnalysisMethod,

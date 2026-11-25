@@ -385,3 +385,103 @@ class TestReadTables:
         )
 
         assert AnalysisPolicy.guide_alias(readings) == "source_2"
+
+
+class TestSeveralTablesReadOneByOne:
+    """Real data: a member table beside a purchase history stayed 'history'."""
+
+    def test_a_table_of_people_stays_people_beside_a_history(self) -> None:
+        members = {
+            "columns": [
+                _col("会員ID", distinct=True),
+                _col("年齢", distinct=False, type_="BIGINT"),
+                _col("登録日", distinct=False, type_="DATE"),
+            ]
+        }
+        pos = {
+            "columns": [
+                _col("明細ID", distinct=True),
+                _col("会員ID", distinct=False),
+                _col("購入日時", distinct=False, type_="TIMESTAMP"),
+                _col("金額", distinct=False, type_="BIGINT"),
+            ]
+        }
+
+        readings = AnalysisPolicy.read_tables(
+            [("source_1", "pos.csv", pos), ("source_2", "members.csv", members)]
+        )
+
+        assert [r.kind for r in readings] == ["history", "people"]
+        assert AnalysisPolicy.guide_alias(readings) == "source_2"
+        assert not AnalysisPolicy.readings_count_rows(readings)
+
+
+class TestReadingDecidesTheGuide:
+    """What the user confirmed on the card decides, not the column names."""
+
+    HISTORY = {
+        "columns": [
+            _col("uid", distinct=False),
+            _col("日付", distinct=False, type_="DATE"),
+            _col("金額", distinct=False, type_="BIGINT"),
+        ]
+    }
+
+    def test_a_corrected_reading_brings_the_history_steps_back(self) -> None:
+        tables = [("source_1", self.HISTORY)]
+        proposal = AnalysisPolicy.read_tables([("source_1", "e.csv", self.HISTORY)])
+        assert proposal[0].kind == "people"  # the name tells nothing
+
+        wrong = [
+            c.kind.value
+            for c in AnalysisPolicy.guide_candidates("", tables, [], True, proposal)
+        ]
+        right = [
+            c.kind.value
+            for c in AnalysisPolicy.guide_candidates(
+                "", tables, [], True, (proposal[0].choose("history", "uid", ["uid"]),)
+            )
+        ]
+
+        assert "person_profile" not in wrong and "rfm" not in wrong
+        assert "person_profile" in right and "rfm" in right
+
+    def test_the_guide_method_follows_the_reading(self) -> None:
+        proposal = AnalysisPolicy.read_tables([("source_1", "e.csv", self.HISTORY)])[0]
+        people = proposal.choose("people", "uid", ["uid"])
+
+        # no person found: one number only, so a filter; the user says people: cluster
+        assert (
+            AnalysisPolicy.guide_method("", self.HISTORY, proposal)
+            is AnalysisMethod.FILTER
+        )
+        assert (
+            AnalysisPolicy.guide_method("", self.HISTORY, people)
+            is AnalysisMethod.CLUSTER
+        )
+
+    def test_a_proposal_that_names_no_person_is_marked_uncertain(self) -> None:
+        def read(columns):
+            return AnalysisPolicy.read_tables([("s", "t", {"columns": columns})])[0]
+
+        named = read(
+            [
+                _col("customer_id", distinct=True),
+                _col("age", distinct=False, type_="BIGINT"),
+            ]
+        )
+        guessed = read(
+            [_col("email", distinct=True), _col("age", distinct=False, type_="BIGINT")]
+        )
+        none = read(
+            [
+                _col("age", distinct=False, type_="BIGINT"),
+                _col("score", distinct=False, type_="BIGINT"),
+            ]
+        )
+
+        assert not named.uncertain
+        assert guessed.uncertain and guessed.person_id == "email"
+        assert none.uncertain and none.person_id is None
+        # what the user chose is no longer a guess
+        assert not guessed.choose("people", "email", []).uncertain

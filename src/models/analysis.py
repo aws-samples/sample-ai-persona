@@ -80,26 +80,34 @@ class AnalysisStepKind(StrEnum):
     JOIN = "join"
     RFM = "rfm"
     COMPARE_GROUPS = "compare_groups"
+    #: A history table made one row per person (what they did and when).
+    PERSON_PROFILE = "person_profile"
 
 
 #: Step kinds that need the AI detailed analysis.
 DETAILED_STEP_KINDS: frozenset[AnalysisStepKind] = frozenset(
-    {AnalysisStepKind.JOIN, AnalysisStepKind.RFM, AnalysisStepKind.COMPARE_GROUPS}
+    {
+        AnalysisStepKind.JOIN,
+        AnalysisStepKind.RFM,
+        AnalysisStepKind.COMPARE_GROUPS,
+        AnalysisStepKind.PERSON_PROFILE,
+    }
 )
 #: Steps one plan may hold.
 MAX_PLAN_STEPS = 4
 #: The playbooks ``load_playbook`` reads (BR39.1); the only names recorded.
-PLAYBOOK_NAMES: tuple[str, ...] = ("join", "compare_groups", "rfm")
+PLAYBOOK_NAMES: tuple[str, ...] = ("join", "compare_groups", "rfm", "person_profile")
 
 
 def step_method(kind: AnalysisStepKind | str) -> Optional["AnalysisMethod"]:
     """The method a step stands for when it makes the segments.
 
     ``rfm`` makes its segments as a filter (matched by ``segment_key``,
-    BR36.3) and ``compare_groups`` as a comparison; ``join`` makes none.
+    BR36.3) and ``compare_groups`` as a comparison; ``join`` and
+    ``person_profile`` make none.
     """
     kind = AnalysisStepKind(kind)
-    if kind is AnalysisStepKind.JOIN:
+    if kind in (AnalysisStepKind.JOIN, AnalysisStepKind.PERSON_PROFILE):
         return None
     if kind is AnalysisStepKind.RFM:
         return AnalysisMethod.FILTER

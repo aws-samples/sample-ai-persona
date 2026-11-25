@@ -316,6 +316,7 @@ _STEP_NAMES = {
     "join": "CSV を結合",
     "rfm": "新しさ・頻度・金額で点数化",
     "compare_groups": "群の差を検定",
+    "person_profile": "履歴を人ごとに集計",
 }
 #: Why a call did not give a result (fixed words; a look around is no failure).
 _CALL_TROUBLE = "（うまくいかなかったため、やり直します）"
@@ -974,8 +975,7 @@ class AdvancedPersonaGenerationManager:
         the join keys are found when the detailed analysis is on (BR37.3).
         """
         state.reading = AnalysisPolicy.read_tables(
-            [(t.alias, t.source.display_name, t.profile) for t in state.tables],
-            joined=len(state.tables) > 1,
+            [(t.alias, t.source.display_name, t.profile) for t in state.tables]
         )
         self._use_guide_table(state, AnalysisPolicy.guide_alias(state.reading))
         if len(state.tables) > 1:
@@ -1771,7 +1771,14 @@ class AdvancedPersonaGenerationManager:
 
     def _plan(self, state: _Run) -> None:
         generation = state.generation
-        guide = AnalysisPolicy.guide_method(generation.purpose, state.profile)
+        guide_alias = next(
+            (t.alias for t in state.tables if t.source is state.source), None
+        )
+        guide = AnalysisPolicy.guide_method(
+            generation.purpose,
+            state.profile,
+            next((r for r in state.reading if r.alias == guide_alias), None),
+        )
         detailed = self._detailed_in_use(state)
         # U6 addendum: the step candidates from the words and the column shapes
         candidates = (
@@ -1780,6 +1787,7 @@ class AdvancedPersonaGenerationManager:
                 [(t.alias, t.profile) for t in state.tables],
                 [plan for plan, _ in state.joins],
                 detailed,
+                state.reading,
             )
             if state.source is not None
             else []
@@ -1823,6 +1831,7 @@ class AdvancedPersonaGenerationManager:
                 columns=self._columns(state),
                 detailed=detailed,
                 tables=table_columns or None,
+                joined=bool(state.joins),
             )
             if plan is not None:
                 break

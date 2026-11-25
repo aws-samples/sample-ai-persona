@@ -71,6 +71,9 @@
             {% for r in reading %}
             <fieldset class="mt-2 border border-blue-200 bg-white rounded-md p-3" data-testid="advanced-reading-table" data-alias="{{ r.alias }}">
                 <legend class="px-1 text-sm font-medium text-gray-900">{{ r.name }}</legend>
+                {% if r.uncertain %}
+                <p class="mb-2 text-xs text-amber-900 bg-amber-50 border border-amber-300 rounded px-2 py-1" data-testid="advanced-reading-uncertain">{% if r.person_id %}人を特定する列を、列の名前でなく値の形から推測しました。合っているか確かめてください。{% else %}人を特定する列を自動で判定できませんでした。確かめて、選んでください。{% endif %}</p>
+                {% endif %}
                 <div role="radiogroup" aria-label="表の解釈（{{ r.name }}）" class="text-sm text-gray-800 space-y-1">
                     <label class="flex items-start gap-2"><input type="radio" class="mt-1" name="reading_kind__{{ r.alias }}" value="people" {% if r.kind == "people" %}checked{% endif %}> 1 人が 1 行のデータのみ（顧客の一覧、会員名簿、社員名簿、アンケートの回答（1 人 1 回答）、ユーザーの登録情報など）</label>
                     <label class="flex items-start gap-2"><input type="radio" class="mt-1" name="reading_kind__{{ r.alias }}" value="history" {% if r.kind == "history" %}checked{% endif %}> 1 人に複数行のデータが存在（注文・購買・利用履歴、アクセスログ、問い合わせ履歴、アンケートの回答（1 人が複数回）など）</label>

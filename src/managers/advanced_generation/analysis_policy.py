@@ -87,6 +87,9 @@ _RFM_WORDS = ("購買", "頻度", "最近", "新しさ", "RFM", "rfm", "優良",
 _DATE_TYPE = re.compile(r"^(DATE|TIMESTAMP.*|TIME.*)$", re.IGNORECASE)
 #: Distinct values of a column that splits the rows into a few groups.
 _FEW_VALUES = range(2, 6)
+#: Reasons of the steps the policy adds (shown on the plan card).
+_LAST_STEP_REASON = "最後に層を作る"
+_JOIN_STEP_REASON = "複数の表を、同じ人でつなげる"
 #: The fixed-tool step a detailed-only kind falls back to (U6 addendum).
 _FIXED_STEP = {
     AnalysisStepKind.RFM: AnalysisStepKind.FILTER,
@@ -94,6 +97,7 @@ _FIXED_STEP = {
 }
 _REASON = {
     AnalysisStepKind.JOIN: "結合できる表の組がある",
+    AnalysisStepKind.PERSON_PROFILE: "1 人に複数行の履歴があり、人ごとの特徴を作れる",
     AnalysisStepKind.RFM: "1 人に複数行の履歴があり、日付と数値の列がある",
     AnalysisStepKind.COMPARE: "数種類の値の列と数値の列があり、群どうしを比べられる",
     AnalysisStepKind.COMPARE_GROUPS: "群の差が偶然かどうかを確かめられる",
@@ -161,7 +165,7 @@ class AnalysisPolicy:
 
     @staticmethod
     def read_tables(
-        tables: Sequence[tuple[str, str, Mapping[str, Any]]], *, joined: bool = False
+        tables: Sequence[tuple[str, str, Mapping[str, Any]]],
     ) -> tuple[TableReading, ...]:
         """How each table reads, proposed from its column profile (U6 addendum).
 
@@ -169,7 +173,7 @@ class AnalysisPolicy:
         the proposal on the plan card; what they confirmed is used as it is.
         """
         return tuple(
-            _read_table(alias, name, profile, joined) for alias, name, profile in tables
+            _read_table(alias, name, profile) for alias, name, profile in tables
         )
 
     @staticmethod
@@ -214,15 +218,26 @@ class AnalysisPolicy:
         }
 
     @staticmethod
-    def guide_method(purpose: str, profile: Mapping[str, Any]) -> AnalysisMethod:
-        """The method the guide expects for this instruction and table (BR5.1)."""
+    def guide_method(
+        purpose: str,
+        profile: Mapping[str, Any],
+        reading: Optional[TableReading] = None,
+    ) -> AnalysisMethod:
+        """The method the guide expects for this instruction and table (BR5.1).
+
+        ``reading`` is how the table reads (what the user confirmed on the plan
+        card, else the proposal); without it the profile alone is read.
+        """
         text = purpose.strip()
         if text:
             if any(word in text for word in _COMPARE_WORDS):
                 return AnalysisMethod.COMPARE
             return AnalysisMethod.FILTER
         columns = list(profile.get("columns") or [])
-        kind, person = _kind_and_person(profile)
+        if reading is not None:
+            kind, person = reading.kind, reading.person_id
+        else:
+            kind, person = _kind_and_person(profile)
         if kind == "people" and person is not None:
             return AnalysisMethod.CLUSTER
         numeric = [c for c in columns if _NUMERIC_TYPE.match(str(c.get("type", "")))]
@@ -236,6 +251,7 @@ class AnalysisPolicy:
         tables: Sequence[tuple[str, Mapping[str, Any]]],
         joins: Sequence[JoinPlan],
         detailed: bool,
+        readings: Sequence[TableReading] = (),
     ) -> list[StepCandidate]:
         """The steps the guide suggests, from the words and the column shapes.
 
@@ -251,21 +267,39 @@ class AnalysisPolicy:
             tables: ``(alias, profile)`` of every table, in order.
             joins: The join plans found (BR37.3).
             detailed: The generation uses the AI detailed analysis.
+            readings: How each table reads (what the user confirmed, else the
+                proposal). A table that has one decides by it, not by its
+                profile.
         """
         if not tables:
             return []
+        kinds = {r.alias: r.kind for r in readings}
+
+        def history(alias: str, profile: Mapping[str, Any]) -> bool:
+            if alias in kinds:
+                return kinds[alias] == "history"
+            return _kind_and_person(profile)[0] == "history"
+
         text = purpose.strip()
         out: list[StepCandidate] = []
         if detailed and joins:
             out.append(
                 StepCandidate(AnalysisStepKind.JOIN, _REASON[AnalysisStepKind.JOIN])
             )
+        if detailed and any(history(alias, profile) for alias, profile in tables):
+            out.append(
+                StepCandidate(
+                    AnalysisStepKind.PERSON_PROFILE,
+                    _REASON[AnalysisStepKind.PERSON_PROFILE],
+                )
+            )
         if detailed:
             joined = {j.table for j in joins}
             if any(word in text for word in _RFM_WORDS):
                 out.append(StepCandidate(AnalysisStepKind.RFM, _REASON_RFM_WORDS))
             elif any(
-                _is_history(profile, alias in joined) for alias, profile in tables
+                _is_history(profile, alias in joined, history(alias, profile))
+                for alias, profile in tables
             ):
                 out.append(
                     StepCandidate(AnalysisStepKind.RFM, _REASON[AnalysisStepKind.RFM])
@@ -285,9 +319,13 @@ class AnalysisPolicy:
                         _REASON[AnalysisStepKind.COMPARE_GROUPS],
                     )
                 )
-        guide_alias = AnalysisPolicy.guide_table(tables)
+        if readings:
+            guide_alias = AnalysisPolicy.guide_alias(readings)
+        else:
+            guide_alias = AnalysisPolicy.guide_table(tables)
         profile = next(p for alias, p in tables if alias == guide_alias)
-        guide = AnalysisPolicy.guide_method(purpose, profile)
+        reading = next((r for r in readings if r.alias == guide_alias), None)
+        guide = AnalysisPolicy.guide_method(purpose, profile, reading)
         if not out or step_method(out[-1].kind) is not guide:
             kind = AnalysisStepKind(guide.value)
             out = [c for c in out if c.kind is not kind]
@@ -303,6 +341,7 @@ class AnalysisPolicy:
         columns: Sequence[str],
         detailed: bool = False,
         tables: Optional[Mapping[str, Sequence[str]]] = None,
+        joined: bool = False,
     ) -> Optional[AnalysisPlan]:
         """The plan to run, or ``None`` to ask the planning agent again (BR5.1).
 
@@ -316,6 +355,8 @@ class AnalysisPolicy:
             tables: U6 addendum: profiled column names per table alias; a
                 step naming another table or column is dropped. Defaults to
                 ``columns`` as ``source_1``.
+            joined: U6 addendum: the tables have a join plan; a plan without a
+                join step gets one first (it is the only way they meet).
         """
         method = AnalysisMethod(str(raw.get("method")))
         reason = str(raw.get("deviation_reason") or "").strip() or None
@@ -329,10 +370,10 @@ class AnalysisPolicy:
         steps: Optional[tuple[AnalysisStep, ...]] = None
         if raw.get("steps"):
             steps = _end_with_method(
-                _settle_steps(raw["steps"], detailed=detailed, tables=known),
-                method,
-                str(raw.get("rationale", "")),
+                _settle_steps(raw["steps"], detailed=detailed, tables=known), method
             )
+            if joined and detailed:
+                steps = _with_join(steps)
         return AnalysisPlan(
             interpreted_purpose=str(raw.get("interpreted_purpose", "")),
             questions=tuple(questions or [_DEFAULT_QUESTION]),
@@ -372,27 +413,48 @@ def _settle_steps(
         )
         if step.column is not None and step.column not in names:
             continue
-        if out and out[-1].kind is step.kind:
-            continue
+        if any(done.kind is step.kind for done in out):
+            continue  # one step of a kind: the first says why
         out.append(step)
     return tuple(out)
 
 
+def _fit(steps: tuple[AnalysisStep, ...]) -> tuple[AnalysisStep, ...]:
+    """At most four steps: the earliest go first, but a join stays at the head."""
+    out = list(steps)
+    while len(out) > MAX_PLAN_STEPS:
+        at = 1 if out[0].kind is AnalysisStepKind.JOIN and len(out) > 2 else 0
+        del out[at]
+    return tuple(out)
+
+
 def _end_with_method(
-    steps: tuple[AnalysisStep, ...], method: AnalysisMethod, reason: str
+    steps: tuple[AnalysisStep, ...], method: AnalysisMethod
 ) -> tuple[AnalysisStep, ...]:
     """Steps whose last one makes the segments of ``method``, at most four.
 
     The plan's ``method`` is the method of the step that makes the segments
     (U6 addendum). When the agent's steps end elsewhere (a join, or another
-    method because ``method`` was forced to the guide), one step of ``method``
-    is added; the earliest steps go first when there are too many.
+    method because ``method`` was forced to the guide), the step of ``method``
+    the agent already wrote moves to the end, or one is added.
     """
+    kind = AnalysisStepKind(method.value)
     if not steps:
-        return (AnalysisStep(AnalysisStepKind(method.value), reason),)
+        return (AnalysisStep(kind, _LAST_STEP_REASON),)
     if step_method(steps[-1].kind) is not method:
-        steps = (*steps, AnalysisStep(AnalysisStepKind(method.value), reason))
-    return steps[-MAX_PLAN_STEPS:]
+        same = next((s for s in steps if s.kind is kind), None)
+        if same is not None:
+            steps = (*[s for s in steps if s is not same], same)
+        else:
+            steps = (*steps, AnalysisStep(kind, _LAST_STEP_REASON))
+    return _fit(steps)
+
+
+def _with_join(steps: tuple[AnalysisStep, ...]) -> tuple[AnalysisStep, ...]:
+    """A plan over joined tables starts with the join."""
+    if any(s.kind is AnalysisStepKind.JOIN for s in steps):
+        return steps
+    return _fit((AnalysisStep(AnalysisStepKind.JOIN, _JOIN_STEP_REASON), *steps))
 
 
 def _id_columns(profile: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -430,12 +492,9 @@ def _kind_and_person(profile: Mapping[str, Any]) -> tuple[str, Optional[str]]:
     return "people", (str(text.get("name")) if text is not None else None)
 
 
-def _read_table(
-    alias: str, name: str, profile: Mapping[str, Any], joined: bool
-) -> TableReading:
+def _read_table(alias: str, name: str, profile: Mapping[str, Any]) -> TableReading:
+    # Each table is read on its own: a table beside a history is not one itself.
     kind, person = _kind_and_person(profile)
-    if kind == "people" and _is_history(profile, joined):
-        kind = "history"
     columns = [str(c.get("name")) for c in profile.get("columns") or []]
     keys = [
         str(c.get("name"))
@@ -445,6 +504,11 @@ def _read_table(
         or _is_person_id(c)
     ]
     skip = list(dict.fromkeys([*([person] if person else []), *keys]))
+    named = person is not None and any(
+        str(c.get("name")) == person
+        and (_ID_NAME.search(person) or _PERSON_WORD.search(person))
+        for c in profile.get("columns") or []
+    )
     return TableReading(
         alias=alias,
         name=name,
@@ -452,13 +516,22 @@ def _read_table(
         person_id=person,
         skip=tuple(skip),
         columns=tuple(columns),
+        uncertain=not named,
     )
 
 
-def _is_history(profile: Mapping[str, Any], joined: bool) -> bool:
-    """A table with several rows per person, a date and a number (U6 addendum)."""
+def _is_history(
+    profile: Mapping[str, Any], joined: bool, history: Optional[bool] = None
+) -> bool:
+    """A table with several rows per person, a date and a number (U6 addendum).
+
+    ``history`` is what the table's reading says; without it the profile's
+    columns decide.
+    """
     columns = list(profile.get("columns") or [])
-    several = joined or _kind_and_person(profile)[0] == "history"
+    several = joined or (
+        history if history is not None else _kind_and_person(profile)[0] == "history"
+    )
     has_date = any(_DATE_TYPE.match(str(c.get("type", ""))) for c in columns)
     has_number = any(
         _NUMERIC_TYPE.match(str(c.get("type", "")))

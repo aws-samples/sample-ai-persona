@@ -622,7 +622,7 @@ class AnalysisToolService:
             """Read one playbook: when to use it, the steps and emit_result.
 
             Args:
-                name: join, compare_groups or rfm.
+                name: join, compare_groups, rfm or person_profile.
 
             Returns:
                 The playbook as text inside a data block, with its tool_call_id.

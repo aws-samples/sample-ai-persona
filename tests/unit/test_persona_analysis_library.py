@@ -2216,7 +2216,130 @@ class TestDefaultMetrics:
 
         assert len(meta["metrics"]) == 15
 
-    def test_named_metrics_stay_at_ten(self, lib: ModuleType, tmp_path: Path) -> None:
+    def test_named_metrics_stay_within_the_cap(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
         meta = self._emit(lib, tmp_path, metrics=[f"c{i}" for i in range(15)])
 
-        assert len(meta["metrics"]) == 10
+        assert len(meta["metrics"]) == 15
+
+
+class TestPersonProfile:
+    """One row per person from any history table (U6 addendum)."""
+
+    @staticmethod
+    def _history() -> Any:
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "row_no": [f"r{i}" for i in range(7)],  # a key: all different
+                "who": ["a", "a", "a", "b", "b", "c", None],
+                "at": pd.to_datetime(
+                    [
+                        "2025-01-04 09:00",  # Saturday morning
+                        "2025-01-06 19:30",
+                        "2025-01-06 20:10",
+                        "2025-01-02 12:00",
+                        "2025-01-03 12:00",
+                        "2024-12-01 08:00",
+                        "2025-01-05 10:00",
+                    ]
+                ),
+                "amount": [100, 200, 300, 50, 150, 400, 999],
+                "channel": ["web", "web", "shop", "shop", "shop", "web", "web"],
+                "memo": [f"m{i}" for i in range(7)],
+            }
+        )
+
+    def test_a_row_per_person_with_counts_dates_and_numbers(
+        self, lib: ModuleType
+    ) -> None:
+        got = lib.person_profile(self._history(), "who").set_index("who")
+
+        assert list(got.index) == ["a", "b", "c"]  # a row without a person is left out
+        assert got.loc["a", "回数（行）"] == 3
+        assert (
+            got.loc["a", "amountの合計"] == 600 and got.loc["a", "amountの平均"] == 200
+        )
+        # as of the table's last date (2025-01-06 20:10)
+        assert (
+            got.loc["a", "最後からの日数"] == 0 and got.loc["c", "最後からの日数"] == 36
+        )
+        assert got.loc["a", "活動日数"] == 2  # two different days
+        assert got.loc["a", "土日の割合"] == round(1 / 3, 4)
+
+    def test_time_of_day_and_category_shares_come_from_the_data(
+        self, lib: ModuleType
+    ) -> None:
+        got = lib.person_profile(self._history(), "who").set_index("who")
+
+        assert got.loc["a", "6〜11時の割合"] == round(1 / 3, 4)
+        assert got.loc["a", "18〜23時の割合"] == round(2 / 3, 4)
+        assert got.loc["a", "channel=webの割合"] == round(2 / 3, 4)
+        assert got.loc["b", "channel=shopの割合"] == 1.0
+
+    def test_keys_and_free_text_are_not_features(self, lib: ModuleType) -> None:
+        columns = " ".join(lib.person_profile(self._history(), "who").columns)
+
+        assert "row_no" not in columns and "memo" not in columns
+
+    def test_no_column_name_is_assumed(self, lib: ModuleType) -> None:
+        frame = self._history().rename(
+            columns={
+                "who": "ユーザー",
+                "at": "日時",
+                "amount": "利用分",
+                "channel": "機能",
+            }
+        )
+
+        got = lib.person_profile(frame, "ユーザー")
+
+        assert "利用分の合計" in got.columns and "機能=webの割合" in got.columns
+        assert "最後からの日数" in got.columns
+
+    def test_a_table_without_dates_still_gives_counts_and_shares(
+        self, lib: ModuleType
+    ) -> None:
+        frame = self._history().drop(columns=["at"])
+
+        got = lib.person_profile(frame, "who")
+
+        assert "最後からの日数" not in got.columns and "回数（行）" in got.columns
+
+    def test_the_columns_the_user_left_out_are_not_features(
+        self, lib: ModuleType
+    ) -> None:
+        got = lib.person_profile(self._history(), "who", skip=["amount"])
+
+        assert not any(c.startswith("amount") for c in got.columns)
+
+    def test_an_unknown_id_column_is_an_error_of_the_code(
+        self, lib: ModuleType
+    ) -> None:
+        with pytest.raises(KeyError):
+            lib.person_profile(self._history(), "nobody")
+
+    def test_the_profile_reaches_the_features_through_metrics(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            'buys = read_table("source_2")\n'
+            'prof = person_profile(buys, "customer_id")\n'
+            'df = read_table("source_1").merge(prof, on="customer_id", how="left")\n'
+            'df["seg"] = ["many" if (n or 0) >= 3 else "few" for n in df["回数（行）"]]\n'
+            'emit_result(df, "seg", "source_1", id_column="customer_id",'
+            ' metrics=[c for c in prof.columns if c != "customer_id"])\n'
+        )
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        names = {
+            f["name"]
+            for s in result["segments"]
+            for f in s["features"]
+            if f["kind"] == "derived"
+        }
+        assert "回数（行）" in names and any("合計" in n for n in names)

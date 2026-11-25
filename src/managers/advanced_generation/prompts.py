@@ -37,6 +37,8 @@ PLANNING_INSTRUCTIONS = (
     "- join: 表どうしを結合する（AI による詳細分析が使えるときだけ）\n"
     "- rfm: 履歴を新しさ・頻度・金額で点数にして分ける（同上）\n"
     "- compare_groups: 群の差が偶然かどうかを検定する（同上）\n"
+    "- person_profile: 1 人に複数行の履歴の表を、人ごとの 1 行（回数・日付・数値・"
+    "値の割合）にまとめ、その特徴で人を分ける（同上）\n"
     "依頼に添えた手順の候補から、目的に合う手順を組み合わせてください。"
     "手順ごとに reason を書き、使う表や列があれば table と column に profile の"
     "名前のまま書いてください。method は最後に層を作る手順の手法にします"
@@ -128,6 +130,12 @@ _STEP_GUIDE.update(
             '履歴を点数にします。load_playbook("rfm") を読み、run_code で rfm を使って'
             "新しさ・頻度・金額で点数にし、その点数で層に分けてください。"
         ),
+        AnalysisStepKind.PERSON_PROFILE: (
+            '履歴を人ごとの 1 行にまとめます。load_playbook("person_profile") を読み、'
+            "run_code で person_profile を使ってください（人の列は data_reading の "
+            "person_id、skip は data_reading の skip）。人ごとの表に結合し、その特徴の"
+            "列を metrics に渡して、その特徴で層に分けてください。"
+        ),
         AnalysisStepKind.COMPARE_GROUPS: (
             '群の差を検定します。load_playbook("compare_groups") を読み、run_code で '
             "compare_groups を使って、群の差が偶然かどうかを確かめてください。"
@@ -171,9 +179,12 @@ _TABLES_NOTE = (
 
 #: U6 (BR36, BR36.5, BR39): only when run_code is given.
 _DETAILED_NOTE = (
+    "\n値が欠けている人（例: アンケートに答えていない人）の欠損を、平均などで補完して"
+    "層の名前や特徴にしないでください。欠けたままにして、その指標の平均から外します。"
     "\n決まったツールで足りない手順には run_code を使ってください。"
-    "load_playbook で読める定石は次の 3 つです。\n"
+    "load_playbook で読める定石は次の 4 つです。\n"
     "- join: 表どうしの結合\n"
+    "- person_profile: 履歴の表を人ごとの 1 行（回数・日付・数値・値の割合）にまとめる\n"
     "- compare_groups: 群の差が偶然かどうかの検定\n"
     "- rfm: 履歴を新しさ・頻度・金額で点数にして分ける\n"
     "run_code の前に、計画の手順に合う定石を読んでください。"

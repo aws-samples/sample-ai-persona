@@ -8,7 +8,7 @@
 
 {# U6 の追加の設計: 計画の手順の種類と、読んだ定石の名前 #}
 {% macro step_label(kind) -%}
-{{ {"filter": "対象を絞って集計", "compare": "群どうしの比較", "cluster": "似た人をまとめる", "join": "CSV を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定"}.get(kind, kind) }}
+{{ {"filter": "対象を絞って集計", "compare": "群どうしの比較", "cluster": "似た人をまとめる", "join": "CSV を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定", "person_profile": "履歴を人ごとに集計"}.get(kind, kind) }}
 {%- endmacro %}
 
 {% macro encoding_label(encoding) -%}

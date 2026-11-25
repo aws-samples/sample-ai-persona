@@ -99,6 +99,8 @@ class TableReading:
         person_id: The column that identifies a person, if any.
         skip: Columns that are no trait of a person (IDs, codes).
         columns: Every column of the table (what a choice may name).
+        uncertain: The proposal could not be read from the names (no column
+            that says who the person is); the card asks the user to check.
     """
 
     alias: str
@@ -107,6 +109,7 @@ class TableReading:
     person_id: str | None
     skip: tuple[str, ...]
     columns: tuple[str, ...]
+    uncertain: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in READING_KINDS:
@@ -129,7 +132,9 @@ class TableReading:
         left = [c for c in dict.fromkeys(skip) if c != person_id]
         if person_id is not None:
             left.insert(0, person_id)
-        return replace(self, kind=kind, person_id=person_id, skip=tuple(left))
+        return replace(
+            self, kind=kind, person_id=person_id, skip=tuple(left), uncertain=False
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return drop_none(
@@ -140,6 +145,7 @@ class TableReading:
                 "person_id": self.person_id,
                 "skip": list(self.skip),
                 "columns": list(self.columns),
+                "uncertain": True if self.uncertain else None,
             }
         )
 
@@ -153,6 +159,7 @@ class TableReading:
             person_id=str(person) if person is not None else None,
             skip=tuple(str(c) for c in data.get("skip") or []),
             columns=tuple(str(c) for c in data.get("columns") or []),
+            uncertain=bool(data.get("uncertain")),
         )
 
 

@@ -59,7 +59,19 @@
 
     <h3 class="font-medium text-gray-900 mb-2">分析の要約</h3>
     <dl data-testid="advanced-result-summary" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-        {% if report %}
+        {% if result.prepare_reports | length > 1 %}
+        {# 複数のファイルのときは、ファイルごとの行数を並べる（先頭の表だけの行数にしない） #}
+        <div class="bg-gray-50 border border-gray-200 rounded-md p-3 sm:col-span-2" data-testid="advanced-result-rows-by-file">
+            <dt class="text-xs text-gray-600">使った行数（ファイルごと）</dt>
+            <dd class="text-sm text-gray-900">
+                <ul>
+                    {% for r in result.prepare_reports %}
+                    <li class="flex justify-between gap-3"><span>{{ result.source_names.get(r.source_id, "（削除したファイル）") }}</span><span class="tabular-nums font-semibold">{{ "{:,}".format(r.rows_read) }}{% if r.rows_excluded %}（除外 {{ "{:,}".format(r.rows_excluded) }}）{% endif %}</span></li>
+                    {% endfor %}
+                </ul>
+            </dd>
+        </div>
+        {% elif report %}
         <div class="bg-gray-50 border border-gray-200 rounded-md p-3">
             <dt class="text-xs text-gray-600">使った行数</dt>
             <dd class="text-xl font-semibold text-gray-900 tabular-nums">{{ "{:,}".format(report.rows_read) }}</dd>
