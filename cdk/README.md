@@ -75,7 +75,7 @@ flowchart TB
 | `enableWaf` / `allowedIpAddresses` | `true` / なし | CloudFront 用 WAF と IP 制限。ログイン画面への短時間の大量アクセスも止める。費用を抑えるなら `false` にする（月 $8 ほど減る） |
 | `enableAdditionalPersonaModels` | `false` | 追加ペルソナベースモデル（Bedrock Mantle 経由） |
 | `enableDatasetAnalysis` | `true` | データセット構造化分析ツール |
-| `enableAdvancedGeneration` | `true` | ペルソナ生成の「高度な生成（ベータ）」のタブ。`false` で再デプロイすると、資源は残したまま画面から外れる（下の「[高度な生成（ベータ）](#高度な生成ベータ)」）。閉域の構成ではいつも無効 |
+| `enableAdvancedGeneration` | `true` | ペルソナ生成の「高度な生成（ベータ）」のタブ。`false` で再デプロイすると、資源は残したまま画面から外れる（[高度な生成ガイド](../docs/advanced_generation_guide.md)）。閉域の構成ではいつも無効 |
 | `dataAgentRuntimeArn` / `dataAgentRegion` | なし | データ分析エージェント連携 |
 | `inferenceScope` | `global` | 推論の範囲（下の「[推論の範囲](#推論の範囲inferencescope)」） |
 | `surveyModelId` | 範囲の既定（Claude Haiku 5.5） | マスアンケートのモデル。`global.` か `jp.` の推論プロファイル ID |
@@ -361,31 +361,6 @@ Bedrock の推論を送ってよい範囲を `global`（既定）か `jp`（国�
 - 並列数を上げると、同じモデルを使う議論・インタビューのスロットリングが増えることがあります。上げるときは Bedrock のクォータ（`EstimatedTPMQuotaUsage`・`InvocationThrottles`）を確かめてください
 - 打ち切り時間を過ぎた実行は Step Functions が止め、アプリはアンケートをエラー（制限時間内に終わらなかった）にします。アプリにも同じ値を渡します（`SURVEY_EXECUTION_TIMEOUT_SECONDS`）
 - 実行の入力と結果は、アップロード用バケットの `survey-runs/` に置き、7 日で消えます（古いバージョンは 1 日）
-
-## 高度な生成（ベータ）
-
-大きな表のファイル（CSV・TSV）をブラウザから S3 に分割で上げ、AgentCore Code Interpreter のセッションで前準備と分析をしてからペルソナを作る機能です。公開の構成だけで使えます。
-
-| スタック | 足すもの |
-|---|---|
-| Data | DynamoDB の `SourceFiles`（上げたファイル）・`AdvancedGenerations`（生成・進み具合・結果。TTL `expires_at`）・`AppSettings`（管理者の設定）。オンデマンド、AWS 管理キー、PITR、RETAIN（`AppSettings` 以外は削除保護も）。アップロード用バケットのライフサイクルに、`sources/` の未完了の分割アップロードを 1 日で中止する規則と、`sources/`・`analysis-records/` の古いバージョンを 1 日で消す規則。バケットの暗号化（SSE-S3）は変えない |
-| App（公開の Stage だけ） | Code Interpreter（`SANDBOX`、実行ロールなし）、アップロード用バケットの CORS（カスタムリソース）、メトリクスフィルタ 3 つ |
-| App（両方） | タスクロールに 3 つのテーブル（GSI `owner_sub-created_at` は名前で）と `analysis-records/*` のタグの操作。公開の Stage だけ、この Code Interpreter の `StartCodeInterpreterSession`・`InvokeCodeInterpreter`・`StopCodeInterpreterSession` |
-
-アプリに渡す環境変数:
-
-| 名前 | 公開 | 閉域 |
-|---|---|---|
-| `ENABLE_ADVANCED_GENERATION` | `enableAdvancedGeneration` の値（既定 `true`） | `false` |
-| `CODE_INTERPRETER_ID` | Code Interpreter の ID | 渡さない |
-| `SOURCE_FILES_TABLE_NAME`・`ADVANCED_GENERATIONS_TABLE_NAME`・`APP_SETTINGS_TABLE_NAME` | テーブルの物理名 | テーブルの物理名（使わない） |
-
-- **CORS**: ブラウザがパートを S3 に直接 PUT し、パートの ETag を読むため、バケットに CORS を設定します。許すのは PUT だけで、オリジンはアプリの URL（CloudFront のドメイン）と、dev の Stage では手元のアプリの `http://localhost:8000` です。バケットは Data スタックにあり、オリジンは App スタックで決まるため、App スタックのカスタムリソース（`PutBucketCors`）で設定します。CORS は認可ではなく、書き込みは署名付き URL の署名で守ります
-- **Code Interpreter の実行ロール**: 既定では付けません（セッションの中のコードは AWS の認証情報を持たない）。dev のデプロイのあと、実行ロールなしでセッションが開き、署名付き URL でファイルを持ち込めることを確かめます。だめなときは `cdk/lib/deployment-profile.ts` の `CODE_INTERPRETER_EXECUTION_ROLE` を `'empty'` にしてデプロイし直すと、許可のポリシーを持たないロール（信頼は `bedrock-agentcore.amazonaws.com`、`aws:SourceAccount` の条件つき）を付けます。Code Interpreter は作り直しになります（状態は持たない）
-- **使える人**: 環境の値（上の 2 つ）がそろい、管理者の設定（`AppSettings`）に公開の値がない間は、管理者だけが使えます
-- **メトリクス**（名前空間 `AIPersona/AdvancedGeneration`、アラームなし）: `GenerationCompleted`、`GenerationFailed`（次元 `stage`・`error_code`）、`UploadFailed`（次元 `error_code`）。アプリのログの `advanced_generation.finished`・`advanced_generation.upload_completed` から数えます
-- **止めるとき**: 高度な生成だけを止めるなら `enableAdvancedGeneration: false` にしてデプロイし直します。テーブル・Code Interpreter・CORS はそのまま残ります。実行中の生成があるときにデプロイすると、その生成は失われます
-- **手元の開発**: dev の Stage の Code Interpreter とテーブルを使うときは、`.env` に上の環境変数（Code Interpreter の ID とテーブルの物理名）を書きます。手動の E2E は `uv run pytest tests/e2e/test_advanced_generation.py -m e2e`（実 AWS。Code Interpreter のセッションが 15 分を超えて続くことの確かめは、`E2E_CODE_INTERPRETER_ID` と `AWS_REGION` を付けたときだけ流れ、約 16 分かかります）
 
 ## 運用（管理者向け）
 
