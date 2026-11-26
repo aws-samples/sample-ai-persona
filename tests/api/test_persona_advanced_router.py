@@ -14,9 +14,9 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from src.managers.advanced_generation.manager import (
-    AdvancedGenerationError,
-    AdvancedPersonaGenerationManager,
+from src.managers.advanced_generation.errors import AdvancedGenerationError
+from src.managers.advanced_generation.manager import AdvancedPersonaGenerationManager
+from src.managers.advanced_generation.run_types import (
     ElapsedClock,
     GenerationProgress,
 )

@@ -40,9 +40,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from src.config import config
-from src.managers.advanced_generation.manager import (
+from src.managers.advanced_generation.manager import AdvancedPersonaGenerationManager
+from src.managers.advanced_generation.run_types import (
     AdvancedGenerationResult,
-    AdvancedPersonaGenerationManager,
     ElapsedClock,
     GenerationProgress,
 )

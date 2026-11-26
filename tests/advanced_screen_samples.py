@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from src.managers.advanced_generation.manager import AdvancedGenerationResult
+from src.managers.advanced_generation.run_types import AdvancedGenerationResult
 from src.models.advanced_generation import (
     AdvancedGeneration,
     EventType,

@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from src.managers.advanced_generation.manager import ElapsedClock
+from src.managers.advanced_generation.run_types import ElapsedClock
 from src.models.source_file import SourceFileListItem, SourceFileStatus
 from tests import advanced_screen_samples as s
 from tests.ui.conftest import UiHarness, render_page
