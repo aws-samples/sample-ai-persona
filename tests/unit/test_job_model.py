@@ -1,4 +1,4 @@
-"""Job モデル（約束 C14）の単体テスト。v1.0.0 で投入者（owner_sub）を持つ。"""
+"""Unit tests for the Job model, which carries the submitter (owner_sub)."""
 
 from datetime import datetime
 

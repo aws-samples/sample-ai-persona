@@ -1,6 +1,4 @@
-"""
-build_kb_prompt_section / build_dataset_prompt_section 単体テスト
-"""
+"""Unit tests for build_kb_prompt_section / build_dataset_prompt_section."""
 
 import pytest
 
@@ -12,10 +10,10 @@ from src.prompts.discussion_interview_prompts import (
 
 @pytest.mark.unit
 class TestBuildKbPromptSection:
-    """build_kb_prompt_section のテスト"""
+    """Tests for build_kb_prompt_section."""
 
     def test_basic_kb_section(self):
-        """KB名と説明が含まれる"""
+        """KB name and description are included."""
         result = build_kb_prompt_section(
             name="商品KB", description="商品情報データベース"
         )
@@ -25,7 +23,7 @@ class TestBuildKbPromptSection:
         assert "search_knowledge_base" in result
 
     def test_with_metadata_filters(self):
-        """メタデータフィルタが反映される"""
+        """Metadata filters are reflected."""
         result = build_kb_prompt_section(
             name="KB",
             description="desc",
@@ -35,14 +33,14 @@ class TestBuildKbPromptSection:
         assert "フィルタ" in result
 
     def test_without_metadata_filters(self):
-        """フィルタなしの場合フィルタ文言が出ない"""
+        """No filter wording appears without a filter."""
         result = build_kb_prompt_section(
             name="KB", description="desc", metadata_filters=None
         )
         assert "フィルタ" not in result
 
     def test_empty_description(self):
-        """説明が空でもエラーにならない"""
+        """An empty description does not cause an error."""
         result = build_kb_prompt_section(
             name="KB", description="", metadata_filters=None
         )
@@ -52,7 +50,7 @@ class TestBuildKbPromptSection:
 
 @pytest.mark.unit
 class TestBuildDatasetPromptSection:
-    """build_dataset_prompt_section のテスト（表示用記述子を受け取る新契約）"""
+    """Tests for build_dataset_prompt_section (takes display descriptors)."""
 
     @pytest.fixture
     def descriptor(self):
@@ -68,7 +66,7 @@ class TestBuildDatasetPromptSection:
         }
 
     def test_basic_dataset_section(self, descriptor):
-        """表示メタデータ（名前・説明・別名・列・行数）がプロンプトに含まれる"""
+        """Display metadata (name, description, alias, columns, row count) is included in the prompt."""
         result = build_dataset_prompt_section([descriptor])
 
         assert "購買データ" in result
@@ -78,7 +76,7 @@ class TestBuildDatasetPromptSection:
         assert "analyze_dataset" in result
 
     def test_column_type_and_description_shown(self, descriptor):
-        """列の型と説明文がプロンプトに含まれる"""
+        """Column types and descriptions are included in the prompt."""
         result = build_dataset_prompt_section([descriptor])
         assert "(integer)" in result
         assert "税込金額" in result
@@ -86,7 +84,7 @@ class TestBuildDatasetPromptSection:
         assert "顧客ID" in result
 
     def test_string_columns_still_supported(self):
-        """列が名前文字列のリストでも描画できる（後方互換）"""
+        """Columns given as a list of name strings still render (backward compatible)."""
         descriptor = {
             "alias": "dataset_1",
             "name": "d",
@@ -98,29 +96,29 @@ class TestBuildDatasetPromptSection:
         assert "a" in result and "b" in result
 
     def test_does_not_leak_backend_path(self, descriptor):
-        """backend_path（s3_path）はプロンプトへ露出しない"""
+        """backend_path (s3_path) is not exposed in the prompt."""
         result = build_dataset_prompt_section([descriptor])
         assert "s3://" not in result
         assert "read_csv" not in result
         assert "CREATE SECRET" not in result
 
     def test_does_not_leak_forced_filter_value(self, descriptor):
-        """binding フィルタ値（例: U123）はプロンプトへ露出しない。
+        """A binding filter value (e.g. U123) is not exposed in the prompt.
 
-        記述子には forced_filter 値が含まれないため、生成物にも出ない。
+        The descriptor carries no forced_filter value, so it cannot reach the output.
         """
         result = build_dataset_prompt_section([descriptor])
         assert "U123" not in result
-        # SQL 断片も無いこと
+        # no SQL fragments either
         assert "SELECT" not in result
         assert "WHERE" not in result
 
     def test_empty_datasets_returns_empty(self):
-        """記述子が空の場合、空文字を返す"""
+        """An empty descriptor list returns an empty string."""
         assert build_dataset_prompt_section([]) == ""
 
     def test_multiple_datasets(self, descriptor):
-        """複数データセットが別名で含まれる"""
+        """Multiple datasets are included by alias."""
         ds2 = {
             "alias": "dataset_2",
             "name": "行動ログ",

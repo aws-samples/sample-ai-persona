@@ -1,4 +1,4 @@
-"""AppSettingsStore (``AppSettings``, contract C6) with moto. U1 only reads (BR1.2)."""
+"""AppSettingsStore (``AppSettings``) with moto. Read-only here."""
 
 from typing import Any
 
@@ -89,7 +89,7 @@ def _item(**overrides: Any) -> dict[str, Any]:
 
 
 class TestPutIfVersion:
-    """U6 BR34.4 / NFR3.32: the version read is the condition of the write."""
+    """The version read is the condition of the write."""
 
     def test_version_0_writes_only_when_there_is_no_item(self, store):
         assert store.put_if_version(ADVANCED_GENERATION_SETTING_KEY, _item(), 0) == 1

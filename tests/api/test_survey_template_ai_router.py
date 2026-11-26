@@ -1,8 +1,8 @@
-"""Survey ルーターの API テスト（AI でのテンプレート作成、レポート生成、ペルソナ元データの取り込み）。
+"""API tests for the Survey router (AI template creation, report generation, persona source data import).
 
-本物の U7 の Manager を moto の上で動かし（tests/api/u7_world.py）、外部に出るところ
-（AI・データ分析エージェント）だけを Mock にする。エラーは文言ではなくコードで確かめる
-（期待値はカタログをコードで引いて作る）。例外の文言が画面に漏れないことも確かめる。
+The real Managers run on moto (tests/api/u7_world.py) and only the external parts
+(AI and the data analysis agent) are mocked. Errors are checked by code, not text
+(expected values come from the catalog), and exception text must not leak to the screen.
 """
 
 import json
@@ -27,7 +27,7 @@ SECRET = "arn:aws:bedrock:secret-internal-detail"
 
 @pytest.fixture
 def aw(client, survey_world):
-    """ME signed in, with the real U7 Managers behind the routers."""
+    """ME signed in, with the real Managers behind the routers."""
     ME.login(client)
     world = ApiWorld(survey_world)
     with ExitStack() as stack:
@@ -54,7 +54,7 @@ def _post(client, url: str, body: dict | list | str):
 
 
 # =============================================================================
-# AI ヒアリングの 1 ターン（POST /templates/ai-chat、Issue #23、BR2.3）
+# One turn of the AI interview (POST /templates/ai-chat, Issue #23)
 # =============================================================================
 
 
@@ -125,7 +125,7 @@ class TestAiChat:
 
 
 # =============================================================================
-# 設問ドラフトの生成（POST /templates/ai-generate、Issue #23、BR2.3）
+# Question draft generation (POST /templates/ai-generate, Issue #23)
 # =============================================================================
 
 
@@ -140,7 +140,7 @@ class TestAiGenerate:
                     "text": " 好きな味は？ ",
                     "options": [" 甘い ", "", "苦い", "酸っぱい"],
                     "allow_multiple": True,
-                    # 選択肢の数を超える上限は 0（無制限）に丸める
+                    # A limit above the number of choices is rounded to 0 (unlimited)
                     "max_selections": 9,
                 },
                 {"question_type": "free_text", "text": "理由を教えてください"},
@@ -179,7 +179,7 @@ class TestAiGenerate:
         assert response.json() == {"error": _message(ErrorCode.SURVEY_AI_NO_QUESTIONS)}
 
     def test_question_of_an_unknown_type_is_refused(self, aw, client):
-        # Manager は AI の出力の不備も SurveyTemplateValidationError で返すため 400 になる
+        # The Manager reports malformed AI output as SurveyTemplateValidationError, so this is a 400
         aw.ai.generate_survey_questions_draft.return_value = {
             "questions": [{"question_type": "ranking", "text": "順位"}]
         }
@@ -229,7 +229,7 @@ class TestAiGenerate:
 
 
 # =============================================================================
-# 2 つの AI の入口に共通の入力検査と権限
+# Input checks and permissions shared by the two AI entrances
 # =============================================================================
 
 
@@ -294,7 +294,7 @@ class TestAiInputs:
         _ai_mock(aw, url).assert_not_called()
 
     def test_user_without_a_role_never_reaches_the_ai(self, aw, client, url):
-        # ロールのない利用者は AuthMiddleware が /no-role へ送る（AI_EXECUTE を持たない）
+        # Users without a role are sent to /no-role by AuthMiddleware (they lack AI_EXECUTE)
         NO_ROLE.login(client)
 
         response = client.post(
@@ -310,7 +310,7 @@ class TestAiInputs:
 
 
 # =============================================================================
-# インサイトレポートの生成（POST /results/{id}/report/generate、BR2.11）
+# Insight report generation (POST /results/{id}/report/generate)
 # =============================================================================
 
 
@@ -385,7 +385,7 @@ class TestReportStream:
 
 
 # =============================================================================
-# ペルソナ元データの取り込み（CSV・DWH、admin だけ、BR4.1）
+# Persona source data import (CSV and DWH, admin only)
 # =============================================================================
 
 _CSV = "persona,age,好きな色\n東京の会社員,34,青\n大阪の学生,21,赤\n".encode()
@@ -412,7 +412,7 @@ class TestCustomUpload:
 
         assert response.status_code == 200
         html = response.text
-        assert 'value="顧客"' in html  # 既定の名前はファイル名
+        assert 'value="顧客"' in html  # The default name is the file name
         for column in ("persona", "age", "好きな色"):
             assert f'<option value="{column}"' in html
         assert "東京の会社員" in html
@@ -472,10 +472,10 @@ class TestCustomUpload:
         assert "東京の会社員" in html
         assert "34" in html
         assert "好きな色の名前" in html and "青" in html
-        assert "大阪の学生" not in html  # 1 行目だけ
+        assert "大阪の学生" not in html  # First row only
 
     def test_prompt_preview_of_a_missing_upload_is_a_404_toast(self, aw, client):
-        # 一時ファイルがない（S3_OBJECT_NOT_FOUND）は NOT_FOUND なので共通の例外ハンドラが答える
+        # A missing temporary file (S3_OBJECT_NOT_FOUND) is NOT_FOUND, so the shared exception handler answers
         response = client.post(
             "/survey/persona-data/preview-prompt",
             data={"temp_key": "persona-dataset/temp/none.csv"},
@@ -508,7 +508,7 @@ class TestDwh:
         assert 'name="temp_key" value="persona-dataset/temp/dwh-a.csv"' in html
         assert 'value="抽出"' in html
         assert '<option value="persona" selected' in html
-        # CSV にない列の提案は捨て、CSV にある列はその他の列として出す
+        # Suggestions for columns not in the CSV are dropped; CSV columns are returned as other columns
         assert "存在しない列" not in html
         assert 'value="色"' in html
 
@@ -541,7 +541,7 @@ class TestDwh:
 
     @staticmethod
     def _until_read(event_queue) -> None:
-        # ルーターが読み終える前に終わると、残りの進捗は捨てられる（flush）
+        # If the job finishes before the router reads it, the remaining progress is dropped (flush)
         deadline = time.monotonic() + 5
         while not event_queue.empty() and time.monotonic() < deadline:
             time.sleep(0.01)

@@ -1,7 +1,5 @@
 """
-Agentモード議論のコンテキスト管理改善テスト
-
-SPEC: 20260330-1606_agent-discussion-context-management
+Tests for context management in agent-mode discussions.
 """
 
 from datetime import datetime
@@ -31,7 +29,7 @@ def _create_test_persona(
 
 
 class TestPersonaAgentClearHistory:
-    """PersonaAgent.clear_conversation_history() のテスト"""
+    """Tests for PersonaAgent.clear_conversation_history()."""
 
     def setup_method(self):
         self.persona = _create_test_persona()
@@ -43,31 +41,31 @@ class TestPersonaAgentClearHistory:
         self.persona_agent = PersonaAgent(self.persona, "test prompt", self.mock_agent)
 
     def test_clear_conversation_history(self):
-        """会話履歴がクリアされること"""
+        """Conversation history is cleared."""
         assert len(self.mock_agent.messages) == 2
         self.persona_agent.clear_conversation_history()
         assert len(self.mock_agent.messages) == 0
 
     def test_clear_conversation_history_already_empty(self):
-        """空の履歴でもエラーにならないこと"""
+        """An empty history does not raise."""
         self.mock_agent.messages = []
         self.persona_agent.clear_conversation_history()
         assert len(self.mock_agent.messages) == 0
 
     def test_clear_conversation_history_agent_none(self):
-        """agent=Noneでもエラーにならないこと（dispose後）"""
+        """agent=None (after dispose) does not raise."""
         self.persona_agent.agent = None
         self.persona_agent.clear_conversation_history()  # should not raise
 
     def test_clear_conversation_history_no_messages_attr(self):
-        """messagesアトリビュートがないエージェントでもエラーにならないこと"""
+        """An agent without a messages attribute does not raise."""
         self.mock_agent = Mock(spec=[])
         self.persona_agent.agent = self.mock_agent
         self.persona_agent.clear_conversation_history()  # should not raise
 
 
 class TestFacilitatorAgentClearHistory:
-    """FacilitatorAgent.clear_conversation_history() のテスト"""
+    """Tests for FacilitatorAgent.clear_conversation_history()."""
 
     def setup_method(self):
         self.mock_agent = Mock()
@@ -78,19 +76,19 @@ class TestFacilitatorAgentClearHistory:
         self.facilitator = FacilitatorAgent(3, "", self.mock_agent)
 
     def test_clear_conversation_history(self):
-        """会話履歴がクリアされること"""
+        """Conversation history is cleared."""
         assert len(self.mock_agent.messages) == 2
         self.facilitator.clear_conversation_history()
         assert len(self.mock_agent.messages) == 0
 
     def test_clear_conversation_history_agent_none(self):
-        """agent=Noneでもエラーにならないこと"""
+        """agent=None does not raise."""
         self.facilitator.agent = None
         self.facilitator.clear_conversation_history()  # should not raise
 
 
 class TestManagerBuildPersonaPrompt:
-    """AgentDiscussionManager._build_persona_prompt() のテスト"""
+    """Tests for AgentDiscussionManager._build_persona_prompt()."""
 
     def setup_method(self):
         from src.managers.agent_discussion_manager import AgentDiscussionManager
@@ -100,7 +98,7 @@ class TestManagerBuildPersonaPrompt:
         )
 
     def test_first_round_no_context(self):
-        """ラウンド1・コンテキストなし: 具体的なエピソードを引き出す問いかけ"""
+        """Round 1 without context: prompt draws out concrete episodes."""
         persona_agent = Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
@@ -112,7 +110,7 @@ class TestManagerBuildPersonaPrompt:
         assert "具体的な場面" in prompt
 
     def test_with_round_summaries(self):
-        """ラウンド2以降: 要約コンテキストが含まれること"""
+        """Round 2 onward: the summary context is included."""
         persona_agent = Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
@@ -138,7 +136,7 @@ class TestManagerBuildPersonaPrompt:
         assert "ラウンド2" in prompt
 
     def test_facilitator_message_section(self):
-        """ファシリテータの問いかけが専用セクションに表示されること"""
+        """The facilitator question appears in its dedicated section."""
         persona_agent = Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
@@ -160,7 +158,7 @@ class TestManagerBuildPersonaPrompt:
         assert "論点整理" in prompt
 
     def test_mid_round_phase_instruction(self):
-        """中盤ラウンド: 考えの変化・新たな観点を促す指示"""
+        """Middle rounds: prompt encourages changes of mind and new viewpoints."""
         persona_agent = Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
@@ -177,7 +175,7 @@ class TestManagerBuildPersonaPrompt:
         assert "変化" in prompt or "気づ" in prompt
 
     def test_final_round_phase_instruction(self):
-        """最終ラウンド: 結論を促す指示"""
+        """Final round: prompt asks for a conclusion."""
         persona_agent = Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
@@ -195,7 +193,7 @@ class TestManagerBuildPersonaPrompt:
 
 
 class TestManagerBuildSummaryPrompt:
-    """AgentDiscussionManager._build_summary_prompt() のテスト"""
+    """Tests for AgentDiscussionManager._build_summary_prompt()."""
 
     def setup_method(self):
         from src.managers.agent_discussion_manager import AgentDiscussionManager
@@ -205,7 +203,7 @@ class TestManagerBuildSummaryPrompt:
         )
 
     def test_summary_prompt_contains_structure(self):
-        """要約プロンプトに構造的な指示が含まれること"""
+        """The summary prompt contains structural instructions."""
         messages = [
             Message.create_new("p1", "田中", "価格が重要", message_type="statement"),
             Message.create_new("p2", "佐藤", "品質が重要", message_type="statement"),
@@ -215,7 +213,7 @@ class TestManagerBuildSummaryPrompt:
         assert "問い" in prompt
 
     def test_summary_prompt_with_previous_summaries(self):
-        """過去の要約が含まれること"""
+        """Previous summaries are included."""
         messages = [
             Message.create_new(
                 "p1", "田中", "具体的な価格帯は...", message_type="statement"
@@ -230,7 +228,7 @@ class TestManagerBuildSummaryPrompt:
         assert "価格vs品質" in prompt
 
     def test_summary_prompt_without_previous_summaries(self):
-        """ラウンド1では過去要約セクションが含まれないこと"""
+        """Round 1 has no previous-summary section."""
         messages = [
             Message.create_new("p1", "田中", "意見です", message_type="statement"),
         ]
@@ -239,7 +237,7 @@ class TestManagerBuildSummaryPrompt:
 
 
 def _run(manager, personas, persona_agents, facilitator, streaming=False) -> list:
-    """Consume the round loop (U6: the runner is a member who may read everyone)."""
+    """Consume the round loop (the runner is a member who may read everyone)."""
     from tests.unit.discussion_world import OWNER
 
     return list(
@@ -255,23 +253,20 @@ def _run(manager, personas, persona_agents, facilitator, streaming=False) -> lis
 
 
 class TestAgentDiscussionContextManagement:
-    """AgentDiscussionManager のコンテキスト管理テスト
-
-    SPEC: 20260330-1606_agent-discussion-context-management
-    """
+    """Context management tests for AgentDiscussionManager."""
 
     def _setup_manager_and_mocks(self, sample_persona, sample_persona_2, rounds=2):
-        """共通セットアップ"""
+        """Common setup."""
         mock_agent_service = Mock()
 
         manager = AgentDiscussionManager(
             agent_service=mock_agent_service,
             dataset_store=Mock(),
-            # U6: 発言の直前の確かめ直しは常に通す
+            # The pre-utterance recheck always passes
             participants=Mock(can_read_all=Mock(return_value=True)),
         )
 
-        # ペルソナエージェント（messages属性をリストで持つ）
+        # Persona agents (messages is a list)
         mock_agent_1 = Mock(spec=PersonaAgent)
         mock_agent_1.get_persona_id.return_value = sample_persona.id
         mock_agent_1.get_persona_name.return_value = sample_persona.name
@@ -292,7 +287,7 @@ class TestAgentDiscussionContextManagement:
 
         persona_agents = [mock_agent_1, mock_agent_2]
 
-        # ファシリテータ
+        # Facilitator
         mock_facilitator = Mock(spec=FacilitatorAgent)
         mock_facilitator.start_discussion.return_value = "議論を開始します"
         mock_facilitator.invoke.return_value = "ラウンドの要約"
@@ -306,20 +301,20 @@ class TestAgentDiscussionContextManagement:
         return manager, persona_agents, mock_facilitator
 
     def test_history_cleared_between_rounds(self, sample_persona, sample_persona_2):
-        """ラウンド2以降で会話履歴がクリアされること"""
+        """History is cleared from round 2 onward."""
         manager, persona_agents, facilitator = self._setup_manager_and_mocks(
             sample_persona, sample_persona_2, rounds=2
         )
 
         _run(manager, [sample_persona, sample_persona_2], persona_agents, facilitator)
 
-        # ラウンド2開始時にクリアが呼ばれること
+        # Cleared when round 2 starts
         for agent in persona_agents:
             agent.clear_conversation_history.assert_called_once()
         facilitator.clear_conversation_history.assert_called_once()
 
     def test_history_not_cleared_in_round_1(self, sample_persona, sample_persona_2):
-        """ラウンド1ではクリアされないこと"""
+        """History is not cleared in round 1."""
         manager, persona_agents, facilitator = self._setup_manager_and_mocks(
             sample_persona, sample_persona_2, rounds=1
         )
@@ -331,28 +326,28 @@ class TestAgentDiscussionContextManagement:
         facilitator.clear_conversation_history.assert_not_called()
 
     def test_round_summaries_passed_to_prompt(self, sample_persona, sample_persona_2):
-        """ラウンド要約がプロンプト生成に使用されること（ラウンド2のプロンプトに要約が含まれる）"""
+        """Round summaries are used for prompt building (round 2 prompt includes them)."""
         manager, persona_agents, facilitator = self._setup_manager_and_mocks(
             sample_persona, sample_persona_2, rounds=2
         )
 
         _run(manager, [sample_persona, sample_persona_2], persona_agents, facilitator)
 
-        # ラウンド2でrespond()に渡されたプロンプトにラウンド1の要約が含まれること
+        # The prompt passed to respond() in round 2 includes the round 1 summary
         round2_respond_calls = persona_agents[0].respond.call_args_list[1:]
         for call in round2_respond_calls:
             prompt = call[0][0]
             assert "ラウンドの要約" in prompt
 
     def test_respond_called_with_none_context(self, sample_persona, sample_persona_2):
-        """respond()がcontext=Noneで呼ばれること（二重コンテキスト防止）"""
+        """respond() is called with context=None (avoids double context)."""
         manager, persona_agents, facilitator = self._setup_manager_and_mocks(
             sample_persona, sample_persona_2, rounds=1
         )
 
         _run(manager, [sample_persona, sample_persona_2], persona_agents, facilitator)
 
-        # 全てのrespond呼び出しでcontext=Noneであること
+        # context=None on every respond call
         for agent in persona_agents:
             for call in agent.respond.call_args_list:
                 args = call[0]
@@ -362,12 +357,12 @@ class TestAgentDiscussionContextManagement:
     def test_streaming_history_cleared_between_rounds(
         self, sample_persona, sample_persona_2
     ):
-        """ストリーミング版でもラウンド間で履歴がクリアされること"""
+        """The streaming variant also clears history between rounds."""
         manager, persona_agents, facilitator = self._setup_manager_and_mocks(
             sample_persona, sample_persona_2, rounds=2
         )
 
-        # ストリーミング版はジェネレータなので全て消費する
+        # The streaming variant is a generator, so consume it fully
         results = _run(
             manager,
             [sample_persona, sample_persona_2],
@@ -376,12 +371,12 @@ class TestAgentDiscussionContextManagement:
             streaming=True,
         )
 
-        # ラウンド2開始時にクリアが呼ばれること
+        # Cleared when round 2 starts
         for agent in persona_agents:
             agent.clear_conversation_history.assert_called_once()
         facilitator.clear_conversation_history.assert_called_once()
 
-        # 結果にメッセージとcompleteが含まれること
+        # The result contains messages and complete
         message_end_results = [r for r in results if r[0] == "message_end"]
         complete_results = [r for r in results if r[0] == "complete"]
         assert len(message_end_results) > 0

@@ -1,4 +1,4 @@
-{# 知識ファイルプレビューパーシャル（htmx swap用） #}
+{# Knowledge file preview partial (htmx swap) #}
 <div class="bg-blue-50 rounded-lg p-4 border border-blue-200">
     <div class="flex items-center gap-2 mb-3">
         <svg class="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -17,11 +17,9 @@
         <input type="hidden" name="strategy_type" value="semantic">
 
         {#
-          入力を直せば解決するエラーの表示先（Issue #117）。
-          追加先は memory_list.html と同じエンドポイントなので、サーバーは
-          HX-Retarget（find 相対セレクタ）で送信元フォーム内のこの領域を指す。
-          手動入力タブと同時にDOM上へ存在するため id ではなく class にする
-          （id 重複だと別フォームの領域が選ばれ、エラーが見えない）。
+          Where errors fixable by correcting input are shown (Issue #117).
+                    The add target is the same endpoint as memory_list.html, so the server points at this area inside the submitting form with HX-Retarget (a find-relative selector).
+                    It uses a class, not an id, because it exists in the DOM at the same time as the manual input tab (with duplicate ids another form's area would be picked and the error would be invisible).
         #}
         <div class="memory-form-error"></div>
 

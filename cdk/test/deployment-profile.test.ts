@@ -8,12 +8,12 @@ import {
 } from '../lib/deployment-profile';
 import { ClosedStageParameters, closedDevParameter, devParameter, prodParameter } from '../parameters';
 
-// 範囲ごとの既定（U5 BR1.6 と計画の「設計からの変更」）。tests/unit/test_model_registry.py にも
-// 同じ値を書く（BR4.6）。どちらかを変えたら両方のテストが落ちる
+// Defaults per scope. The same values are written in tests/unit/test_model_registry.py;
+// changing one makes both tests fail
 const GLOBAL_DEFAULTS = {
   bedrockModelId: 'global.anthropic.claude-sonnet-5-5',
   agentModelId: 'global.anthropic.claude-haiku-5-5',
-  // アンケートは Step Functions のオンデマンド推論で Haiku 5.5（FR2.1、FR2.3）
+  // The survey uses Haiku 5.5 with on-demand inference through Step Functions
   surveyModelId: 'global.anthropic.claude-haiku-5-5',
 };
 const JP_DEFAULTS = {
@@ -24,10 +24,10 @@ const JP_DEFAULTS = {
 const MANTLE_MODEL_IDS = ['openai.gpt-5.6-terra', 'openai.gpt-5.6-luna', 'google.gemma-4-31b'];
 
 /**
- * DeploymentProfile（U1 閉域、ADR-002、BR1.1〜BR1.8）の単体テスト。
+ * Unit tests for DeploymentProfile.
  *
- * resolveDeploymentProfile() は CDK の構成部品に依存しない純粋な関数で、Stage を作らずに
- * モードの解決と閉域のパラメータの検査を確かめる。
+ * resolveDeploymentProfile() is a pure function with no CDK constructs, so mode resolution
+ * and the closed-network parameter checks run without creating a Stage.
  */
 
 const REGION = 'ap-northeast-1';
@@ -56,7 +56,7 @@ describe('resolveDeploymentProfile: モードの解決（BR1.3、BR1.5）', () =
       deploymentMode: 'public',
       authMode: 'oidc',
       createCognitoDomain: true,
-      // U5: 範囲は global、モデル ID は global の既定、明示した値なし
+      // Scope is global, model IDs are the global defaults, no explicit values
       inferenceScope: 'global',
       modelIds: GLOBAL_DEFAULTS,
       explicitModelIds: {},
@@ -75,7 +75,7 @@ describe('resolveDeploymentProfile: モードの解決（BR1.3、BR1.5）', () =
       domainName: DOMAIN_NAME,
       allowedCidrs: [],
       createTestEnvironment: true,
-      // 閉域対応 U2（BR2.1、BR3.1）: AZ の数は既定 2、Resolver は既定で作らない
+      // AZ count defaults to 2 and the Resolver is not created by default
       endpointAzCount: 2,
     });
   });
@@ -178,13 +178,13 @@ describe('mergeClosedStageContext: コンテキストを閉域の既定に重ね
       allowedCidrs: [],
       createTestEnvironment: false,
       vpcCidr: '10.0.0.0/16',
-      // 閉域対応 U2（BR2.2）: dev はインターフェイス型エンドポイントを 1 AZ に置く
+      // dev places the interface endpoints in one AZ
       endpointAzCount: 1,
     });
     expect(closedDevParameter.envName).toBe('dev-closed');
     expect(closedDevParameter.deploymentMode).toBe('closed');
-    // 公開の dev の値（モデル・台数など）はそのまま写す。モデル ID は省略（U5 BR1.5）なので、
-    // 解決後の 3 つの ID が同じことを比べる
+    // The public dev values (models, task counts, etc.) are copied as is. Model IDs are omitted,
+    // so compare that the three resolved IDs are the same
     const modelIdsOf = (parameter: typeof devParameter) => ({
       inferenceScope: parameter.inferenceScope,
       bedrockModelId: parameter.bedrockModelId,
@@ -254,7 +254,7 @@ describe('resolveDeploymentProfile: 閉域で使えない機能（U3 BR5.1〜BR5
       NEMOTRON_DATASET_KEY: DEFAULT_KEY,
       DATA_AGENT_ALLOWED: 'false',
       ASSET_DELIVERY: 'proxy',
-      // 高度な生成（ベータ、U1、FR2.5）: 閉域では Code Interpreter を作らない
+      // Advanced generation (beta): no Code Interpreter in the closed Stage
       ENABLE_ADVANCED_GENERATION: 'false',
     });
   });

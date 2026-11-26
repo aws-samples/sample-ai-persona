@@ -1,12 +1,12 @@
-"""Markdown→HTML変換時のXSS対策サニタイズユーティリティ
+"""Sanitizing utility against XSS when converting Markdown to HTML
 
-変換は markdown-it-py（CommonMark 準拠で、処理時間が入力長にほぼ比例する）で行い、
-入力中の生の HTML も通したうえで、最後に nh3 で許可したタグ・属性だけを残す。
+Conversion uses markdown-it-py (CommonMark compliant; processing time is roughly proportional to input length),
+lets raw HTML in the input through, and finally keeps only allowed tags and attributes with nh3.
 
-日本語の AI 出力を以前（Python-Markdown）と同じように表示するため、CommonMark と
-異なる点を 2 つ補っている（`#` の直後に空白がない見出し、日本語に隣接した強調）。
-強調の補正は markdown-it-py の内部（``StateInline.scanDelims``）に合わせて書いているため、
-依存のメジャーバージョンを上げるときは ``tests/unit/test_sanitize.py`` で確かめる。
+To render Japanese AI output the same way as the earlier Python-Markdown, two differences from CommonMark are
+compensated for (headings with no space right after `#`, and emphasis adjacent to Japanese).
+The emphasis fix mirrors markdown-it-py internals (``StateInline.scanDelims``),
+so verify with ``tests/unit/test_sanitize.py`` when bumping the dependency's major version.
 """
 
 import re
@@ -22,7 +22,7 @@ from markdown_it.rules_inline.state_inline import Scanned, StateInline
 from markdown_it.token import Token
 from markdown_it.utils import EnvType, OptionsDict
 
-# markdownフィルタで許可するHTMLタグ
+# HTML tags allowed by the markdown filter
 ALLOWED_TAGS = {
     "p",
     "h1",
@@ -63,7 +63,7 @@ ALLOWED_TAGS = {
     "sub",
 }
 
-# 許可する属性
+# Allowed attributes
 ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
     "a": {"href", "title", "target"},
     "img": {"src", "alt", "title", "width", "height"},
@@ -76,7 +76,7 @@ ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
 }
 
 
-# 日本語（かな・漢字・全角記号）の範囲
+# Japanese ranges (kana, kanji, full-width symbols)
 _CJK_RANGES = (
     (0x3000, 0x303F),  # CJK symbols and punctuation (「」、。)
     (0x3040, 0x30FF),  # Hiragana, Katakana
@@ -176,7 +176,7 @@ def _build_renderer() -> MarkdownIt:
         raise RuntimeError("linkify-it-py is required: install markdown-it-py[linkify]")
     md.linkify.set({"fuzzy_link": False, "fuzzy_email": False, "fuzzy_ip": False})
     for schema in ("//", "ftp:", "mailto:"):
-        md.linkify.add(schema, None)  # http(s):// だけを自動リンクにする
+        md.linkify.add(schema, None)  # Only http(s):// is auto-linked
     md.inline.ruler.at("emphasis", _emphasis_cjk)
 
     def link_open(
@@ -188,7 +188,7 @@ def _build_renderer() -> MarkdownIt:
     ) -> str:
         token = tokens[idx]
         if token.markup == "linkify":
-            # 自動リンクにした URL だけ新しいタブで開く（rel は nh3 が付ける）
+            # Only auto-linked URLs open in a new tab (nh3 adds rel)
             token.attrSet("target", "_blank")
         return self.renderToken(tokens, idx, options, env)
 

@@ -1,4 +1,4 @@
-"""行動データ自動紐付け機能のユニットテスト"""
+"""Unit tests for the behavior-data auto-link feature."""
 
 import pytest
 from unittest.mock import Mock, patch
@@ -21,7 +21,7 @@ def mock_persona():
 
 
 class TestAutoLinkBehaviorFlag:
-    """auto_link_behavior フラグのバリデーション（PersonaGenerationManager）"""
+    """Validation of the auto_link_behavior flag (PersonaGenerationManager)."""
 
     def _make_manager(self):
         from src.managers.persona_generation_manager import PersonaGenerationManager
@@ -36,7 +36,7 @@ class TestAutoLinkBehaviorFlag:
         return mgr, mock_agent_service
 
     def test_auto_link_forces_persona_count_to_one(self, mock_persona):
-        """auto_link_behavior=True の場合、persona_count が 1 に強制される"""
+        """With auto_link_behavior=True, persona_count is forced to 1."""
         from src.managers.persona_generation_manager import _PersonaListOutput
 
         mgr, mock_as = self._make_manager()
@@ -71,7 +71,7 @@ class TestAutoLinkBehaviorFlag:
         assert "1個" in call_kwargs["prompt"]
 
     def test_auto_link_appends_behavior_extraction_instruction(self, mock_persona):
-        """auto_link_behavior=True の場合、行動データ抽出指示がpromptに追記される"""
+        """With auto_link_behavior=True, behavior-data extraction instructions are appended to the prompt."""
         from src.managers.persona_generation_manager import _PersonaListOutput
 
         mgr, mock_as = self._make_manager()
@@ -108,7 +108,7 @@ class TestAutoLinkBehaviorFlag:
         assert "行動データCSVエクスポート" in prompt
 
     def test_without_auto_link_no_behavior_instruction(self, mock_persona):
-        """auto_link_behavior=False の場合、行動データ抽出指示は追記されない"""
+        """With auto_link_behavior=False, no behavior-data extraction instructions are appended."""
         from src.managers.persona_generation_manager import _PersonaListOutput
 
         mgr, mock_as = self._make_manager()
@@ -145,7 +145,7 @@ class TestAutoLinkBehaviorFlag:
 
 
 class TestInferBehaviorDataType:
-    """infer_behavior_data_type のテスト"""
+    """Tests for infer_behavior_data_type."""
 
     def test_purchase_columns(self):
         from src.managers.shared.file_utils import infer_behavior_data_type
@@ -178,7 +178,7 @@ class TestInferBehaviorDataType:
 
 
 class TestDetectBindingKey:
-    """detect_binding_key のテスト"""
+    """Tests for detect_binding_key."""
 
     def test_detects_user_id(self):
         from src.managers.shared.file_utils import detect_binding_key
@@ -206,7 +206,7 @@ class TestDetectBindingKey:
 
 
 class TestBuildBehaviorDatasetCandidates:
-    """_build_behavior_dataset_candidates のテスト"""
+    """Tests for _build_behavior_dataset_candidates."""
 
     @patch("src.services.data_agent_service.DataAgentService.download_csv")
     def test_builds_candidates_from_csv_urls(self, mock_download):
@@ -263,7 +263,7 @@ class TestBuildBehaviorDatasetCandidates:
 
 
 class TestExtractUserIdFromLog:
-    """_extract_user_id_from_log のテスト"""
+    """Tests for _extract_user_id_from_log."""
 
     def _make_manager(self):
         from src.managers.persona_generation_manager import PersonaGenerationManager
@@ -313,7 +313,7 @@ class TestExtractUserIdFromLog:
 
 
 class TestExtractLabelFromToolCall:
-    """_extract_label_from_tool_call のテスト"""
+    """Tests for _extract_label_from_tool_call."""
 
     def _make_manager(self):
         from src.managers.persona_generation_manager import PersonaGenerationManager

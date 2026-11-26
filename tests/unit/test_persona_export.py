@@ -1,7 +1,4 @@
-"""PersonaManager.export_persona（Markdown のエクスポート、U5）。
-
-BR7.1〜BR7.3、AC4.1.2、entities.md PersonaExport。
-"""
+"""PersonaManager.export_persona (Markdown export)."""
 
 from dataclasses import replace
 

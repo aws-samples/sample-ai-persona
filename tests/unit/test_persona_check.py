@@ -1,4 +1,4 @@
-"""The structure of what the synthesis wrote (U6 addendum, review of the result)."""
+"""The structure of what the synthesis wrote (review of the result)."""
 
 from __future__ import annotations
 

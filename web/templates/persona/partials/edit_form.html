@@ -1,22 +1,17 @@
 {% from "components/icons.html" import icon_pencil, icon_arrow_left, icon_check %}
 {% from "components/form_errors.html" import field_error, form_error_summary, field_border %}
-<!-- ペルソナ編集フォーム（詳細画面用） -->
-{# GENDER_LABELS / country_choices は各ルーターで templates.env.globals に登録済み #}
+<!-- Persona edit form (for the detail screen) -->
+{# GENDER_LABELS / country_choices are registered in templates.env.globals by each router. #}
 {#
-  バリデーション失敗時は Router が送信値を `form` として渡し、この画面を
-  再描画する（入力を失わないため / Issue #117）。初回表示時は `form` が
-  無いので persona の値を使う。
+  On validation failure the Router passes the submitted values as `form` and re-renders this screen (so input is not lost / Issue #117). On first display there is no `form`, so persona values are used.
 
-  `form` の値は改行区切りの文字列（送信されたままの形）、persona の値は
-  リストなので、複数行フィールドは分岐して描画する。
+  `form` values are newline-separated strings (as submitted), while persona values are lists, so multi-line fields are rendered with a branch.
 
-  注意: `form` の参照は必ず f['key'] 形式で書く。f.values / f.items / f.keys は
-  dict のメソッドに解決されてしまい、入力値が消える（Jinja は属性アクセスを
-  優先するため）。
+  Note: always reference `form` as f['key']. f.values / f.items / f.keys resolve to dict methods and the input values disappear (Jinja prefers attribute access).
 #}
 {% set f = form if form is defined and form else none %}
 <div>
-    <!-- ヘッダー -->
+    <!-- Header -->
     <div class="flex items-center justify-between mb-8">
         <div>
             <a href="/persona/{{ persona.id }}" class="text-blue-600 hover:text-blue-800 text-sm mb-2 inline-flex items-center gap-1">
@@ -36,7 +31,7 @@
           hx-swap="innerHTML"
           class="space-y-6">
 
-        <!-- 基本情報 -->
+        <!-- Basic info -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <h2 class="text-xl font-semibold text-gray-900 mb-4">基本情報</h2>
             <div class="grid md:grid-cols-3 gap-4">
@@ -91,7 +86,7 @@
             </div>
         </div>
 
-        <!-- 背景 -->
+        <!-- Background -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <label for="background" class="block text-xl font-semibold text-gray-900 mb-4">背景・プロフィール</label>
             <textarea id="background" name="background" rows="4" required
@@ -99,7 +94,7 @@
             {{ field_error(error_field, 'background', form_error) }}
         </div>
 
-        <!-- 価値観 -->
+        <!-- Values -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <label for="values" class="block text-xl font-semibold text-gray-900 mb-2">価値観・信念</label>
             <p class="text-sm text-gray-500 mb-4">1行に1項目を入力してください</p>
@@ -109,7 +104,7 @@
             {{ field_error(error_field, 'values', form_error) }}
         </div>
 
-        <!-- 課題・悩み -->
+        <!-- Pain points -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <label for="pain_points" class="block text-xl font-semibold text-gray-900 mb-2">課題・悩み</label>
             <p class="text-sm text-gray-500 mb-4">1行に1項目を入力してください</p>
@@ -119,7 +114,7 @@
             {{ field_error(error_field, 'pain_points', form_error) }}
         </div>
 
-        <!-- 目標・願望 -->
+        <!-- Goals -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <label for="goals" class="block text-xl font-semibold text-gray-900 mb-2">目標・願望</label>
             <p class="text-sm text-gray-500 mb-4">1行に1項目を入力してください</p>
@@ -129,7 +124,7 @@
             {{ field_error(error_field, 'goals', form_error) }}
         </div>
 
-        <!-- タグ -->
+        <!-- Tags -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <label for="tags" class="block text-xl font-semibold text-gray-900 mb-2">タグ</label>
             <p class="text-sm text-gray-500 mb-4">フィルタ用のタグを1行に1つ入力してください（カンマ「,」は使用不可、1個50文字以内、最大20個）</p>
@@ -139,7 +134,7 @@
             {{ field_error(error_field, 'tags', form_error) }}
         </div>
 
-        <!-- ボタン -->
+        <!-- Buttons -->
         <div class="flex justify-end gap-3">
             <a href="/persona/{{ persona.id }}"
                class="px-4 py-2 text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors">

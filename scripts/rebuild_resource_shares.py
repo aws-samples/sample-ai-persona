@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rebuild the ResourceShares index from the bodies (U4, NFR1.20, reliability-design.md §6).
+Rebuild the ResourceShares index from the bodies.
 
 The bodies' ``shared_group_ids`` are the truth. The script builds the index
 items that should exist and compares them with the ones that do:
@@ -13,7 +13,7 @@ items that should exist and compares them with the ones that do:
 By default it only prints the differences. ``--apply`` fixes them. Bodies
 without ``owner_sub`` (made before v1.0.0) are counted and skipped. The types
 come from ``ResourceSharing``'s registration (``default_sharing_tables``), so
-types added by U6 / U7 are rebuilt by the same script.
+types added later are rebuilt by the same script.
 
 Run it with an admin's own credentials, not the app's task role (the task role
 has no ``Scan`` on ResourceShares)::

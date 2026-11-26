@@ -33,8 +33,8 @@ class Persona:
     generation_log: list[dict[str, str]] | None = field(default=None)
     generation_context: dict[str, Any] | None = field(default=None)
     avatar_path: str | None = field(default=None)
-    # 所有者と共有先（約束 C8、BR6.7）。読み取り専用で持ち、編集の書き込みには載せない。
-    # owner_sub は保存した人（BR6.1）、shared_group_ids は ResourceSharing だけが書く。
+    # Owner and shares. Held read-only and not part of edit writes.
+    # owner_sub is the saver; shared_group_ids is written only by ResourceSharing.
     owner_sub: str | None = field(default=None)
     shared_group_ids: frozenset[str] = field(default_factory=frozenset)
 
@@ -91,17 +91,17 @@ class Persona:
         """
         Update persona fields and return a new instance with updated timestamp.
 
-        gender/country/city は3値のセマンティクスを持つ:
-        - None: 変更なし（既存値を保持）
-        - 空文字列 "": 値をクリアして None にする
-        - それ以外の文字列: その値に更新
-        これにより編集画面から属性を未設定に戻せる。
+        gender/country/city have three-valued semantics:
+        - None: no change (keep the existing value)
+        - empty string "": clear the value to None
+        - any other string: update to that value
+        This lets the edit screen reset an attribute to unset.
         """
 
         def _resolve_clearable(
             new_value: str | None, current: str | None
         ) -> str | None:
-            """None=変更なし、空文字=クリア、それ以外=更新。"""
+            """None = no change, empty string = clear, anything else = update."""
             if new_value is None:
                 return current
             stripped = new_value.strip()
@@ -130,7 +130,7 @@ class Persona:
         )
 
     def owned_by(self, owner_sub: str) -> "Persona":
-        """Return a new instance owned by ``owner_sub`` (BR6.1)."""
+        """Return a new instance owned by ``owner_sub``."""
         return replace(self, owner_sub=owner_sub)
 
     def with_avatar(self, avatar_path: str | None) -> "Persona":
@@ -163,7 +163,7 @@ class Persona:
         # Omit empty tags list as well
         if not data.get("tags"):
             data.pop("tags", None)
-        # An empty share set is not stored (contract C8); a set becomes a sorted list
+        # An empty share set is not stored; a set becomes a sorted list
         if self.shared_group_ids:
             data["shared_group_ids"] = sorted(self.shared_group_ids)
         else:

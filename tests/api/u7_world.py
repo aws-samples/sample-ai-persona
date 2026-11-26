@@ -1,4 +1,4 @@
-"""Real U7 Managers behind the routers, on the moto world of tests/unit/survey_world.py.
+"""Real survey Managers behind the routers, on the moto world of tests/unit/survey_world.py.
 
 The API tests sign the client in as one of the sample users of
 ``tests/conftest.py`` and patch the routers' ``get_*_manager`` functions with
@@ -52,7 +52,7 @@ def _batch() -> Mock:
 
 
 class ApiWorld:
-    """The U7 Managers on one :class:`SurveyWorld`."""
+    """The survey Managers on one :class:`SurveyWorld`."""
 
     def __init__(self, world: SurveyWorld) -> None:
         self.world = world
@@ -123,7 +123,7 @@ class ApiWorld:
         )
         self.sharing = SharingManager(world.sharing)
         self.file_manager = Mock()
-        # 閉域対応 U4: 検査に通ったパスには、アプリのプレビューのルートを埋め込む
+        # paths that pass the check embed the app's preview route
         self.file_manager.check_preview_path.return_value = None
 
     def patch_routers(self, stack: ExitStack) -> None:

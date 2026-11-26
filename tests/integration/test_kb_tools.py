@@ -1,7 +1,7 @@
-"""KB 検索ツール（kb_tools）が組み立てる Retrieve リクエストのテスト。
+"""Tests for the Retrieve request built by the KB search tool (kb_tools).
 
-Self-managed KB は vectorSearchConfiguration、Managed KB は managedSearchConfiguration を使う。
-boto3 クライアントはモックに差し替える。
+Self-managed KBs use vectorSearchConfiguration and managed KBs use
+managedSearchConfiguration. The boto3 client is replaced with a mock.
 """
 
 import logging

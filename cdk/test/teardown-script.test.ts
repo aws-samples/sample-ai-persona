@@ -3,12 +3,12 @@ import * as path from 'path';
 import { synthBoth } from './helpers/stages';
 
 /**
- * 環境削除のスクリプトが RETAIN のリソースを漏れなく扱うことの検査。
+ * Checks that the environment teardown scripts handle every RETAIN resource.
  *
- * destroy.sh は、スタックを消しても残るリソースを種類（RETAINED_TYPES）で拾って一覧にし、
- * scripts/purge-retained.sh は種類ごとの手順（purge_resource の case）で削除する。CDK に RETAIN の
- * 種類が増えたのにスクリプトが追いつかないと、黙って残り続けるため、合成したテンプレートと
- * 突き合わせる。
+ * The teardown script lists resources that survive stack deletion by type (RETAINED_TYPES), and
+ * scripts/purge-retained.sh deletes them with a per-type procedure (the case in purge_resource).
+ * If CDK gains a RETAIN type and the scripts do not keep up, the resource would silently remain,
+ * so the scripts are compared against the synthesized template.
  */
 
 const ROOT = path.join(__dirname, '..', '..');

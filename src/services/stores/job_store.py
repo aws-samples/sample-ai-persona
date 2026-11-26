@@ -1,10 +1,10 @@
-"""DynamoDB writes of job records (contract C14).
+"""DynamoDB writes of job records.
 
 ``Jobs``: PK ``id``, TTL on ``expires_at``.
 
 - A job records its submitter (``owner_sub``) and kind (``job_type``).
 - A failure is stored as an ``ErrorCode`` value in ``error_code``; exception
-  text is never written (U6 BR8.3).
+  text is never written.
 
 Reading a job for the owner check is ``AuthzLookupService.get_job``; who may
 submit or read a job is decided by ``JobManager``.

@@ -1,7 +1,7 @@
-"""SourceInspector: the inspection of the head of an uploaded table (BR3.1〜BR3.4).
+"""SourceInspector: the inspection of the head of an uploaded table.
 
 The inspector is a pure function over the first bytes of the file. It never
-reads the whole file (NFR1.4).
+reads the whole file.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ class TestEncoding:
 
 
 class TestNotATable:
-    """U2 BR12.1: one code per way of fixing the file."""
+    """One code per way of fixing the file."""
 
     @pytest.mark.parametrize(
         "head",
@@ -167,7 +167,7 @@ class TestNotATable:
         assert "secret" not in str(dict(exc.value.context))
 
 
-# --- U4: documents (BR22.1〜BR22.3, AC3.3.1〜AC3.3.3) -------------------------
+# --- documents -------------------------------------------------------------
 
 
 def _doc(data: bytes, fmt: SourceFormat, *, head_bytes=None, tail_bytes=None, **kw):

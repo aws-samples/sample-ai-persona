@@ -1,13 +1,13 @@
 """SurveyRunnerLoop: when the survey runner's rounds happen in this Web task.
 
-``SurveyRunManager.advance`` does one round (functional-spec.md WF2). This
+``SurveyRunManager.advance`` does one round. This
 module only decides *when* it runs (Router layer, no business logic):
 
 - every 15 seconds from the app's lifespan (:meth:`run_forever`), and once
-  right after a survey is accepted or deleted (:meth:`wake`, WF1 / WF6);
-- always in a worker thread, so the event loop keeps serving requests
-  (NFR1.5); rounds of one process never overlap (a lock serializes them);
-- on a clean stop (:meth:`stop`, NFR4.10 / R-08): mark stopping so neither the
+  right after a survey is accepted or deleted (:meth:`wake`);
+- always in a worker thread, so the event loop keeps serving requests, and
+  rounds of one process never overlap (a lock serializes them);
+- on a clean stop (:meth:`stop`): mark stopping so neither the
   loop nor a wake starts a new round, wait up to 30 seconds for the running
   round, then give the lease back. A round still running after the wait
   keeps the lease (another task takes it over when it expires), so two
@@ -23,9 +23,9 @@ from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
-#: Seconds between rounds (functional-spec.md WF2).
+#: Seconds between rounds.
 ROUND_INTERVAL_SECONDS = 15.0
-#: Longest wait for the running round on a clean stop (NFR4.10). It fits in
+#: Longest wait for the running round on a clean stop. It fits in
 #: uvicorn's graceful shutdown (60 seconds) and ECS's stopTimeout (120 seconds).
 STOP_WAIT_SECONDS = 30.0
 
@@ -60,7 +60,7 @@ class SurveyRunnerLoop:
         self._stopped = asyncio.Event()
 
     def wake(self) -> bool:
-        """Run one round soon in a thread; return at once (NFR1.4).
+        """Run one round soon in a thread; return at once.
 
         Returns:
             ``False`` when stopping, or when a woken round is already waiting
@@ -106,7 +106,7 @@ class SurveyRunnerLoop:
                 continue
 
     async def stop(self) -> None:
-        """Stop: no new round, wait for the running one, then release (NFR4.10)."""
+        """Stop: no new round, wait for the running one, then release."""
         self._stopping.set()
         self._stopped.set()
         finished = await asyncio.to_thread(

@@ -2,11 +2,11 @@
 {% from "components/status_label.html" import status_label %}
 {% from "components/dialog.html" import dialog %}
 {#
-  ペルソナ詳細のヘッダーの中身（detail_header.html の #persona-detail-header の内側）。
-  共有の保存後は GET /persona/{id}/header でこの中身だけを読み直す（listReload、U4 レビュー）。
-  引数は detail_header.html と同じ。
+  Content of the persona detail header (inside #persona-detail-header of detail_header.html).
+  After sharing is saved, only this content is re-read with GET /persona/{id}/header (listReload).
+  Arguments are the same as detail_header.html.
 #}
-{#- 1 段目: 戻るリンク、アイコン、名前と職業（長い職業でも操作ボタンを押し縮めない） #}
+{#- Row 1: back link, icon, name and occupation (a long occupation does not squeeze the action buttons). #}
 <a href="/persona/management" class="text-blue-600 hover:text-blue-800 text-sm mb-2 inline-flex items-center gap-1">
     {{ icon_arrow_left("w-4 h-4") }} ペルソナ管理に戻る
 </a>
@@ -19,7 +19,7 @@
         <p class="text-gray-600">{{ persona.occupation }} / {{ persona.age }}歳</p>
     </div>
 </div>
-{#- 2 段目: 所有者と共有（左）、操作ボタン（右）。狭いときはボタンが下へ折り返す #}
+{#- Row 2: owner and sharing (left), action buttons (right). On narrow screens the buttons wrap below. #}
 <div class="flex flex-wrap items-center justify-between gap-3 mt-4">
     {%- if owner_label is defined %}
     <p class="text-sm text-gray-700" data-testid="persona-owner-line">
@@ -31,7 +31,7 @@
     <span></span>
     {%- endif %}
     <div class="flex flex-wrap items-center gap-2" data-testid="persona-detail-actions">
-        {#- 高度な生成（ベータ）のペルソナ: 分析の詳細（ダイアログは詳細の本文にある）。通常の「生成ログ・評価」と同じ場所 -#}
+        {#- Advanced-generation (beta) persona: analysis details (the dialog is in the detail body). Same place as the normal "生成ログ・評価". -#}
         {% if (persona.generation_context or {}).get("mode") == "advanced" %}
         <button type="button" aria-haspopup="dialog"
                 data-dialog-open="persona-analysis-record" data-testid="persona-analysis-detail-button"
@@ -43,7 +43,7 @@
         </button>
         {% endif %}
         {% include "persona/partials/generation_log_modal.html" %}
-        {#- エクスポートは読める人すべてに出す（BR7.1、M8） #}
+        {#- Export is shown to everyone who can read. #}
         <a href="/persona/{{ persona.id }}/export" download
            data-testid="persona-export-button"
            class="whitespace-nowrap inline-flex items-center gap-1.5 bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors text-sm font-medium">
@@ -71,7 +71,7 @@
     </div>
 </div>
 {%- if manageable %}
-{#- 削除の確認（共通ダイアログ、M8）。一緒に消えるものを文字で示し、既定のフォーカスは［キャンセル］ #}
+{#- Delete confirmation (common dialog). Shows in text what is deleted together; default focus is [キャンセル]. #}
 {% call dialog("persona-delete-dialog", "ペルソナを削除しますか？", describedby="persona-delete-dialog-description") %}
 <div id="persona-delete-dialog-description" class="text-sm text-gray-700 mb-4">
     <p>「{{ persona.name }}」を削除します。次も一緒に削除され、元に戻せません。</p>

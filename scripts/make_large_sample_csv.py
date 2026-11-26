@@ -1,4 +1,4 @@
-"""Make a large made-up Shift_JIS CSV for the 1GB manual E2E (BR20.2).
+"""Make a large made-up Shift_JIS CSV for the 1GB manual E2E.
 
 The values are random numbers and a fixed vocabulary only; no real data is
 used. The file is written a little at a time, so memory stays small however

@@ -1,9 +1,7 @@
-"""SurveyDatasetManager のユニットテスト（U7）。
+"""Unit tests for SurveyDatasetManager.
 
-BR4.1〜BR4.7、BR5.1〜BR5.3、NFR1.73、NFR1.74、NFR1.76、NFR1.82、NFR1.85、NFR2.23、
-NFR8.24、AC2.5.1〜AC2.5.3、AC5.2.4、AC5.2.5、AC5.3.1、AC5.3.4。DynamoDB と S3 は moto、
-ResourceLookup・DepartmentDirectory・AccessPolicy は本物（tests/unit/survey_world.py）、
-DuckDB の処理（SurveyBatchService）・エージェント・AI はモック。
+DynamoDB and S3 are moto; ResourceLookup, DepartmentDirectory and AccessPolicy are real
+(tests/unit/survey_world.py); the DuckDB processing (SurveyBatchService), agents and AI are mocks.
 """
 
 from unittest.mock import Mock
@@ -104,7 +102,7 @@ def _upload(dm, principal=ADMIN, name="顧客データ", **kwargs):
 
 
 # =============================================================================
-# 参照（全員、BR4.1、BR4.2、BR5.3）
+# Reading (everyone)
 # =============================================================================
 
 
@@ -203,7 +201,7 @@ class TestReferenceForEveryone:
 
 
 # =============================================================================
-# 管理（admin だけ、BR4.1、NFR1.73）
+# Management (admin only)
 # =============================================================================
 
 
@@ -246,7 +244,7 @@ class TestManagementIsAdminOnly:
         assert dm.ensure_manageable(ADMIN) is None
 
     def test_import_offers_every_department(self, dm):
-        """取り込みの利用範囲の欄（admin は全部署から選ぶ、BR5.2）"""
+        """Import scope field (admin picks from all departments)."""
         names = {d.display_name for d in dm.import_scope_choices(ADMIN)}
         assert names == {"営業部", "企画部"}
 
@@ -270,7 +268,7 @@ class TestManagementIsAdminOnly:
 
 
 # =============================================================================
-# 取り込み（BR4.3〜BR4.5、NFR1.82、NFR1.85）
+# Import
 # =============================================================================
 
 
@@ -336,7 +334,7 @@ class TestUpload:
             _upload(dm, name="同じ", avoid_name_conflict=True)
 
     def test_ten_rows_can_be_registered(self, dm, survey_world, batch):
-        """FR4.1: アンケートの下限（10 件）と同じ件数のデータセットは登録できる。"""
+        """A dataset with exactly the survey minimum (10 records) can be registered."""
         batch.convert_csv_to_parquet.side_effect = lambda csv, mapping=None: (
             pl.DataFrame(
                 {"persona": [f"p{i}" for i in range(10)], "hobby": ["釣り"] * 10}
@@ -388,7 +386,7 @@ class TestUpload:
 
 
 # =============================================================================
-# 削除・名前の変更（BR4.4、BR4.6）
+# Deletion and renaming
 # =============================================================================
 
 
@@ -448,7 +446,7 @@ class TestDeleteAndRename:
 
 
 # =============================================================================
-# 利用範囲（BR5.2、NFR8.24）
+# Usage scope
 # =============================================================================
 
 
@@ -507,7 +505,7 @@ class TestScope:
 
 
 # =============================================================================
-# DWH・列の対応（admin、今の振る舞い）
+# DWH and column mapping (admin, current behavior)
 # =============================================================================
 
 
@@ -553,13 +551,13 @@ class TestDwhAndMapping:
         dm._validate_segment_row_count(500)
 
     def test_dataset_minimum_is_the_survey_minimum(self):
-        """FR4.1: 登録の下限はアンケートの下限と同じ 1 つの定数。"""
+        """The registration minimum is one constant shared with the survey minimum."""
         from src.models.survey import MIN_SURVEY_PERSONAS
 
         assert SurveyDatasetManager.MIN_SEGMENT_ROWS == MIN_SURVEY_PERSONAS == 10
 
     def test_dwh_agent_is_told_the_minimum(self):
-        """DWH の抽出のエージェントに伝える下限も 10 件。"""
+        """The minimum told to the DWH extraction agent is also 10 records."""
         from src.prompts.survey_prompts import DWH_SEGMENT_SYSTEM_PROMPT
 
         assert "抽出件数が10件未満の場合" in DWH_SEGMENT_SYSTEM_PROMPT
@@ -567,7 +565,7 @@ class TestDwhAndMapping:
 
 
 # =============================================================================
-# 利用範囲の部品（shared/asset_scope.py、判定を持たない）
+# Scope helper (shared/asset_scope.py, holds no decision logic)
 # =============================================================================
 
 
@@ -603,14 +601,14 @@ class TestAssetScopeHelpers:
 
 
 def test_member_cannot_manage_even_through_an_access_denied_path(dm):
-    """管理の経路は 403 ではなく 404（存在を知らせない、NFR1.79）。"""
+    """The admin route returns 404, not 403 (it does not reveal existence)."""
     with pytest.raises(CodedError) as info:
         dm.delete_custom_dataset(MEMBER_A, "x")
     assert not isinstance(info.value, AccessDeniedError)
 
 
 # =============================================================================
-# U7 Loop-back 1: 別の実体での即時の反映（NFR9.35、NFR9.36）と数百件の規模（NFR9.37）
+# Immediate reflection from another instance, and scale of hundreds of records
 # =============================================================================
 
 
@@ -649,7 +647,7 @@ def _second_instance(world: SurveyWorld, batch: Mock) -> SurveyDatasetManager:
 
 
 class TestScopeChangesReachAnotherInstance:
-    """Decisions read DynamoDB every time; nothing is kept per task (NFR9.35/36)."""
+    """Decisions read DynamoDB every time; nothing is kept per task."""
 
     def test_decision_on_b_changes_right_after_a_changes_the_scope(
         self, dm, survey_world, batch
@@ -686,7 +684,7 @@ class TestScopeChangesReachAnotherInstance:
 
 
 class TestHundredsOfAssets:
-    """250 records (with their name reservations) are read page by page (NFR9.37)."""
+    """250 records (with their name reservations) are read page by page."""
 
     def test_member_gets_exactly_the_usable_ones_from_every_page(
         self, dm, survey_world
@@ -720,9 +718,9 @@ class TestHundredsOfAssets:
         sales = {d.id for d in made if "sales" in d.shared_group_ids}
         assert len(member) == len(sales) == 84
         assert {d.id for d in member} == sales
-        # 名前の押さえを含めて 500 項目を、何ページにも分けて読む
+        # Read 500 items, including the name reservations, across many pages
         assert len(scanned) > 500 // 7
-        # member の操作で読むのは組織資産のテーブルだけ（テンプレート・結果は Scan しない）
+        # A member's operation reads only the organization-asset tables (templates and results are not scanned)
         assert set(scanned) == {survey_world.custom_table}
 
         assert {d.id for d in dm.list_persona_data(ADMIN).custom} == {
@@ -731,7 +729,7 @@ class TestHundredsOfAssets:
 
 
 # =============================================================================
-# 閉域対応 U3: Nemotron のキー（BR2.1）
+# Nemotron key
 # =============================================================================
 
 CLOSED_KEY = "closed/nemotron.parquet"
@@ -772,7 +770,7 @@ class TestNemotronDatasetKey:
 
 
 # =============================================================================
-# 閉域対応 U3: Nemotron の入手先（BR2.2〜BR2.5）と DWH 抽出（BR3.2 の 4）
+# Nemotron source and DWH extraction
 # =============================================================================
 
 

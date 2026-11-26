@@ -1,8 +1,8 @@
-"""InterviewSessionStore（外に置いたインタビュー）の結合テスト。moto を使う。
+"""Integration tests (moto) for InterviewSessionStore, which holds interviews outside the session.
 
-BR3.1〜BR3.5、BR3.7、BR3.8、NFR1.59〜NFR1.61、NFR9.31、NFR9.32。送信は
-(a) 利用者の発言とセッションの更新、(b) ペルソナ 1 体の応答とセッションの更新を
-それぞれ 1 つのトランザクションで書き、条件が合わなければ「衝突」の例外にする。
+A send writes (a) the user's utterance plus the session update, or (b) one persona's
+response plus the session update, each in one transaction, and a failed condition
+raises the conflict exception.
 """
 
 from dataclasses import replace
@@ -121,7 +121,7 @@ def created(store) -> InterviewSession:
 
 
 # =============================================================================
-# 作成と読み出し（BR3.1、BR3.5）
+# creating and reading
 # =============================================================================
 
 
@@ -153,7 +153,7 @@ class TestCreateAndRead:
 
 
 # =============================================================================
-# (a) 利用者の発言（BR3.3、NFR9.32）
+# (a) the user's utterance
 # =============================================================================
 
 
@@ -208,7 +208,7 @@ class TestAppendUserMessage:
 
 
 # =============================================================================
-# (b) ペルソナの応答（BR3.3、NFR1.59、機能設計への追加）
+# (b) the persona's response
 # =============================================================================
 
 
@@ -276,7 +276,7 @@ class TestAppendReply:
 
 
 # =============================================================================
-# 発言の読み出しと保存（BR3.4、BR3.7、BR3.8、NFR1.60）
+# reading and saving utterances
 # =============================================================================
 
 
@@ -320,7 +320,7 @@ class TestMessagesAndSave:
 
 
 class TestFirstSaveMark:
-    """初回の保存は 1 つの要求だけが行う（保存中の印、同時の保存で発言を消さない）。"""
+    """Only one request performs the first save (a saving marker; concurrent saves do not drop utterances)."""
 
     def test_only_one_request_takes_the_mark(self, store, created):
         assert store.begin_save(created.id, "a", now=NOW)
@@ -350,7 +350,7 @@ class TestFirstSaveMark:
 
 
 # =============================================================================
-# 失敗の分類
+# failure classification
 # =============================================================================
 
 

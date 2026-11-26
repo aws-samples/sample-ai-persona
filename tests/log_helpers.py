@@ -1,7 +1,7 @@
 """Reading the one-line JSON logs of ``log_event`` in tests (stdout, via capsys).
 
-Also holds :func:`assert_not_leaked`, the one check (U8 NFR3.15, AC1.2.5) that a
-sentinel password appears in no log, exception, response body or stored item.
+Also holds :func:`assert_not_leaked`, the one check that a sentinel password
+appears in no log, exception, response body or stored item.
 """
 
 import json
@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-#: Sentinel password for U8 tests. Never a real credential.
+#: Sentinel password for the first-login password tests. Never a real credential.
 SENTINEL_PASSWORD = "Pw-SENTINEL-8f3a!"
 
 

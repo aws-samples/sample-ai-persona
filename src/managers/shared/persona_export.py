@@ -1,4 +1,4 @@
-"""Rendering a persona as a Markdown file (U5, BR7.2, BR7.3).
+"""Rendering a persona as a Markdown file.
 
 A pure helper with no business decisions: ``PersonaManager.export_persona``
 checks who may read the persona and calls these.
@@ -55,7 +55,7 @@ def _list(items: Iterable[Any]) -> list[str]:
 
 
 def render_persona_markdown(persona: Persona) -> str:
-    """The Markdown document of a persona (BR7.2: profile and generation record).
+    """The Markdown document of a persona (profile and generation record).
 
     Memory, bindings, the owner's ``sub`` and the shares are not part of the
     :class:`Persona` fields used here.

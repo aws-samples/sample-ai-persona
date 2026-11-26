@@ -1,10 +1,9 @@
 """
 Memory Strategy Abstract Base Class
-記憶戦略の抽象基底クラス
+Abstract base class for memory strategies
 
-拡張可能な記憶戦略パターンを実装するためのインターフェース定義。
-新しい記憶戦略（Summary、Semantic、User Preference等）を追加する際は
-このインターフェースを実装する。
+Interface definition for implementing an extensible memory strategy pattern.
+Implement this interface when adding a new memory strategy (Summary, Semantic, User Preference, etc.).
 """
 
 from abc import ABC, abstractmethod
@@ -14,7 +13,7 @@ from src.models.memory import MemoryEntry
 
 
 def is_under_namespaces(record_namespaces: List[str], prefixes: List[str]) -> bool:
-    """Tell whether a memory record lives under one of ``prefixes`` (U5, R-01).
+    """Tell whether a memory record lives under one of ``prefixes``.
 
     A namespace matches a prefix when it equals the prefix or continues it
     with ``/``, so ``.../actors/p1`` never matches ``.../actors/p10/...``.
@@ -87,15 +86,11 @@ def list_all_record_summaries(
 
 class MemoryStrategy(ABC):
     """
-    記憶戦略の抽象基底クラス
+    Abstract base class for memory strategies
 
-    全ての記憶戦略はこのインターフェースを実装する必要がある。
-    Strategy Patternにより、MemoryServiceは具体的な戦略実装に依存せず、
-    異なる記憶戦略を動的に切り替えることができる。
-
-    Requirements:
-        - 2.1: Strategy patternの実装
-        - 2.4: 共通インターフェース（save, retrieve, delete, list_all）の提供
+    Every memory strategy must implement this interface.
+    With the Strategy pattern, MemoryService does not depend on a concrete strategy
+    and can switch between memory strategies dynamically.
     """
 
     @abstractmethod
@@ -107,72 +102,72 @@ class MemoryStrategy(ABC):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
-        記憶を保存する
+        Save a memory
 
         Args:
-            actor_id: ペルソナID（AgentCore MemoryのactorIdとして使用）
-            session_id: 議論ID（AgentCore MemoryのsessionIdとして使用）
-            content: 保存する記憶の内容
-            metadata: 追加のメタデータ（重要度、タイプ等）
+            actor_id: Persona ID (used as the actorId in AgentCore Memory)
+            session_id: Discussion ID (used as the sessionId in AgentCore Memory)
+            content: Content of the memory to save
+            metadata: Additional metadata (importance, type, etc.)
 
         Returns:
-            保存された記憶のID
+            ID of the saved memory
 
         Raises:
-            MemoryOperationError: 保存に失敗した場合
+            MemoryOperationError: If saving fails
         """
         pass
 
     @abstractmethod
     def retrieve(self, actor_id: str, query: str, top_k: int = 5) -> List[MemoryEntry]:
         """
-        関連する記憶を検索する
+        Search for related memories
 
-        セマンティック検索により、クエリに関連する記憶を取得する。
-        結果は関連度スコアの降順でソートされる。
+        Retrieves memories related to the query by semantic search.
+        Results are sorted by relevance score in descending order.
 
         Args:
-            actor_id: ペルソナID
-            query: 検索クエリ（トピックやキーワード）
-            top_k: 取得する最大件数（デフォルト: 5）
+            actor_id: Persona ID
+            query: Search query (topic or keywords)
+            top_k: Maximum number of results (default: 5)
 
         Returns:
-            関連する記憶エントリのリスト（関連度スコア降順）
+            List of related memory entries (by relevance score, descending)
 
         Raises:
-            MemoryOperationError: 検索に失敗した場合
+            MemoryOperationError: If the search fails
         """
         pass
 
     @abstractmethod
     def delete(self, actor_id: str, memory_id: str) -> bool:
         """
-        特定の記憶を削除する
+        Delete a specific memory
 
         Args:
-            actor_id: ペルソナID
-            memory_id: 削除する記憶のID
+            actor_id: Persona ID
+            memory_id: ID of the memory to delete
 
         Returns:
-            削除に成功した場合True、記憶が見つからない場合False
+            True if deletion succeeded, False if the memory was not found
 
         Raises:
-            MemoryOperationError: 削除に失敗した場合
+            MemoryOperationError: If deletion fails
         """
         pass
 
     @abstractmethod
     def list_all(self, actor_id: str) -> List[MemoryEntry]:
         """
-        ペルソナの全記憶を取得する
+        Get all memories of a persona
 
         Args:
-            actor_id: ペルソナID
+            actor_id: Persona ID
 
         Returns:
-            ペルソナに関連する全ての記憶エントリのリスト
+            List of all memory entries related to the persona
 
         Raises:
-            MemoryOperationError: 取得に失敗した場合
+            MemoryOperationError: If retrieval fails
         """
         pass

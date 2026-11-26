@@ -1,4 +1,4 @@
-"""議論・インタビュー関連プロンプトテンプレート。"""
+"""Prompt templates for discussions and interviews."""
 
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
@@ -9,7 +9,7 @@ from ..services.country_service import country_name
 
 
 def build_persona_system_prompt(persona: Persona) -> str:
-    """ペルソナのプロフィールからベースシステムプロンプトを構築する。"""
+    """Build the base system prompt from a persona profile."""
     persona_dict = asdict(persona)
 
     profile_lines = [
@@ -83,7 +83,7 @@ INTERVIEW_INSTRUCTIONS_TEMPLATE = """
 
 
 def build_interview_system_prompt(persona: Persona) -> str:
-    """インタビュー用システムプロンプトを構築する。"""
+    """Build the system prompt for interviews."""
     base_prompt = build_persona_system_prompt(persona)
     interview_instructions = INTERVIEW_INSTRUCTIONS_TEMPLATE.format(
         persona_name=persona.name
@@ -94,7 +94,7 @@ def build_interview_system_prompt(persona: Persona) -> str:
 def build_facilitator_system_prompt(
     rounds: int, additional_instructions: str = ""
 ) -> str:
-    """ファシリテータ用システムプロンプトを構築する。"""
+    """Build the system prompt for the facilitator."""
     prompt = f"""あなたは議論のファシリテータです。{rounds}ラウンドの議論を進行管理します。
 
 # 役割
@@ -124,7 +124,7 @@ def build_facilitator_system_prompt(
 
 
 def build_discussion_prompt(personas: List[Persona], topic: str) -> str:
-    """classicモード議論進行用プロンプトを構築する。"""
+    """Build the prompt that drives classic-mode discussion."""
     personas_info = []
     for persona in personas:
         persona_dict = asdict(persona)
@@ -189,7 +189,7 @@ def build_kb_prompt_section(
     description: str,
     metadata_filters: Optional[Dict[str, str]] = None,
 ) -> str:
-    """KB連携用プロンプトセクションを構築する。"""
+    """Build the prompt section for knowledge base integration."""
     filter_desc = ""
     if metadata_filters:
         filter_desc = (
@@ -216,7 +216,7 @@ def build_kb_prompt_section(
 
 
 def _format_column(col: Dict[str, Any]) -> str:
-    """列の表示メタデータを `name (type): description` 形式に整形する。"""
+    """Format column display metadata as `name (type): description`."""
     name = col.get("name", "")
     data_type = col.get("data_type")
     description = col.get("description")
@@ -231,12 +231,12 @@ def _format_column(col: Dict[str, Any]) -> str:
 def build_dataset_prompt_section(
     datasets: List[Dict[str, Any]],
 ) -> str:
-    """データセット連携用プロンプトセクションを構築する。
+    """Build the prompt section for dataset integration.
 
     Args:
-        datasets: 表示用記述子のリスト。各要素は
-            {"alias", "name", "description", "row_count", "columns"}。
-            SQL・S3 パス・binding フィルタ値は含めない（LLM へ露出しない）。
+        datasets: List of display descriptors. Each item has
+            {"alias", "name", "description", "row_count", "columns"}.
+            SQL, S3 paths and binding filter values are excluded so they are never exposed to the LLM.
     """
     if not datasets:
         return ""
@@ -244,7 +244,7 @@ def build_dataset_prompt_section(
     dataset_info_parts = []
     for dataset in datasets:
         columns = dataset.get("columns", [])
-        # 列は {name, data_type, description} の dict、または名前文字列の両方を許容する。
+        # Columns may be {name, data_type, description} dicts or plain name strings.
         if columns and isinstance(columns[0], dict):
             col_lines = "\n".join(f"  - {_format_column(c)}" for c in columns)
             columns_block = f"- 利用可能な列:\n{col_lines}"

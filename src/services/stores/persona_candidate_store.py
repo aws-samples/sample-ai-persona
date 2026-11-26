@@ -1,20 +1,20 @@
-"""DynamoDB reads and writes of generated personas (U5, ADR-008, NFR Design Q1 A).
+"""DynamoDB reads and writes of generated personas.
 
 ``PersonaCandidates`` (PK ``candidate_id``, TTL ``expires_at``) holds the
 generated personas until their owner saves them. Every rule that decides
 *whether* something may happen lives in ``PersonaGenerationManager``; this
-service only runs the conditional writes (security-design.md §2):
+service only runs the conditional writes:
 
 - ``claim``: one conditional update; the condition carries the owner, the
   expiry, "not saved" and "no live claim" checks, so nothing is compared after
-  reading (NFR1.22). A failed condition raises :class:`CandidateUnavailable`
+  reading. A failed condition raises :class:`CandidateUnavailable`
   whatever the reason (someone else's, expired, being saved, missing).
 - ``release`` / ``delete`` / ``mark_saved``: only when the item still holds the
   caller's claim token; otherwise nothing changes and ``False`` comes back.
 - ``confirm_claim`` / ``mark_saved``: also need "not saved yet", so a hold that
-  went stale and was taken over never saves the candidate twice (R-04).
+  went stale and was taken over never saves the candidate twice.
 
-Retries are botocore's standard ones (``reliability-design.md`` §4).
+Retries are botocore's standard ones.
 """
 
 import logging
@@ -37,7 +37,7 @@ WRITE_BATCH_LIMIT = 25
 UNPROCESSED_RETRIES = 3
 
 _KEY = "candidate_id"
-#: The request still holds the candidate and nobody has saved it (R-04).
+#: The request still holds the candidate and nobody has saved it.
 _HELD_AND_UNSAVED = "claim_token = :token AND attribute_not_exists(saved_at)"
 
 
@@ -126,7 +126,7 @@ class PersonaCandidateStore:
 
     @classmethod
     def item_size(cls, candidate: PersonaCandidate) -> int:
-        """Size of the candidate as written: attribute names plus values (NFR2.12)."""
+        """Size of the candidate as written: attribute names plus values."""
         serializer = TypeSerializer()
         item = _to_dynamo(cls._stored(candidate))
         return sum(
@@ -157,7 +157,7 @@ class PersonaCandidateStore:
     # --- writes ---------------------------------------------------------------------
 
     def put_all(self, candidates: Sequence[PersonaCandidate]) -> None:
-        """Write the candidates of one generation (BR1.1).
+        """Write the candidates of one generation.
 
         Raises:
             PersonaCandidateStoreError: A write failed or items stayed
@@ -182,7 +182,7 @@ class PersonaCandidateStore:
     def claim(
         self, candidate_id: str, owner_sub: str, token: str, now: datetime
     ) -> PersonaCandidate:
-        """Mark one candidate as being saved by ``token`` (BR1.3).
+        """Mark one candidate as being saved by ``token``.
 
         Returns:
             The candidate as claimed.
@@ -239,7 +239,7 @@ class PersonaCandidateStore:
     def confirm_claim(self, candidate_id: str, token: str, now: datetime) -> bool:
         """Check right before a save that ``token`` still holds the candidate.
 
-        One conditional update (R-04): the item must still carry ``token`` and
+        One conditional update: the item must still carry ``token`` and
         no ``saved_at``. The hold is renewed (``claimed_at = now``), so another
         request cannot take it over for the next five minutes.
 
@@ -262,7 +262,7 @@ class PersonaCandidateStore:
     def mark_saved(self, candidate_id: str, token: str, now: datetime) -> bool:
         """Mark a candidate held by ``token`` and not yet saved as saved.
 
-        The same condition as :meth:`confirm_claim` (R-04).
+        The same condition as :meth:`confirm_claim`.
 
         Returns:
             ``False`` when not held by ``token`` or already saved.
@@ -282,7 +282,7 @@ class PersonaCandidateStore:
     # --- reads ----------------------------------------------------------------------
 
     def get(self, candidate_id: str) -> PersonaCandidate | None:
-        """Read one candidate with a strongly consistent ``GetItem`` (NFR9.27)."""
+        """Read one candidate with a strongly consistent ``GetItem``."""
         response = self._call(
             "get_item",
             TableName=self.table_name,

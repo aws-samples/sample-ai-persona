@@ -1,7 +1,7 @@
-"""共有の型（src/models/sharing.py、約束 C7）と Persona の所有・共有の列（BR6.7、約束 C8）のテスト。
+"""Tests for the sharing types (src/models/sharing.py) and the Persona owner/sharing columns.
 
-entities.md の ListTab・ShareChange・ListPage・BulkShareResult・BulkShareFailure・
-SharingTable・OwnerSummary を確かめる。
+Covers ListTab, ShareChange, ListPage, BulkShareResult, BulkShareFailure,
+SharingTable and OwnerSummary.
 """
 
 from dataclasses import FrozenInstanceError

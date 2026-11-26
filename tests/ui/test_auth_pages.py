@@ -1,8 +1,8 @@
-"""M2（閉域構成のログイン）と M3（初回パスワード変更）の画面の振る舞い（U8、NFR6.23）。
+"""Behaviour of the closed-network login and first-time password change screens.
 
-テンプレートをアプリの Jinja 環境で描き、ヘッドレスの Chromium で開く。送信先
-（``/login``、``/auth/new-password``）はハーネスで止め、送信中の表示を確かめる。
-mockups.md M2・M3、interaction-spec.md C8。
+Templates are rendered in the app's Jinja environment and opened in headless
+Chromium. The submit targets (``/login``, ``/auth/new-password``) are held by the
+harness so the in-progress state can be checked.
 """
 
 from typing import Any
@@ -96,7 +96,7 @@ def test_m2_fields_are_labelled_and_the_error_is_announced(ui: UiHarness) -> Non
     assert page.get_by_role("alert").inner_text() == (
         "メールアドレスまたはパスワードが違います"
     )
-    # 失敗のあとはパスワード欄にフォーカス（BR1.4）
+    # After a failure, focus moves to the password field
     assert ui.active() == "login-password"
 
 
@@ -131,7 +131,7 @@ def test_m2_can_be_sent_with_the_keyboard_and_disables_the_button(
     button = page.get_by_test_id("login-submit-button")
     assert button.is_disabled()
     assert "ログイン中..." in button.inner_text()
-    # 送信中は二度目の送信をしない
+    # No second submit while one is in flight
     page.keyboard.press("Enter")
     ui.settle()
     assert page.evaluate("window.__submitted") == 1
@@ -144,7 +144,7 @@ def test_m3_rules_are_tied_to_the_new_password_field(ui: UiHarness) -> None:
     assert "password-rules" in described.split()
     items = ui.page.locator("#password-rules li")
     assert items.count() == len(POLICY.rules())
-    # 色だけにしない: 記号と文字の両方がある
+    # Not color alone: both a symbol and text are present
     first = items.first.inner_text()
     assert "✗" in first and "満たしていない" in first
 
@@ -201,9 +201,9 @@ def test_m3_can_be_sent_with_the_keyboard_and_disables_the_button(
     assert "設定中..." in button.inner_text()
 
 
-# --- 640px 未満で入力欄とボタンが 44px 以上（NFR6.23、Loop-back 1） -----------------
+# --- Inputs and buttons are at least 44px below 640px -------------------------
 
-#: 要件は「640px 未満」。境界のすぐ下と、よくあるスマートフォンの幅で確かめる。
+#: The requirement applies below 640px; checked just under the boundary and at a common phone width.
 NARROW_WIDTHS = [639, 375]
 MIN_TARGET_PX = 44
 

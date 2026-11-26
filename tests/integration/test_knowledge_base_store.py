@@ -1,8 +1,9 @@
-"""KnowledgeBaseStore（ナレッジベースの登録の読み書き）の結合テスト。moto を使う。
+"""Integration tests for KnowledgeBaseStore (reads and writes of knowledge base entries), on moto.
 
-U7 BR1.5（新規の登録は「まだない ID」の条件付き）、BR5.1（利用範囲は登録では書かず、
-admin だけで始まる）、BR5.2（利用範囲は ADD / DELETE。全部外すと列が消える）、
-NFR9.37（一覧は scan の最後のページまで）。
+A new entry is conditional on the ID not existing yet. Sharing scope is not
+written at registration (the entry starts admin-only), scope updates use ADD /
+DELETE (removing everything drops the attribute), and listing scans to the last
+page.
 """
 
 from typing import Any
@@ -68,7 +69,7 @@ class TestPutAndGet:
         assert read.shared_group_ids == frozenset()
 
     def test_registration_never_writes_the_scope(self, store, client):
-        """BR5.1: 登録は利用範囲を書かない（admin だけで始まる）。"""
+        """Registration does not write the sharing scope (it starts admin-only)."""
         kb = KnowledgeBase.from_dict({**_kb().to_dict(), "shared_group_ids": ["sales"]})
         store.put_new(kb)
 

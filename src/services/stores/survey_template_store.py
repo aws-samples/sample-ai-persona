@@ -1,15 +1,15 @@
-"""DynamoDB reads and writes of survey template bodies (U7).
+"""DynamoDB reads and writes of survey template bodies.
 
 ``SurveyTemplates``: PK ``id``, ``OwnerIndex`` (``owner_sub`` / ``created_at``).
 ``shared_group_ids`` is the copy of the shares; only ``ResourceSharing``
-writes it, together with ``ResourceShares`` (contract C7).
+writes it, together with ``ResourceShares``.
 
 - A new template is written only when the ``id`` does not exist yet, and
-  never with shares (BR1.1).
-- An edit writes only the name, questions, images and ``updated_at``
-  (BR1.5); the owner, the shares and ``created_at`` stay.
+  never with shares.
+- An edit writes only the name, questions, images and ``updated_at``;
+the owner, the shares and ``created_at`` stay.
 - Batch reads are strongly consistent; unprocessed keys are read again and
-  are never silently dropped (NFR2.21).
+  are never silently dropped.
 
 Who may create, read or edit a template is decided by
 ``SurveyTemplateManager``.
@@ -62,7 +62,7 @@ class SurveyTemplateStore:
 
     @staticmethod
     def item_size(body: Mapping[str, Any]) -> int:
-        """Approximate DynamoDB size of ``body`` as an item (NFR2.25)."""
+        """Approximate DynamoDB size of ``body`` as an item."""
         serializer = TypeSerializer()
         return sum(
             len(str(name).encode("utf-8"))
@@ -121,7 +121,7 @@ class SurveyTemplateStore:
         return found
 
     def update_content(self, template: SurveyTemplate) -> bool:
-        """Write only the name, questions, images and ``updated_at`` (BR1.5).
+        """Write only the name, questions, images and ``updated_at``.
 
         Images taken off entirely remove the column.
 

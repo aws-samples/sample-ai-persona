@@ -1,4 +1,4 @@
-"""画面上部の利用者表示の値（BR1.16、US1.5 AC1.5.1〜AC1.5.3）。"""
+"""Values for the user badge at the top of the screen."""
 
 import pytest
 
@@ -85,7 +85,7 @@ def test_no_principal_means_no_badge():
     ],
 )
 def test_settings_link_follows_the_settings_permission(roles, expected):
-    """U7 BR3.2: 「設定」の導線は settings:manage を持つ人だけ（ロール名は見ない）。"""
+    """The "Settings" link is shown only to people with settings:manage (role names are not checked)."""
     assert build_user_badge(_principal(roles=roles)).can_manage_settings is expected
 
 

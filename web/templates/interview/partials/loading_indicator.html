@@ -1,6 +1,6 @@
 {% from "components/icons.html" import icon_refresh %}
 
-<!-- インタビュー用ローディングインジケーター -->
+<!-- Loading indicator for interviews -->
 <div class="flex items-center justify-center p-4 bg-blue-50 border border-blue-200 rounded-lg" id="interview-loading">
     <div class="flex items-center space-x-3">
         <div class="animate-spin">
@@ -16,7 +16,7 @@
 </div>
 
 <script>
-// ローディング状態のタイムアウト処理
+// Loading state timeout handling
 setTimeout(() => {
     const loadingElement = document.getElementById('interview-loading');
     if (loadingElement && loadingElement.style.display !== 'none') {
@@ -31,9 +31,9 @@ setTimeout(() => {
         `;
         loadingElement.className = 'flex items-center justify-center p-4 bg-yellow-50 border border-yellow-200 rounded-lg';
     }
-}, 10000); // 10秒後に警告表示
+}, 10000); // Show a warning after 10 seconds
 
-// 30秒後にエラー表示
+// Show an error after 30 seconds
 setTimeout(() => {
     const loadingElement = document.getElementById('interview-loading');
     if (loadingElement && loadingElement.style.display !== 'none') {
@@ -51,5 +51,5 @@ setTimeout(() => {
         `;
         loadingElement.className = 'flex items-center justify-center p-4 bg-red-50 border border-red-200 rounded-lg';
     }
-}, 30000); // 30秒後にタイムアウト
+}, 30000); // Time out after 30 seconds
 </script>

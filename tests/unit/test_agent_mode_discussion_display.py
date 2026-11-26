@@ -2,7 +2,7 @@
 Integration tests for AI agent mode discussion display functionality.
 Tests the rendering data of agent mode discussions with rounds and facilitator messages.
 
-U6: the messages live outside the body (``DiscussionMessages``) and the reader
+The messages live outside the body (``DiscussionMessages``) and the reader
 gets them in a :class:`DiscussionView`.
 """
 

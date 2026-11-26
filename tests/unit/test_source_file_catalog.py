@@ -1,6 +1,6 @@
-"""SourceFileCatalog: the owner of uploaded source files (BR2.1, BR3.3, BR6.2, BR6.4).
+"""SourceFileCatalog: the owner of uploaded source files.
 
-Someone else's file and a missing file get the same NOT_FOUND (NFR3.9).
+Someone else's file and a missing file get the same NOT_FOUND.
 Only the owner's ready table can be used for a generation.
 """
 
@@ -69,7 +69,7 @@ def _file(status: SourceFileStatus = SourceFileStatus.READY, **changes) -> Sourc
 
 def _catalog() -> tuple[SourceFileCatalog, Mock]:
     store = Mock(spec=SourceFileStore)
-    # The clock is fixed so the expiry checks (U2) do not depend on today.
+    # The clock is fixed so the expiry checks do not depend on today.
     return SourceFileCatalog(store, error_type=_CallerError, clock=lambda: NOW), store
 
 
@@ -147,7 +147,7 @@ def _document(**changes) -> SourceFile:
 
 
 class TestReadySources:
-    """U4 BR23.1: documents only (1〜10), or one table with documents."""
+    """Documents only (1 to 10), or one table with documents."""
 
     def _catalog_of(self, *files: SourceFile) -> SourceFileCatalog:
         catalog, store = _catalog()
@@ -179,7 +179,7 @@ class TestReadySources:
 
         assert catalog.ready_sources(OWNER, [table.source_file_id]) == [table]
 
-    # U6 BR37.1 replaces "one table" (U4): up to three tables, 1GB in total
+    # Up to three tables, 1GB in total (replaces the earlier "one table" limit)
 
     def test_three_tables_are_used_in_order(self) -> None:
         tables = [_file(), _file(), _file()]
@@ -233,7 +233,7 @@ class TestReadySources:
         "status", [SourceFileStatus.UPLOADING, SourceFileStatus.INSPECTING]
     )
     def test_a_file_still_uploading_or_inspected_is_not_ready(self, status) -> None:
-        # U5 BR30.3, AC9.2.3: the user waits until it is ready
+        # The user waits until it is ready
         good, waiting = _document(), _document(status=status)
         catalog = self._catalog_of(good, waiting)
 
@@ -359,7 +359,7 @@ class TestMarksAndCancel:
         store.clear_in_use.return_value = True
 
         assert catalog.release("x", "gen-1", now=NOW) is True
-        # U2 BR13.3: the end does not stamp the last use any more.
+        # The end does not stamp the last use any more.
         store.clear_in_use.assert_called_once_with("x", "gen-1")
 
     def test_release_failure_is_reported_not_raised(self) -> None:
@@ -376,8 +376,7 @@ class TestMarksAndCancel:
         store.delete_uploading.assert_called_once_with("x", OWNER)
 
 
-# --- U2: 番号・期限・一覧・削除・古い記録の補正 -------------------------------------
-# BR11.3, BR13.1, BR13.5, BR14.1, BR14.2, BR14.3, BR15.1, NFR3.16, NFR5.29
+# --- numbers, expiry, listing, deletion, repair of old records -------------------
 
 DAYS = config.ADVANCED_SOURCE_RETENTION_DAYS
 

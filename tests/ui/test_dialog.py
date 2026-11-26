@@ -1,4 +1,4 @@
-"""Shared dialog (C3, WF2, NFR3.9, NFR6.2-NFR6.5, NFR6.12, B4-B6, B16, B18, B22)."""
+"""Shared dialog."""
 
 import json
 
@@ -258,7 +258,7 @@ def test_inserted_dialog_opens_itself_and_is_removed_on_close(dlg: UiHarness) ->
     assert dlg.page.evaluate(INERTED) == ["pre-inert"]
 
 
-# evaluate() は戻り値の Promise を待つため、openDialog() の Promise は返さない
+# evaluate() awaits a returned Promise, so do not return openDialog()'s Promise
 OPEN_INFO = """() => {
     window.__result = 'unset';
     openDialog('info-dialog').then((v) => { window.__result = v; });
@@ -316,7 +316,7 @@ def test_keyboard_reaches_and_closes_a_toast_then_returns_to_the_dialog(
     dlg.page.evaluate("showFlashMessage('保存に失敗しました', 'error')")
     in_toast = "document.activeElement.closest('#flash-messages') !== null"
 
-    # パネルの最後（保存）の次はトーストの閉じるボタン、その次はパネルの最初へ戻る
+    # After the last panel control (Save) comes the toast close button, then focus wraps to the panel start
     dlg.page.focus("[data-testid='form-dialog-submit']")
     dlg.page.keyboard.press("Tab")
     assert dlg.active(in_toast)
@@ -329,7 +329,7 @@ def test_keyboard_reaches_and_closes_a_toast_then_returns_to_the_dialog(
         dlg.active("document.activeElement.dataset.testid")
         == "form-dialog-close-button"
     )
-    # パネルの最初の前もトーストの閉じるボタン
+    # Before the first panel control is also the toast close button
     dlg.page.keyboard.press("Shift+Tab")
     assert dlg.active(in_toast)
 

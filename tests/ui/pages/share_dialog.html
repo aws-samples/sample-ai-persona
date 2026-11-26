@@ -2,8 +2,8 @@
 {% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
 {% from "components/list_tabs.html" import list_tabpanel %}
 {#
-  共有ダイアログ（U4、M7）の部品の画面。一覧（list_tabpanel）の中に 1 件の
-  「共有先を設定」と一括の操作バーを置き、ダイアログは画面に 1 つだけ置く。
+  Component page for the share dialog. Puts one share-settings button and the
+  bulk action bar inside the list (list_tabpanel), with a single dialog per page.
 #}
 {% block component %}
 {% call list_tabpanel("persona-list", "mine", "/persona/management") %}

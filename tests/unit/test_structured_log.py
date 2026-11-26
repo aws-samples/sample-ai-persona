@@ -1,4 +1,4 @@
-"""構造化ログ（JSON 1 行）の単体テスト（NFR3.3、NFR8.1、NFR8.2）。"""
+"""Unit tests for structured logging (one JSON line per record)."""
 
 import io
 import json

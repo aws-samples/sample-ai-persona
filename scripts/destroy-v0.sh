@@ -1,31 +1,31 @@
 #!/bin/bash
 ###############################################################################
-# AI Persona System - v0 環境削除スクリプト（CloudShell版）
+# AI Persona System - v0 environment teardown script (CloudShell)
 #
-# v0（v1.0.0 より前）の deploy.sh でデプロイした全スタックを削除します。
-# スタックの依存関係に基づき、正しい順序で削除を実行します。
-# v1.0.0 のスタック（AIPersonaDev / AIPersonaDevClosed）はプロジェクトルートの
-# ./destroy.sh で削除します。このスクリプトは v1 のスタックには触れません。
+# Removes every stack deployed by the v0 deploy.sh (before v1.0.0),
+# in the order required by the stack dependencies.
+# Stacks of v1.0.0 (AIPersonaDev / AIPersonaDevClosed) are removed with ./destroy.sh in the
+# project root. This script does not touch v1 stacks.
 #
-# v0 は v1 への切り戻しの備えとして残しておけます。削除は v1 で問題がないことを
-# 確かめてから、利用者の判断で行ってください。
+# v0 can be kept as a rollback option for v1. Remove it yourself only after
+# confirming v1 works.
 #
-# 使い方（プロジェクトルートで実行）:
+# Usage (run from the project root):
 #   ./scripts/destroy-v0.sh
 #
-# オプション:
-#   --env ENV_NAME   環境名を指定（デフォルト: dev）
-#   --region REGION  リージョンを指定（デフォルト: us-east-1）
-#   --force          確認プロンプトをスキップ
+# Options:
+#   --env ENV_NAME   Environment name (default: dev)
+#   --region REGION  Region (default: us-east-1)
+#   --force          Skip the confirmation prompt
 ###############################################################################
 set -euo pipefail
 
-# ===== 設定 =====
+# ===== Settings =====
 ENV_NAME="dev"
 REGION="us-east-1"
 FORCE=false
 
-# カラー出力
+# Colored output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -37,7 +37,7 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step()  { echo -e "\n${BLUE}========================================${NC}"; echo -e "${BLUE}  $1${NC}"; echo -e "${BLUE}========================================${NC}"; }
 
-# ===== 引数パース =====
+# ===== Argument parsing =====
 while [[ $# -gt 0 ]]; do
   case $1 in
     --env)    ENV_NAME="$2"; shift 2 ;;
@@ -54,7 +54,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ===== 環境チェック =====
+# ===== Environment checks =====
 log_step "Step 0: 環境チェック"
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -69,26 +69,26 @@ if [[ ! -f "${PROJECT_ROOT}/cdk/bin/app.ts" ]]; then
   exit 1
 fi
 
-# スタック名定義
+# Stack names
 MCP_STACK="AIPersonaMcp-${ENV_NAME}"
 COGNITO_STACK="AIPersonaCognito-${ENV_NAME}"
 MAIN_STACK="AIPersona-${ENV_NAME}"
 WAF_STACK="AIPersonaWaf-${ENV_NAME}"
 MEMORY_STACK="AIPersonaMemory-${ENV_NAME}"
 ECR_STACK="AIPersonaEcr-${ENV_NAME}"
-# Lambda@Edge サポートスタック（REGIONがus-east-1以外の場合にus-east-1へ自動生成される。
-# 名前は edge-lambda-stack-<hash> と動的なため、検出時に特定する）
+# Lambda@Edge support stack (auto-created in us-east-1 when REGION is not us-east-1).
+# Its name is dynamic (edge-lambda-stack-<hash>), so it is identified at detection time.
 EDGE_STACK=""
 
-# ===== 削除対象の確認 =====
+# ===== Confirm what will be removed =====
 log_step "削除対象スタックの確認"
 
 stack_exists() {
   aws cloudformation describe-stacks --stack-name "$1" --region "${REGION}" > /dev/null 2>&1
 }
 
-# us-east-1 の edge-lambda-stack-* から本プロジェクト（この環境名）のLambda@Edge
-# サポートスタックを特定する。関数名 ai-persona-auth-edge-${ENV_NAME} を含むものを探す。
+# Find the Lambda@Edge support stack of this project (this env name) among edge-lambda-stack-* in us-east-1,
+# by looking for the function name ai-persona-auth-edge-${ENV_NAME}.
 find_edge_stack() {
   local candidates s
   candidates=$(aws cloudformation list-stacks --region us-east-1 \
@@ -115,14 +115,14 @@ for stack in "${MCP_STACK}" "${COGNITO_STACK}" "${MAIN_STACK}" "${MEMORY_STACK}"
     log_info "  なし: ${stack} (スキップ)"
   fi
 done
-# WAF Stack は us-east-1 に作成されるため別途確認
+# The WAF stack is created in us-east-1, so check it separately
 if aws cloudformation describe-stacks --stack-name "${WAF_STACK}" --region us-east-1 > /dev/null 2>&1; then
   log_info "  存在: ${WAF_STACK} (us-east-1)"
   STACKS_TO_DELETE+=("${WAF_STACK}")
 else
   log_info "  なし: ${WAF_STACK} (スキップ)"
 fi
-# Lambda@Edge サポートスタック（REGIONがus-east-1以外の場合のみ、us-east-1を検索）
+# Lambda@Edge support stack (searched in us-east-1 only when REGION is not us-east-1)
 if [[ "${REGION}" != "us-east-1" ]]; then
   EDGE_STACK=$(find_edge_stack)
   if [[ -n "${EDGE_STACK}" ]]; then
@@ -138,7 +138,7 @@ if [[ ${#STACKS_TO_DELETE[@]} -eq 0 ]]; then
   exit 0
 fi
 
-# ===== 確認プロンプト =====
+# ===== Confirmation prompt =====
 if [[ "${FORCE}" == "false" ]]; then
   echo ""
   echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -174,9 +174,9 @@ delete_stack() {
   log_info "${stack_name} を削除しました"
 }
 
-# ===== 削除実行（依存関係の逆順） =====
+# ===== Removal (reverse dependency order) =====
 
-# 1. MCP Gateway Stack（メインスタックの export を import しているため最初に削除）
+# 1. MCP Gateway stack (first, because it imports exports of the main stack)
 if stack_exists "${MCP_STACK}"; then
   log_step "Step 1: MCP Gateway Stackの削除"
   delete_stack "${MCP_STACK}" "${REGION}"
@@ -245,9 +245,9 @@ else
   log_info "Step 6: ${ECR_STACK} はスキップ"
 fi
 
-# 7. Lambda@Edge サポートスタック (us-east-1)
-# メインスタック（CloudFront）削除後に削除する。レプリカ削除の遅延で初回は失敗し得るため
-# ベストエフォート（失敗してもスクリプト全体は止めない）。
+# 7. Lambda@Edge support stack (us-east-1)
+# Remove after the main stack (CloudFront). The first attempt can fail because replica removal lags,
+# so this is best effort (a failure does not stop the whole script).
 if [[ -n "${EDGE_STACK}" ]]; then
   if aws cloudformation describe-stacks --stack-name "${EDGE_STACK}" --region us-east-1 > /dev/null 2>&1; then
     log_step "Step 7: Lambda@Edge サポートスタックの削除 (us-east-1)"
@@ -259,7 +259,7 @@ if [[ -n "${EDGE_STACK}" ]]; then
   fi
 fi
 
-# ===== 完了 =====
+# ===== Done =====
 log_step "v0 環境削除完了"
 
 echo ""

@@ -8,24 +8,23 @@ import { EdgeStack } from '../lib/edge-stack';
 import { AppParameter, devParameter } from '../parameters';
 
 /**
- * App スタック（Fargate・内部 ALB・CloudFront・アプリクライアント・ログ）の検査。
- * FR1.8、FR9.3、NFR3.1、NFR3.3、NFR4.5、NFR4.7、NFR4.8、NFR5.1、NFR5.3、NFR8.1、
- * NFR8.3〜NFR8.5、NFR9.1、NFR9.3、NFR9.9、BR1.20。
- * express-service.test.ts の ENABLE_DATASET_ANALYSIS の検査もここへ移した。
+ * Checks of the App stack (Fargate, internal ALB, CloudFront, app client, logs),
+ * including the ENABLE_DATASET_ANALYSIS checks.
  */
 
 const TOKYO = { account: '123456789012', region: 'ap-northeast-1' };
 const VIRGINIA = { account: '123456789012', region: 'us-east-1' };
 
-// AWS 管理のキャッシュ・オリジンリクエストポリシーの ID
+// IDs of the AWS-managed cache and origin request policies
 const CACHING_DISABLED = '4135ea2d-6df8-44a3-9df3-4b5a84be39ad';
 const CACHING_OPTIMIZED = '658327ea-f89d-4fab-a63d-7e88639e58f6';
 const ALL_VIEWER_EXCEPT_HOST = 'b689b0a8-53d0-40ab-baf2-68738e2966ac';
 
 /**
- * cdk.json の機能フラグ（cdk deploy が使う設定）。U6: タスクロールの方針の大きさは
- * `@aws-cdk/aws-iam:minimizePolicies` で文がまとまった形で決まるため、テストも同じ設定で組む
- * （フラグなしでは文がまとまらず、上限を超えた分が別の管理ポリシーへ溢れる）。
+ * Feature flags from cdk.json (the settings `cdk deploy` uses). The size of the task role's
+ * policy depends on `@aws-cdk/aws-iam:minimizePolicies` merging statements, so the test
+ * builds with the same flags (without them statements stay separate and the excess
+ * overflows into another managed policy).
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const FEATURE_FLAGS: Record<string, unknown> = require('../cdk.json').context;
@@ -121,7 +120,7 @@ describe('AppStack: ネットワーク', () => {
     const [albGroupId, albGroup] = Object.entries(groups).find(([, g]) =>
       (g.Properties.GroupDescription as string).includes('Load balancer'),
     )!;
-    // インラインの受け入れと、別リソースの受け入れの両方を集める
+    // Collect both inline and separate-resource grants
     const separate = Object.values(template.findResources('AWS::EC2::SecurityGroupIngress'))
       .map((r) => r.Properties)
       .filter((p) => JSON.stringify(p.GroupId).includes(albGroupId));
@@ -184,7 +183,7 @@ describe('AppStack: Fargate', () => {
     ]) {
       expect(env[name]).toBeDefined();
     }
-    // 秘密を環境変数に平文で置かない
+    // Never put secrets in plain-text environment variables
     for (const secret of ['COGNITO_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEYS', 'LOGIN_COOKIE_SIGNING_KEY']) {
       expect(env[secret]).toBeUndefined();
     }
@@ -213,8 +212,8 @@ describe('AppStack: Fargate', () => {
     const dynamoWrites = statements.filter((s) =>
       [s.Action].flat().some((a: string) => a === 'dynamodb:PutItem'),
     );
-    // minimizePolicies で同じ操作の文はまとまるため、文の数ではなく、書き込むテーブルが
-    // どれも文の対象に入っていることを確かめる
+    // minimizePolicies merges statements for the same action, so check that every table
+    // that is written to is covered by some statement rather than counting statements
     const resources = JSON.stringify(dynamoWrites.map((s) => s.Resource));
     for (const table of [
       'Personas', 'Discussions', 'UploadedFiles', 'Datasets', 'SurveyTemplates', 'Surveys',
@@ -298,8 +297,8 @@ describe('AppStack: CloudFront', () => {
     const behaviors = distribution().CacheBehaviors as any[];
     expect(behaviors).toHaveLength(1);
     expect(behaviors[0].PathPattern).toBe('/static/*');
-    // 管理ポリシー CachingOptimized はクエリを鍵に含めず、デプロイ後も古い JS・CSS を
-    // 最大 1 日返していた。v（中身のハッシュ）を鍵に含める自前のポリシーにする
+    // The managed CachingOptimized policy leaves the query out of the cache key, so stale
+    // JS/CSS was served for up to a day after deploys. Use our own policy keyed on v (content hash)
     expect(behaviors[0].CachePolicyId).not.toBe(CACHING_OPTIMIZED);
     template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
       CachePolicyConfig: Match.objectLike({
@@ -335,7 +334,7 @@ describe('AppStack: ログとメトリクス', () => {
   });
 
   test('認証のメトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
-    // 高度な生成の 7 つ（AIPersona/AdvancedGeneration。U2 で 2 つ、U6 で 2 つ足した）は下の節で確かめる
+    // The seven advanced-generation entries (AIPersona/AdvancedGeneration) are checked in a later section
     const all = Object.values(template.findResources('AWS::Logs::MetricFilter'));
     expect(all).toHaveLength(14);
     const filters = all.filter(
@@ -397,7 +396,7 @@ describe('AppStack: 公開構成に閉域構成のログインの権限を付け
     for (const action of ADMIN_ACTIONS) {
       expect(actions).not.toContain(action);
     }
-    // ワイルドカードでも付けない
+    // Not attached even with a wildcard
     for (const action of actions) {
       expect(action).not.toMatch(/^cognito-idp:(\*|Admin\*)$/);
       expect(action).not.toBe('*');
@@ -540,9 +539,10 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     expect(JSON.stringify(statements)).not.toContain('/index/*');
   });
 
-  // 高度な生成 U2（BR14.1、NFR3.15）: 利用者の削除で sources/ のキーの全版を消すため、版の操作は
-  // s3:DeleteObjectVersion（sources/* だけ）と s3:ListBucketVersions（prefix を sources/ に限る条件付き）
-  // の 2 つだけを許す。それ以外の版の操作と、ほかのプレフィックス・条件なしの付与は引き続き禁止する
+  // Deleting a user's file removes every version of the sources/ keys, so only two version
+  // operations are allowed: s3:DeleteObjectVersion (sources/* only) and s3:ListBucketVersions
+  // (conditional on the prefix being sources/). Other version operations, other prefixes and
+  // unconditioned grants stay forbidden
   test('S3 の版の操作は sources/ の削除の 2 つだけ', () => {
     const statements = taskStatements(template);
     const actions = actionsOf(statements);
@@ -742,7 +742,7 @@ test('出力に CloudFront の URL とサービスの名前がある（deploy.sh
 /**
  * Statements of the IAM policies whose roles' logical IDs start with `rolePrefix`.
  *
- * U2: the task role's statements no longer fit in its default policy, so CDK moves
+ * The task role's statements no longer fit in its default policy, so CDK moves
  * the last ones to an overflow managed policy attached to the same role
  * (`minimizePolicies`); both are read here.
  */
@@ -762,7 +762,7 @@ const actionsIn = (statements: any[]) => statements.flatMap((s) => [s.Action].fl
 const resourcesText = (s: any) => JSON.stringify(s.Resource);
 
 describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1.10、BR2.3、BR2.4）', () => {
-  /** `bedrock:InvokeModel` を持つ文の Resource（タスクロール）。 */
+  /** Resource of the statements that have `bedrock:InvokeModel` (task role). */
   function invokeModelResources(t: Template): string[] {
     const statement = statementsOfRole(t, 'AppTaskDefinitionTaskRole').find((s) =>
       ([] as string[]).concat(s.Action).includes('bedrock:InvokeModel'),
@@ -829,7 +829,7 @@ describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1
 });
 
 // =============================================================================
-// アンケートのステートマシン（基盤設計 2.2・3.1・3.2・4 章、BR2.6、BR3.3、BR3.5、BR3.6）
+// Survey state machine
 // =============================================================================
 
 function stateMachineOf(t: Template): { logicalId: string; resource: any } {
@@ -1137,7 +1137,7 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
     const [, resource] = found[0];
     expect(resource.Properties.NetworkConfiguration).toEqual({ NetworkMode: 'SANDBOX' });
     expect(resource.Properties.ExecutionRoleArn).toBeUndefined();
-    // 名前は英数字と _ だけ（AgentCore の名前の決まり）。Stage の環境の名前を含む
+    // Only alphanumerics and _ are allowed (AgentCore naming rule). Includes the Stage environment name
     expect(resource.Properties.Name).toMatch(/^[a-zA-Z][a-zA-Z0-9_]{0,47}$/);
     expect(resource.Properties.Name).toContain('dev');
   });
@@ -1183,7 +1183,7 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
       expect(actions.has(action)).toBe(true);
     }
     const text = JSON.stringify(statements);
-    // `<テーブルの ARN>/index/<名前>` は Fn::Join の [{Fn::ImportValue: <テーブルの ARN>}, "/index/<名前>"]
+    // `<table ARN>/index/<name>` is Fn::Join of [{Fn::ImportValue: <table ARN>}, "/index/<name>"]
     expect(text).toMatch(/DatabaseSourceFiles[0-9A-F]{8}Arn[^"]*"\},"\/index\/owner_sub-created_at"/);
     expect(text).toMatch(/DatabaseAdvancedGenerations[0-9A-F]{8}Arn[^"]*"\},"\/index\/owner_sub-created_at"/);
     expect(text).not.toContain('/index/*');
@@ -1227,10 +1227,10 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
         },
       ],
     });
-    // 消すときは CORS の設定だけを外す（バケットは消さない）
+    // On removal only the CORS configuration is dropped (the bucket is kept)
     expect(remove).toMatchObject({ service: 'S3', action: 'deleteBucketCors' });
     expect(remove.parameters).toEqual({ Bucket: create.parameters.Bucket });
-    // オリジンは APP_BASE_URL と同じ値
+    // The origin is the same value as APP_BASE_URL
     expect(JSON.stringify(envOf(template).APP_BASE_URL)).toContain('CloudFront');
   });
 
@@ -1259,7 +1259,7 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
       'TamperDetected',
       'UploadFailed',
     ]);
-    // U6（NFR6.22）: AI による詳細分析を外した数（reason の次元）と、書き換えを見つけた数
+    // Count of detailed-analysis removals (reason dimension) and of tampering detections
     expect(byName.RunCodeDisabled.FilterPattern).toBe(
       '{ ($.event = "advanced_generation.run_code_disabled") && ($.status = "disabled") }',
     );
@@ -1270,7 +1270,7 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
       '{ ($.event = "advanced_generation.tamper_detected") && ($.status = "detected") }',
     );
     expect(byName.TamperDetected.MetricTransformations[0].Dimensions).toBeUndefined();
-    // U2（NFR6.10）: 削除とコピーの失敗。アプリのログの event と status の値
+    // Delete and copy failures: the event and status values of the app log
     expect(byName.SourceDeleteFailed.FilterPattern).toBe(
       '{ ($.event = "advanced_generation.source_deleted") && ($.status = "failed") }',
     );
@@ -1286,7 +1286,7 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
       expect(props.MetricTransformations[0].MetricValue).toBe('1');
       expect(props.MetricTransformations[0].DefaultValue).toBeUndefined();
     }
-    // アプリのログ（src/managers/shared/advanced_generation_log.py）の event と status の値
+    // The event and status values of the app log (src/managers/shared/advanced_generation_log.py)
     expect(byName.GenerationCompleted.FilterPattern).toBe(
       '{ ($.event = "advanced_generation.finished") && ($.status = "done") }',
     );

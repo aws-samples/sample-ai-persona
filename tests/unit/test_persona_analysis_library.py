@@ -2,9 +2,8 @@
 
 The library runs inside a Code Interpreter session in production, so the app
 never imports it. These tests load it from its file path and call the same
-functions in this process (NFR9.3). They cover the preparation (BR4.2〜BR4.4),
-the profile, the clustering (BR5.3), the query used by ``analyze_dataset`` and
-the download that must not print the URL (security-design.md §3).
+functions in this process. They cover the preparation, the profile, the clustering,
+the query used by ``analyze_dataset`` and the download that must not print the URL.
 """
 
 from __future__ import annotations
@@ -122,7 +121,7 @@ class TestPrepare:
     def test_undetermined_falls_back_to_cp932(
         self, lib: ModuleType, tmp_path: Path
     ) -> None:
-        # The head is ASCII only (undetermined); a later line is CP932 (BR4.3).
+        # The head is ASCII only (undetermined); a later line is CP932.
         lines = ["id,name"] + [f"{i},abc" for i in range(50)] + ["51,髙橋①"]
         data = ("\n".join(lines) + "\n").encode("cp932")
 
@@ -198,7 +197,7 @@ def _csv_with_bad_lines(total: int, bad_lines: set[int], bad: bytes) -> bytes:
 
 
 class TestPrepareBadRowBoundary:
-    """BR16.1 and BR16.2: stop above 1% of the rows seen, with line numbers."""
+    """Stop above 1% of the rows seen, with line numbers."""
 
     def test_three_bad_rows_in_a_hundred_thousand_go_on(
         self, lib: ModuleType, tmp_path: Path
@@ -302,7 +301,7 @@ class TestPrepareBadRowBoundary:
 
 
 class TestPrepareOutOfMemoryContext:
-    """BR17.1: the failure says how far it got and how many columns there are."""
+    """The failure says how far it got and how many columns there are."""
 
     def test_out_of_memory_in_the_parquet_step_has_rows_and_columns(
         self, lib: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -589,7 +588,7 @@ def _members_csv() -> bytes:
 
 
 class TestProfileSegments:
-    """Features of the layers a fixed tool made, counted by the library (U6)."""
+    """Features of the layers a fixed tool made, counted by the library."""
 
     def _profile(self, lib: ModuleType, tmp_path: Path, **args: Any) -> Any:
         _prepare(lib, tmp_path, _members_csv(), source_id="src1")
@@ -828,7 +827,7 @@ class TestDownload:
 
 class TestCommandLineOutput:
     def test_the_result_line_is_ascii_only(self, tmp_path: Path) -> None:
-        """Code Interpreter の stdout は長い出力の多バイト文字を壊すので、結果は ASCII だけで出す。"""
+        """Code Interpreter stdout breaks multibyte characters in long output, so the result is ASCII only."""
         (tmp_path / "sources").mkdir()
         (tmp_path / "sources" / "src1").write_text(
             "地域,メモ\n" + "".join(f"東京都,{'…' * 30}{i}\n" for i in range(40)),
@@ -870,7 +869,7 @@ class TestDispatch:
 
 
 # ---------------------------------------------------------------------------
-# U4: documents (BR24.1〜BR24.6, BR27.1, NFR1.20, NFR1.22, NFR5.39)
+# Documents
 # ---------------------------------------------------------------------------
 
 
@@ -1243,8 +1242,7 @@ class TestVerifyQuotes:
 
 
 # ---------------------------------------------------------------------------
-# U6: AI-written code, the check and the playbook functions
-# (BR36.3, BR36.6, BR37.3, BR37.4, BR39.2, NFR3.35)
+# AI-written code, the check and the playbook functions
 # ---------------------------------------------------------------------------
 
 _SOURCES = {"source_1": "cust", "source_2": "buys"}
@@ -2026,7 +2024,7 @@ class TestPlaybookFunctions:
     def test_joined_names_keep_japanese_and_never_collide(
         self, lib: ModuleType, tmp_path: Path
     ) -> None:
-        """U6 addendum: only characters unusable in a name become ``_``."""
+        """Only characters unusable in a name become ``_``."""
         import duckdb
 
         axis, other = str(tmp_path / "axis.parquet"), str(tmp_path / "other.parquet")
@@ -2259,7 +2257,7 @@ class TestDefaultMetrics:
 
 
 class TestPersonProfile:
-    """One row per person from any history table (U6 addendum)."""
+    """One row per person from any history table."""
 
     @staticmethod
     def _history() -> Any:

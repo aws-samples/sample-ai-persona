@@ -1,7 +1,7 @@
 {% from "components/datetime.html" import iso_datetime %}
-<!-- チャットメッセージ部分テンプレート -->
+<!-- Chat message partial -->
 {% if message.persona_id == 'user' %}
-<!-- ユーザーメッセージ -->
+<!-- User message -->
 <div class="message-item user-message animate-fade-in">
     <div class="flex justify-end mb-4">
         <div class="relative max-w-xs lg:max-w-md">
@@ -19,11 +19,11 @@
     </div>
 </div>
 {% else %}
-<!-- ペルソナメッセージ -->
+<!-- Persona message -->
 <div class="message-item persona-message animate-fade-in">
     <div class="flex gap-3 mb-4">
         <div class="flex-shrink-0">
-            <!-- ペルソナアバター（DiceBear、ペルソナIDをseedに一貫生成。未読込時は頭文字フォールバック） -->
+            <!-- Persona avatar (DiceBear, generated consistently from the persona ID as seed; falls back to the initial before loading) -->
             <div class="persona-list-avatar ring-2 ring-white"
                  data-avatar-seed="{{ message.persona_id }}"
                  data-avatar-name="{{ message.persona_name }}"

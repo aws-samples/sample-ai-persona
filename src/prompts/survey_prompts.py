@@ -1,4 +1,4 @@
-"""アンケート機能に関するプロンプト定数・ヘルパー関数"""
+"""Prompt constants and helper functions for the survey feature."""
 
 import json
 from typing import Any, Dict, List, Optional, Sequence
@@ -7,7 +7,7 @@ from ..models.survey import MIN_SURVEY_PERSONAS
 from ..models.survey_template import Question, SurveyTemplate
 
 # ---------------------------------------------------------------------------
-# ペルソナ属性カラム定義（プロンプト構築で参照）
+# Persona attribute column definitions (used when building prompts)
 # ---------------------------------------------------------------------------
 
 PERSONA_ATTRIBUTE_COLUMNS: List[str] = [
@@ -30,7 +30,7 @@ PERSONA_PROFILE_COLUMNS: List[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-# AI設問生成（ヒアリング + ドラフト生成）
+# AI question generation (interview + draft generation)
 # ---------------------------------------------------------------------------
 
 SURVEY_CHAT_SYSTEM_PROMPT = (
@@ -74,7 +74,7 @@ SURVEY_DRAFT_SYSTEM_PROMPT = (
 )
 
 # ---------------------------------------------------------------------------
-# DWH連携
+# DWH integration
 # ---------------------------------------------------------------------------
 
 DWH_SEGMENT_SYSTEM_PROMPT = (
@@ -111,7 +111,7 @@ DWH_SEGMENT_SYSTEM_PROMPT = (
 )
 
 # ---------------------------------------------------------------------------
-# インサイトレポート生成
+# Insight report generation
 # ---------------------------------------------------------------------------
 
 INSIGHT_REPORT_SYSTEM_PROMPT = (
@@ -136,7 +136,7 @@ INSIGHT_REPORT_PROMPT_TEMPLATE = (
 )
 
 # ---------------------------------------------------------------------------
-# データセット管理
+# Dataset management
 # ---------------------------------------------------------------------------
 
 COLUMN_MAPPING_PROMPT_TEMPLATE = (
@@ -160,7 +160,7 @@ DATASET_NAME_GENERATION_PROMPT = (
 )
 
 # ---------------------------------------------------------------------------
-# ペルソナの回答（Step Functions のオンデマンド推論）
+# Persona answers (on-demand inference via Step Functions)
 # ---------------------------------------------------------------------------
 
 PERSONA_RESPONSE_ATTITUDE_PREFIX = (
@@ -184,7 +184,7 @@ SURVEY_QUESTION_FORMAT_TEMPLATE = (
 )
 
 # ---------------------------------------------------------------------------
-# 標準カラム定義（マッピング用）
+# Standard column definitions (for mapping)
 # ---------------------------------------------------------------------------
 
 STANDARD_COLUMNS: Dict[str, Dict[str, Any]] = {
@@ -225,7 +225,7 @@ STANDARD_COLUMNS: Dict[str, Dict[str, Any]] = {
 
 
 # ---------------------------------------------------------------------------
-# ヘルパー関数
+# Helper functions
 # ---------------------------------------------------------------------------
 
 
@@ -234,7 +234,7 @@ def build_column_mapping_prompt(
     samples: Dict[str, List[str]],
     standard_cols: Dict[str, Any],
 ) -> str:
-    """カラムマッピング提案用プロンプトを構築する。"""
+    """Build the prompt that proposes column mappings."""
     csv_lines = []
     for col in columns:
         sample_vals = samples.get(col, [])
@@ -251,7 +251,7 @@ def build_column_mapping_prompt(
 
 
 def build_insight_prompt(summary: Dict[str, Any], template: SurveyTemplate) -> str:
-    """統計要約からインサイトレポート生成プロンプトを構築する。"""
+    """Build the insight report prompt from statistical summaries."""
     summary_json = json.dumps(summary, ensure_ascii=False, indent=2)
     return INSIGHT_REPORT_PROMPT_TEMPLATE.format(summary_json=summary_json)
 
@@ -260,7 +260,7 @@ def build_persona_system_prompt(
     persona_row: Dict[str, Any],
     extra_columns: Optional[List[Dict[str, str]]] = None,
 ) -> str:
-    """ペルソナ属性からシステムプロンプトを構築する。"""
+    """Build the system prompt from persona attributes."""
     parts = [PERSONA_RESPONSE_ATTITUDE_PREFIX]
 
     attr_labels = {
@@ -313,17 +313,17 @@ def build_persona_system_prompt(
 
 
 def build_dataset_name_prompt(condition: str) -> str:
-    """データセット名自動生成プロンプトを構築する。"""
+    """Build the prompt that auto-generates a dataset name."""
     return DATASET_NAME_GENERATION_PROMPT.format(condition=condition)
 
 
 # ---------------------------------------------------------------------------
-# アンケートの回答の依頼（Step Functions のオンデマンド推論）
+# Prompt for asking the persona to answer the survey (on-demand inference via Step Functions)
 # ---------------------------------------------------------------------------
 
 
 def format_questions_for_prompt(questions: Sequence[Question]) -> str:
-    """Turn the questions into the prompt text (wording unchanged, NFR2.4)."""
+    """Turn the questions into the prompt text (wording unchanged)."""
     lines: List[str] = []
     for i, q in enumerate(questions, 1):
         lines.append(f"質問{i} (ID: {q.id}): {q.text}")
@@ -370,7 +370,7 @@ def build_survey_user_content(
 ) -> List[Dict[str, Any]]:
     """The user message: the image names and images first, then the questions.
 
-    The order is the same as before the move to Step Functions (NFR2.4).
+    The order is the same as before the move to Step Functions.
     """
     content: List[Dict[str, Any]] = []
     if image_blocks:
@@ -391,7 +391,7 @@ def build_survey_user_content(
 
 
 def _answer_property(question: Question) -> Dict[str, Any]:
-    """The schema of one question's value (BR5.2〜BR5.4, BR5.6)."""
+    """The schema of one question's value."""
     if question.question_type == "multiple_choice":
         option = {"type": "string", "enum": list(question.options)}
         if question.allow_multiple:
@@ -406,7 +406,7 @@ def _answer_property(question: Question) -> Dict[str, Any]:
 
 
 def build_answer_schema(questions: Sequence[Question]) -> Dict[str, Any]:
-    """The structured-output schema: every question by ID, required (BR5.1)."""
+    """The structured-output schema: every question by ID, required."""
     return {
         "type": "object",
         "properties": {

@@ -1,1 +1,1 @@
-"""Advanced persona generation (beta) business rules (U1)."""
+"""Business rules for advanced persona generation (beta)."""

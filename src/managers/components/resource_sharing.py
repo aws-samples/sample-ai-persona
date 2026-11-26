@@ -1,38 +1,37 @@
-"""Department sharing and the tabbed lists (ADR-003, contract C7, U4).
+"""Department sharing and the tabbed lists.
 
 ``ResourceSharing`` decides *when* and *on what* the authorization checks run;
-the checks themselves are ``AccessPolicy``'s (``security-design.md`` §1). It
-is shared by every Manager whose resources can be shared (personas in U4,
-discussions and surveys in U6 / U7), so it lives in ``components/`` (ADR-003,
-ADR-011). DynamoDB is reached only through the injected store
-(``ResourceShareStore``); the departments come from ``DepartmentDirectory``.
+the checks themselves are ``AccessPolicy``'s. It
+is shared by every Manager whose resources can be shared (personas,
+discussions, surveys), so it lives in ``components/``. DynamoDB is reached
+only through the injected store (``ResourceShareStore``); the departments come
+from ``DepartmentDirectory``.
 
-Rules (``functional-design/rules.md``):
+Rules:
 
-- BR1.1 / BR1.9: every write attempt re-reads the body with a strongly
+- Every write attempt re-reads the body with a strongly
   consistent read and calls ``ensure_manageable`` on it (404 when unreadable,
   403 when readable only). Condition failures and conflicts are retried up to
   three attempts in total; the third failure is ``SHARE_UPDATE_FAILED``.
-- BR1.2 / BR1.4 / BR1.5: added and removed departments must be in the user's
+- Added and removed departments must be in the user's
   choices (``shareable_groups``); only ``share:any_group`` may remove a
   department that no longer exists. Nothing is written otherwise.
-- BR1.3: shares outside the choices stay: ``new = (current - remove) | add``.
-- BR1.6 / BR1.7 / BR1.8 / BR1.10 / BR1.11: one conditional transaction, the
-  column is removed when empty, nothing is written when nothing changes,
-  index items copy ``created_at`` and ``owner_sub``, at most 99 departments
-  and at most 99 changes.
-- BR1.12: ``remove = (initial & removable) - selected - unchanged``.
-- BR2: bulk shares check the counts and the scope once, then write each
+- Shares outside the choices stay: ``new = (current - remove) | add``.
+- One conditional transaction, the column is removed when empty, nothing is
+  written when nothing changes, index items copy ``created_at`` and
+  ``owner_sub``, at most 99 departments and at most 99 changes.
+- ``remove = (initial & removable) - selected - unchanged``.
+- Bulk shares check the counts and the scope once, then write each
   target and report failures (no name for unreadable targets).
-- BR3: ``all`` needs ``resource:read_all`` (otherwise ``mine``); ``mine``
+- ``all`` needs ``resource:read_all`` (otherwise ``mine``); ``mine``
   queries ``OwnerIndex``; ``shared`` merges the user's departments, drops
   duplicates and the user's own; only ``all`` scans; cursors carry positions
   only and are validated (bad ones restart at the first page).
-- BR4: deletes the body and its index items in one transaction conditioned
+- Delete removes the body and its index items in one transaction conditioned
   on the shares and the cleanup columns, and returns the deleted body.
 
-Logs: ``sharing.changed``, ``sharing.retry``, ``sharing.update_failed``
-(``observability-design.md``). They carry IDs, never names.
+Logs: ``sharing.changed``, ``sharing.retry``, ``sharing.update_failed``.
+They carry IDs, never names.
 """
 
 import random
@@ -73,20 +72,20 @@ from ...services.stores.resource_share_store import (
 from ..shared.structured_log import log_event
 from .access_policy import AccessPolicy
 
-#: One page of a tab (BR3.5).
+#: One page of a tab.
 PAGE_SIZE = 20
-#: Most targets of one bulk share (BR2.1).
+#: Most targets of one bulk share.
 MAX_TARGETS = 100
 #: Most departments one resource can be shared with, and most changes in one
-#: write (BR1.11, NFR9.25).
+#: write.
 MAX_GROUPS = 99
-#: Write attempts before ``SHARE_UPDATE_FAILED`` (BR1.9).
+#: Write attempts before ``SHARE_UPDATE_FAILED``.
 MAX_ATTEMPTS = 3
 #: Waits before retrying after a ``TransactionConflict`` (jittered).
 CONFLICT_BACKOFF_SECONDS: tuple[float, ...] = (0.05, 0.1)
-#: Newest items a search reads (BR3.8).
+#: Newest items a search reads.
 SEARCH_LIMIT = 500
-#: How long the ``all`` count is kept per task (BR3.4, NFR2.4).
+#: How long the ``all`` count is kept per task.
 ALL_COUNT_TTL_SECONDS = 60
 #: Label of a department that no longer exists.
 VANISHED_LABEL = "（存在しないグループ）"
@@ -162,7 +161,7 @@ class ShareStore(Protocol):
 
 
 class DepartmentListing(Protocol):
-    """What ``ResourceSharing`` needs from ``DepartmentDirectory`` (C4)."""
+    """What ``ResourceSharing`` needs from ``DepartmentDirectory``."""
 
     def list_all(self) -> list[Department]: ...
 
@@ -172,9 +171,8 @@ class DepartmentListing(Protocol):
 def default_sharing_tables() -> list[SharingTable]:
     """The one place the shareable types are registered.
 
-    U4 registers personas. U6 / U7 add discussions, survey templates and
-    surveys here in the same change that gives their tables ``owner_sub`` and
-    ``OwnerIndex``.
+    Personas, discussions, survey templates and surveys are registered here in
+    the same change that gives their tables ``owner_sub`` and ``OwnerIndex``.
     """
     return [
         SharingTable(
@@ -185,8 +183,8 @@ def default_sharing_tables() -> list[SharingTable]:
             delete_failed=ErrorCode.PERSONA_OPERATION_FAILED,
             cleanup_attributes=("avatar_path",),
         ),
-        # U6: 議論（インタビュー結果を含む）。後始末の列を削除の条件に入れ、読んだときと
-        # 同じ発言・レポート・資料を消す（logical-components.md「共有するもの」）
+        # Discussions (including interview results). The cleanup columns are part of
+        # the delete condition so the same messages, reports and files that were read are deleted
         SharingTable(
             resource_type=ResourceType.DISCUSSION,
             table=config.table_name("Discussions"),
@@ -195,7 +193,7 @@ def default_sharing_tables() -> list[SharingTable]:
             delete_failed=ErrorCode.DISCUSSION_OPERATION_FAILED,
             cleanup_attributes=("documents", "message_count", "report_count"),
         ),
-        # U7 BR6.3: テンプレート（後始末は画像）と結果（後始末は結果 CSV）
+        # Templates (cleanup is the images) and results (cleanup is the result CSV)
         SharingTable(
             resource_type=ResourceType.SURVEY_TEMPLATE,
             table=config.table_name("SurveyTemplates"),
@@ -210,8 +208,9 @@ def default_sharing_tables() -> list[SharingTable]:
             name_attribute="name",
             not_found=ErrorCode.SURVEY_NOT_FOUND,
             delete_failed=ErrorCode.SURVEY_OPERATION_FAILED,
-            # status と execution_arn は実行中の削除で実行を止めるため（BR7.1）。
-            # 読んだ値のままのときだけ消すので、開始と削除が重なっても止め損ねない
+            # status and execution_arn let a delete stop a running execution.
+            # The delete only happens if they are unchanged since the read, so a start
+            # overlapping the delete cannot be missed
             cleanup_attributes=("s3_result_path", "status", "execution_arn"),
         ),
     ]
@@ -321,13 +320,13 @@ class ResourceSharing:
     def can_read_body(
         self, principal: Principal, resource_type: ResourceType, body: Mapping[str, Any]
     ) -> bool:
-        """``can_read`` on a body the caller read itself (BR3.7)."""
+        """``can_read`` on a body the caller read itself."""
         return AccessPolicy.can_read(principal, self.target_of(resource_type, body))
 
     def can_manage_body(
         self, principal: Principal, resource_type: ResourceType, body: Mapping[str, Any]
     ) -> bool:
-        """``can_manage`` on a body the caller read itself (BR6.4)."""
+        """``can_manage`` on a body the caller read itself."""
         return AccessPolicy.can_manage(principal, self.target_of(resource_type, body))
 
     # --- choices and the dialog ----------------------------------------------------------
@@ -352,7 +351,7 @@ class ResourceSharing:
         unchanged: Iterable[str],
         initial: Iterable[str],
     ) -> ShareChange:
-        """Turn the picker's values into a change (BR1.12, security-design.md §2).
+        """Turn the picker's values into a change.
 
         Args:
             selected: ``{name}`` (checked departments).
@@ -393,11 +392,10 @@ class ResourceSharing:
         *,
         bulk: bool,
     ) -> ShareDialogView:
-        """What the share dialog shows when it opens (WF1, WF2, BR7.1).
+        """What the share dialog shows when it opens.
 
         A single dialog requires ``ensure_manageable`` (404 / 403). A bulk one
-        counts the targets that cannot be managed without naming them
-        (NFR1.14).
+        counts the targets that cannot be managed without naming them.
 
         Raises:
             CodedError: The type's NOT_FOUND, ``SHARE_NO_TARGET`` or
@@ -484,7 +482,7 @@ class ResourceSharing:
     def update_shares(
         self, principal: Principal, target: AccessTarget, change: ShareChange
     ) -> frozenset[str]:
-        """Apply ``change`` to one target (BR1, contract C7).
+        """Apply ``change`` to one target.
 
         Returns:
             ``shared_group_ids`` after the update.
@@ -504,7 +502,7 @@ class ResourceSharing:
     def bulk_update_shares(
         self, principal: Principal, targets: Sequence[AccessTarget], change: ShareChange
     ) -> BulkShareResult:
-        """Apply ``change`` to each target and report the failures (BR2).
+        """Apply ``change`` to each target and report the failures.
 
         Raises:
             ResourceSharingError: Counts or scope (checked once, nothing written).
@@ -664,7 +662,7 @@ class ResourceSharing:
     def delete_with_shares(
         self, principal: Principal, resource_type: ResourceType, resource_id: str
     ) -> dict[str, Any] | None:
-        """Delete a body and its index items together (BR4.1, BR4.2).
+        """Delete a body and its index items together.
 
         Every attempt re-reads the body strongly and calls ``ensure_manageable``
         on that body.
@@ -713,7 +711,7 @@ class ResourceSharing:
     # --- tabs --------------------------------------------------------------------------------
 
     def effective_tab(self, principal: Principal, tab: ListTab) -> ListTab:
-        """``all`` without ``resource:read_all`` is ``mine`` (BR3.1, never 403)."""
+        """``all`` without ``resource:read_all`` is ``mine`` (never 403)."""
         if tab is ListTab.ALL and not self._reads_all(principal):
             return ListTab.MINE
         return tab
@@ -732,10 +730,10 @@ class ResourceSharing:
         cursor: str | None,
         limit: int = PAGE_SIZE,
     ) -> ListPage:
-        """One page of a tab (BR3.1〜BR3.6, BR3.9).
+        """One page of a tab.
 
         ``total`` is filled on the first page only (``None`` when the count
-        fails). The caller reads the bodies and re-checks them (BR3.7).
+        fails). The caller reads the bodies and re-checks them.
 
         Raises:
             LookupUnavailableError: The index could not be read.
@@ -766,7 +764,7 @@ class ResourceSharing:
         tab: ListTab,
         cursor: str | None,
     ) -> Any:
-        """The validated position of ``cursor``, or ``None`` (first page, BR3.5)."""
+        """The validated position of ``cursor``, or ``None`` (first page)."""
         payload = decode_position(cursor) if cursor else None
         if (
             not payload
@@ -902,7 +900,7 @@ class ResourceSharing:
     def count(
         self, principal: Principal, resource_type: ResourceType, tab: ListTab
     ) -> int | None:
-        """The count of a tab, or ``None`` when it cannot be read (BR3.4)."""
+        """The count of a tab, or ``None`` when it cannot be read."""
         table = self._table(resource_type)
         tab = self.effective_tab(principal, tab)
         if tab is ListTab.MINE:
@@ -922,7 +920,7 @@ class ResourceSharing:
         tab: ListTab,
         limit: int = SEARCH_LIMIT,
     ) -> tuple[list[str], bool]:
-        """The newest ``limit`` IDs of ``mine`` / ``shared`` for a search (BR3.8).
+        """The newest ``limit`` IDs of ``mine`` / ``shared`` for a search.
 
         Returns:
             The IDs and whether more existed (the search was cut off).

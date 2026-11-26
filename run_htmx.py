@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AIペルソナシステム - 起動スクリプト
+AI Persona System - launch script
 """
 
 import uvicorn
@@ -8,23 +8,23 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# プロジェクトルートをパスに追加
+# Add the project root to sys.path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-# .envファイルから環境変数を読み込み
+# Load environment variables from .env
 load_dotenv()
 
 if __name__ == "__main__":
     uvicorn.run(
         "web.main:app",
-        # 手元のログイン（AUTH_MODE=local）は検証がないため、このマシンからだけ受ける
+        # Local login (AUTH_MODE=local) has no verification, so accept connections from this machine only.
         host="127.0.0.1",
         port=8000,
         reload=True,
         reload_dirs=["web", "src"],
-        # Dockerfile の CMD と同じ設定。uvicorn のアクセスログはクエリ（code・state）を
-        # 出すため止め、アプリの http.access に置き換える
+        # Same settings as the Dockerfile CMD. uvicorn access logs include the query (code, state),
+        # so disable them and use the app's http.access log instead.
         access_log=False,
         timeout_keep_alive=310,
     )

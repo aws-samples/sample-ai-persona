@@ -1,16 +1,15 @@
 """
-SurveyAnalysisManager
-ビジュアル分析 + ペルソナ統計 + インサイトレポート生成を担当するマネージャークラス。
+SurveyAnalysisManager: visual analysis, persona statistics and insight report generation.
 
-v1.0.0 U7 (``functional-design/rules.md``):
+Rules:
 
-- BR2.4 / BR2.5: every entry point reads the survey's decision columns and
+- Every entry point reads the survey's decision columns and
   calls ``ensure_readable`` first; only then is the result CSV read, from the
   per-process ``ResultCsvCache`` (keyed by the survey ID) or from S3.
-- BR2.7: the questions come from the survey's template snapshot. A survey
-  saved before v1.0.0 (no snapshot) reads its template, and only when the
+- The questions come from the survey's template snapshot. A survey
+  saved before snapshots existed reads its template, and only when the
   reader may read it; otherwise there is no analysis (the CSV stays).
-- BR2.11: generating and saving the insight report needs ``ai:execute`` and
+- Generating and saving the insight report needs ``ai:execute`` and
   ``ensure_manageable``; the report is checked against the 350KB body limit
   and written alone, so the owner, the shares and the snapshot stay.
 """
@@ -50,23 +49,23 @@ logger = logging.getLogger(__name__)
 
 _SURVEY = ResourceType.SURVEY
 _TEMPLATE = ResourceType.SURVEY_TEMPLATE
-#: Largest survey body written, report included (NFR2.25).
+#: Largest survey body written, report included.
 MAX_SURVEY_BYTES = 350 * 1024
 
 
 def _answered(value: Any) -> bool:
-    """Whether a CSV answer cell holds an answer (blank: not answered, BR4.6)."""
+    """Whether a CSV answer cell holds an answer (blank: not answered)."""
     return value is not None and bool(str(value).strip())
 
 
 class SurveyAnalysisManagerError(CodedError):
-    """SurveyAnalysisManager層の基底例外"""
+    """Base exception of the SurveyAnalysisManager layer"""
 
     pass
 
 
 class SurveyAnalysisManager:
-    """ビジュアル分析 + ペルソナ統計 + インサイトレポート生成"""
+    """Visual analysis + persona statistics + insight report generation"""
 
     def __init__(
         self,
@@ -83,7 +82,7 @@ class SurveyAnalysisManager:
 
         Args:
             survey_store: Survey bodies.
-            survey_template_store: Templates of surveys made before v1.0.0.
+            survey_template_store: Templates of surveys made before snapshots existed.
             s3_service: Result CSVs.
             ai_service: Insight reports.
             survey_batch_service: Statistical summaries.
@@ -120,14 +119,14 @@ class SurveyAnalysisManager:
 
     @property
     def result_cache(self) -> ResultCsvCache:
-        """The per-process result CSV cache (shared with the delete, BR1.8)."""
+        """The per-process result CSV cache (shared with the delete)."""
         if self._cache is None:
             self._cache = shared_result_cache()
         return self._cache
 
-    # =========================================================================
-    # 判定と読み取り（BR2.4、BR2.5、BR2.7）
-    # =========================================================================
+    # ==========================================================================
+    # Decision and reading
+    # ==========================================================================
 
     def _readable_survey(self, principal: Principal, survey_id: str) -> Survey:
         target = self._resource_lookup.get(_SURVEY, survey_id)
@@ -161,7 +160,7 @@ class SurveyAnalysisManager:
         return survey.s3_result_path
 
     def _questions_of(self, principal: Principal, survey: Survey) -> TemplateSnapshot:
-        """The snapshot, or a readable template for a survey before v1.0.0."""
+        """The snapshot, or a readable template for a survey without a snapshot."""
         if survey.template_snapshot is not None:
             return survey.template_snapshot
         target = self._resource_lookup.get(_TEMPLATE, survey.template_id)
@@ -187,14 +186,14 @@ class SurveyAnalysisManager:
         self.result_cache.put(survey.id, data)
         return data
 
-    # =========================================================================
-    # ビジュアル分析
-    # =========================================================================
+    # ==========================================================================
+    # Visual analysis
+    # ==========================================================================
 
     def get_visual_analysis(
         self, principal: Principal, survey_id: str
     ) -> VisualAnalysisData:
-        """選択式/スケール評価の分布（読める人だけ、BR2.4）。
+        """Distribution of choice/scale-rating questions (only for people who can read).
 
         Raises:
             CodedError: ``SURVEY_NOT_FOUND``, ``SURVEY_RESULT_NOT_READY`` or
@@ -209,13 +208,13 @@ class SurveyAnalysisManager:
     def _compute_visual_analysis(
         self, rows: List[Dict[str, Any]], template: Any
     ) -> VisualAnalysisData:
-        """回答データからビジュアル分析データを計算する。"""
+        """Compute the visual analysis data from the answer data."""
         multiple_choice_charts: List[Dict[str, Any]] = []
         scale_rating_charts: List[Dict[str, Any]] = []
 
         for q in template.questions:
             answer_key = f"{q.id}_answer"
-            # A blank answer is a persona without an answer (BR4.6): it leaves the
+            # A blank answer is a persona without an answer: it leaves the
             # question's counts, but its row stays in the attribute statistics
             answers = [r[answer_key] for r in rows if _answered(r.get(answer_key))]
 
@@ -266,7 +265,7 @@ class SurveyAnalysisManager:
                             distribution[val] += 1
                         numeric_values.append(float(val))
                     except (ValueError, TypeError):
-                        continue  # 非数値回答はスキップ
+                        continue  # Skip non-numeric answers
                 average = (
                     sum(numeric_values) / len(numeric_values) if numeric_values else 0.0
                 )
@@ -289,7 +288,7 @@ class SurveyAnalysisManager:
 
     @staticmethod
     def _get_age_bracket(age_str: str) -> Optional[str]:
-        """年齢文字列を10歳刻みの年齢層ラベルに変換する。"""
+        """Convert an age string to a 10-year age-group label."""
         try:
             age = int(float(age_str))
             bracket = age // 10 * 10
@@ -300,7 +299,7 @@ class SurveyAnalysisManager:
     def _cross_tabulate_choice(
         self, rows: List[Dict[str, Any]], answer_key: str, allow_multiple: bool
     ) -> Dict[str, Any]:
-        """選択式質問の属性別クロス集計。"""
+        """Cross-tabulation of a choice question by attribute."""
         by_sex: Dict[str, Dict[str, int]] = {}
         by_age: Dict[str, Dict[str, int]] = {}
         sex_n: Dict[str, int] = {}
@@ -334,7 +333,7 @@ class SurveyAnalysisManager:
     def _cross_tabulate_scale(
         self, rows: List[Dict[str, Any]], answer_key: str
     ) -> Dict[str, Any]:
-        """スケール評価の属性別平均値を計算する。"""
+        """Compute the mean of a scale-rating question by attribute."""
         sex_vals: Dict[str, List[float]] = {}
         age_vals: Dict[str, List[float]] = {}
 
@@ -357,14 +356,14 @@ class SurveyAnalysisManager:
         by_age = {k: round(sum(v) / len(v), 2) for k, v in age_vals.items()}
         return {"by_sex": by_sex, "by_age": by_age}
 
-    # =========================================================================
-    # ペルソナ統計
-    # =========================================================================
+    # ==========================================================================
+    # Persona statistics
+    # ==========================================================================
 
     def get_persona_statistics(
         self, principal: Principal, survey_id: str
     ) -> PersonaStatistics:
-        """回答したペルソナの統計（読める人だけ、BR2.4）。
+        """Statistics of the personas who answered (only for people who can read).
 
         Raises:
             CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_RESULT_NOT_READY``.
@@ -376,7 +375,7 @@ class SurveyAnalysisManager:
     def _compute_persona_statistics(
         self, rows: List[Dict[str, Any]]
     ) -> PersonaStatistics:
-        """回答データからペルソナ統計を計算する。"""
+        """Compute persona statistics from the answer data."""
         total = len(rows)
 
         sex_counter: Counter[str] = Counter()
@@ -400,7 +399,7 @@ class SurveyAnalysisManager:
                     bracket = f"{(age_val // 10) * 10}代"
                     age_bracket_counter[bracket] += 1
                 except (ValueError, TypeError):
-                    continue  # 非数値の年齢文字列はスキップ
+                    continue  # Skip non-numeric age strings
 
             occupation = row.get("occupation", "").strip()
             if occupation:
@@ -439,9 +438,9 @@ class SurveyAnalysisManager:
             age_stats=age_stats,
         )
 
-    # =========================================================================
-    # インサイトレポート（BR2.11）
-    # =========================================================================
+    # ==========================================================================
+    # Insight report
+    # ==========================================================================
 
     def _report_prompt(self, principal: Principal, survey: Survey) -> str:
         self._require_result(survey)
@@ -453,7 +452,7 @@ class SurveyAnalysisManager:
     def generate_insight_report_streaming(
         self, principal: Principal, survey_id: str
     ) -> Iterator[str]:
-        """インサイトレポートをストリーミング生成する（判定は最初の 1 片の前、BR2.11）。
+        """Stream-generate the insight report (the decision is made before the first chunk).
 
         Raises:
             AccessDeniedError: No ``ai:execute``, or readable but not manageable.
@@ -471,7 +470,7 @@ class SurveyAnalysisManager:
     def save_insight_report(
         self, principal: Principal, survey_id: str, content: str
     ) -> InsightReport:
-        """ストリーミング生成済みのレポートを保存する（管理できる人だけ、BR2.11）。
+        """Save a stream-generated report (only for people who can manage).
 
         Raises:
             AccessDeniedError: No ``ai:execute``, or readable but not manageable.
@@ -509,14 +508,14 @@ class SurveyAnalysisManager:
         logger.info("Insight report saved for survey: %s", survey.id)
         return report
 
-    # =========================================================================
-    # 統計要約生成（SurveyBatchServiceに委譲）
-    # =========================================================================
+    # ==========================================================================
+    # Statistical summary generation (delegated to SurveyBatchService)
+    # ==========================================================================
 
     def _generate_statistical_summary(
         self, results_csv: str, template: Any
     ) -> Dict[str, Any]:
-        """CSV結果から統計要約を生成する。DataFrame操作はService層に委譲。"""
+        """Generate a statistical summary from the CSV result. DataFrame operations are delegated to the Service layer."""
         questions = [
             {
                 "id": q.id,

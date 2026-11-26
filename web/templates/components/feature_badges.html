@@ -1,7 +1,7 @@
 {#
-  設定の区画が、どの機能で使われるかを示すラベル（見出しの文字の横に置く）。
-  色だけに頼らず文字で書く。機能ごとの色は 1 か所（ここ）で決める。
-  引数: features ... 機能名の並び（例: ["インタビュー", "議論"]）。
+  Labels showing which features use a settings section (placed next to the heading text).
+  They are written as text so meaning does not depend on color. Per-feature colors are decided in one place (here).
+  Arguments: features ... list of feature names (for example ["インタビュー", "議論"]).
 #}
 {% macro feature_badges(features) -%}
 {%- set styles = {

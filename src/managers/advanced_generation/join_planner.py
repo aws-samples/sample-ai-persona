@@ -1,13 +1,13 @@
-"""The axis table and the join keys of several tables (U6 BR37.3, BR37.6).
+"""The axis table and the join keys of several tables.
 
 Only ``AdvancedPersonaGenerationManager`` uses this, so it is a module of that
 Manager's package. It decides from the profiles alone; the overlap of the
 values is counted by the fixed ``key_overlap`` in the sandbox, which the
 Manager runs through ``overlap`` (it returns ``None`` when the check ran out
-of time, NFR1.29). No value of a column ever comes here.
+of time). No value of a column ever comes here.
 
 - The axis is the first table, in the order chosen, with a column that looks
-  like a person's ID (BR5.1). Without one nothing is joined.
+  like a person's ID. Without one nothing is joined.
 - Candidates are columns of the same name in both tables whose type class
   (number, text, date) matches and whose values all differ in the axis.
 - The candidate with the highest match rate at or over ``min_match_rate`` is
@@ -28,7 +28,7 @@ _DATE_TYPE = re.compile(r"^(DATE|TIME.*|TIMESTAMP.*)$", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class PlannedTable:
-    """A prepared and profiled table of the generation (entities.md TableSource)."""
+    """A prepared and profiled table of the generation."""
 
     alias: str
     source_id: str
@@ -55,7 +55,7 @@ def _type_class(type_name: Any) -> str:
 
 
 def axis_of(tables: Sequence[PlannedTable]) -> Optional[PlannedTable]:
-    """The first table with a person's ID column, or ``None`` (BR37.6)."""
+    """The first table with a person's ID column, or ``None``."""
     for table in tables:
         if any(is_person_id(c) for c in _columns(table.profile)):
             return table
@@ -65,7 +65,7 @@ def axis_of(tables: Sequence[PlannedTable]) -> Optional[PlannedTable]:
 def candidates(
     axis_profile: Mapping[str, Any], other_profile: Mapping[str, Any]
 ) -> list[str]:
-    """Same-named columns of one type class, all distinct on the axis (BR37.3)."""
+    """Same-named columns of one type class, all distinct on the axis."""
     others = {str(c.get("name")): c for c in _columns(other_profile)}
     found: list[str] = []
     for column in _columns(axis_profile):
@@ -112,7 +112,7 @@ def plan_joins(
     overlap: OverlapFn,
     min_match_rate: float,
 ) -> list[tuple[JoinPlan, int]]:
-    """The join plans and the axis people each one matched (BR37.3, BR37.6).
+    """The join plans and the axis people each one matched.
 
     Args:
         tables: The generation's tables in the order chosen.

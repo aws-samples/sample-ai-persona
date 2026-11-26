@@ -1,7 +1,6 @@
-"""PersonaManager の紐付け・プレビュー・候補からの保存・1 体の読み出し・アバター（U5）。
+"""PersonaManager bindings, preview, saving from a candidate, single-persona read and avatar.
 
-BR1.4、BR1.5、BR1.9、BR2.1〜BR2.9、BR4.3〜BR4.5、BR6.1、BR6.4、NFR1.24〜NFR1.26、
-NFR2.10、AC2.3.1、AC2.3.3。判定は本物の AccessPolicy と ResourceLookup。
+Decisions use the real AccessPolicy and ResourceLookup.
 """
 
 from dataclasses import replace
@@ -53,7 +52,7 @@ def private(world) -> object:
 
 
 # =============================================================================
-# 一覧（BR2.1、BR2.7、BR2.8、NFR2.10）
+# Listing
 # =============================================================================
 
 
@@ -73,7 +72,7 @@ class TestListBindings:
 
         rows = {r.target_id: r for r in view.bindings}
         assert rows[org.id].name == "購買データ" and rows[org.id].usable
-        assert not rows[locked.id].usable  # shown with 「利用権限なし」
+        assert not rows[locked.id].usable  # shown as "no permission"
         assert rows[dedicated.id].usable and rows[dedicated.id].dedicated
         assert not view.manageable
         assert view.choices == []  # no operations for a shared reader
@@ -86,7 +85,7 @@ class TestListBindings:
         view = world.manager().get_dataset_bindings(A, shared.id)
 
         assert view.bindings == []
-        # nothing was written by reading (BR2.8)
+        # nothing was written by reading
         assert (shared.id, dataset_target_key(gone.id)) in world.bindings.items
 
     def test_unreadable_persona_is_not_found(self, world, private):
@@ -119,7 +118,7 @@ class TestListBindings:
         assert view.binding is not None
         assert view.binding.name == "社内KB"
         assert view.binding.metadata_filters == {"a": "b"}
-        assert not view.binding.usable  # no scope until U7 -> admin only
+        assert not view.binding.usable  # no scope yet -> admin only
         assert view.choices == []
 
     def test_kb_names_come_from_one_lookup(self, world, shared, monkeypatch):
@@ -139,10 +138,10 @@ class TestListBindings:
         assert calls.count(ResourceType.KNOWLEDGE_BASE) <= 2  # bound + choices
 
     def test_ten_bindings_read_each_asset_kind_once(self, world, shared, monkeypatch):
-        """NFR2.10: 名前と利用範囲は種類ごとに 1 回でまとめて読む（紐付けごとに読まない）。
+        """Names and scope are read once per kind, not once per binding.
 
-        KB の紐付けはペルソナに 1 つ（固定キー ``KB``、BR2.9）なので、10 件はデータセット 9 と KB 1。
-        共有された人で見る（管理できないので選択肢の読みはない）。
+        A persona has one KB binding (fixed key ``KB``), so the 10 bindings are 9 datasets and 1 KB.
+        Viewed as a sharee (cannot manage, so no option reads).
         """
         from src.models.authz import ResourceType
         from tests.unit.persona_u5_world import _Reader
@@ -178,14 +177,14 @@ class TestListBindings:
         assert len(dataset_view.bindings) == 9 and kb_view.binding is not None
         dataset_reads = [ids for kind, ids in reads if kind is ResourceType.DATASET]
         kb_reads = [ids for kind, ids in reads if kind is ResourceType.KNOWLEDGE_BASE]
-        assert len(dataset_reads) == 1  # 9 件を 1 回の読みで
+        assert len(dataset_reads) == 1  # 9 items in a single read
         assert set(dataset_reads[0]) == {d.id for d in datasets}
         assert kb_reads == [(kb.id,)]
-        assert singles == []  # 1 件ずつの get を呼ばない
+        assert singles == []  # no per-item get calls
 
 
 # =============================================================================
-# 作成・削除（BR2.2〜BR2.5、BR2.9、BR6.4）
+# Create and delete
 # =============================================================================
 
 
@@ -207,7 +206,7 @@ class TestCreateBinding:
         assert world.bindings.items == {}
 
     def test_unusable_org_dataset_is_not_found(self, world, private):
-        dataset = world.add_dataset()  # no scope: admin only until U7
+        dataset = world.add_dataset()  # no scope: admin only
         with raises_code(PersonaManagerError, ErrorCode.DATASET_NOT_FOUND):
             world.manager().create_dataset_binding(A, private.id, dataset.id)
 
@@ -314,7 +313,7 @@ class TestDeleteBinding:
 
 
 # =============================================================================
-# プレビュー（BR2.6）
+# Preview
 # =============================================================================
 
 
@@ -357,7 +356,7 @@ class TestPreview:
 
 
 # =============================================================================
-# 候補からの保存（BR1.4、BR1.5、BR1.9、BR6.1）
+# Saving from a candidate
 # =============================================================================
 
 
@@ -502,7 +501,7 @@ class TestSaveGeneratedPersonas:
 
 
 # =============================================================================
-# 1 体の読み出しとアバター（BR4.3〜BR4.5）
+# Single-persona read and avatar
 # =============================================================================
 
 

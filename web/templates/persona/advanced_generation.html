@@ -1,10 +1,8 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_sparkles, icon_upload %}
 {#
-  高度な生成（ベータ）のページ（S2〜S10、U1）。上から 1（データ）・2（指示）・3（生成設定）・
-  進み具合・結果。進み具合と結果は生成を始めてから出す。画面の動きは web/static/js/advanced-upload.js。
-  見た目は通常の生成のページ（persona/generation.html）に合わせる（番号付きの見出し、ドロップ領域、
-  対応形式の枠、生成設定の行）。上限の文字は config の値（limits）から出す（mockups.md「Code Interpreter のない環境」）。
+  Advanced-generation (beta) page. From the top: 1 (data), 2 (instructions), 3 (generation settings), then progress and result. Progress and result appear only after generation starts. Page behavior lives in web/static/js/advanced-upload.js.
+  The look follows the standard generation page (persona/generation.html): numbered headings, drop area, supported-format box, generation settings rows. Limit values are rendered from config (limits).
 #}
 {% block content %}
 <div class="max-w-4xl mx-auto" id="advanced-generation" data-testid="advanced-generation-page"
@@ -71,7 +69,7 @@
                     </tbody>
                 </table>
                 <p data-testid="advanced-upload-empty" class="mt-2 text-xs text-gray-500"{% if upload_rows %} hidden{% endif %}>まだファイルはありません</p>
-                {# U4 BR23.2: 選んだ文書の見込みの合計（advanced-upload.js が書き換える） #}
+                {# Estimated total for the selected documents (rewritten by advanced-upload.js). #}
                 <p data-testid="advanced-document-estimate" class="mt-2 text-sm text-gray-700" aria-live="polite"
                    data-max-man-chars="{{ limits.max_document_man_chars }}" hidden></p>
                 {% if upload_list_failed %}
@@ -116,7 +114,7 @@
                               placeholder="例:&#10;・よく買う人と、離れそうな人の違いを知りたい&#10;・ゴールドとベーシックの会員で、年齢や利用の違いを比べたい&#10;・地域ごとの特徴を知りたい"
                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-y"></textarea>
                     <p id="advanced-purpose-help" class="text-xs text-gray-500 mt-1">{{ limits.purpose_max_chars }} 文字まで</p>
-                    {# U5 BR29.1: 既定 OFF。待てる時間は config から（NFR8.8） #}
+                    {# Off by default. The wait time comes from config. #}
                     <div class="mt-3 flex items-start gap-2">
                         <input type="checkbox" id="advanced-confirm-plan" name="confirm_plan" value="true"
                                data-testid="advanced-confirm-plan" aria-describedby="advanced-confirm-plan-help"
@@ -126,7 +124,7 @@
                             <p id="advanced-confirm-plan-help" class="text-xs text-gray-600">計画を確かめてから分析を始めます。{{ limits.plan_wait_minutes }} 分のうちに承認してください</p>
                         </div>
                     </div>
-                    {# U6 BR35.4: 管理者が許していて実行先が Code Interpreter のときだけ。最初からチェック #}
+                    {# Only when the administrator allows it and the execution target is Code Interpreter. Checked from the start. #}
                     {% if detailed_analysis_offered %}
                     <div class="mt-3 flex items-start gap-2">
                         <input type="checkbox" id="advanced-detailed-analysis" name="use_detailed_analysis" value="true" checked

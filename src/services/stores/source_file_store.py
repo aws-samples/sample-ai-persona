@@ -1,4 +1,4 @@
-"""DynamoDB reads and writes of uploaded source files (``SourceFiles``, contract C4).
+"""DynamoDB reads and writes of uploaded source files (``SourceFiles``).
 
 PK ``source_file_id``; GSI ``owner_sub-created_at`` lists one user's files.
 Every rule that decides *whether* something may happen lives in
@@ -6,18 +6,18 @@ Every rule that decides *whether* something may happen lives in
 conditional writes, so that nothing is compared after reading:
 
 - ``begin_inspection``: ``uploading -> inspecting`` once, or again when an
-  inspection has been stuck past ``stale_before`` (NFR5.19). The condition also
-  carries the owner and the 24-hour age of the upload (NFR5.5).
+  inspection has been stuck past ``stale_before``. The condition also
+  carries the owner and the 24-hour age of the upload.
 - ``mark_ready`` / ``mark_error``: only from the states that lead there.
 - ``record_url_refresh``: counts the part URL refreshes of the owner's
-  uploading file up to the limit (BR2.4).
-- ``clear_in_use``: only when the mark belongs to the same generation (BR6.4).
+  uploading file up to the limit.
+- ``clear_in_use``: only when the mark belongs to the same generation.
   The mark itself is set inside the start transaction of
-  ``AdvancedGenerationStore``, which also stamps the last use (U2 BR13.3).
-- U2 ``begin_delete`` / ``delete_record``: ``deleting`` first, the record
-  last, so a failed S3 deletion leaves a ``deleting`` row to retry (BR14.1).
-- U2 ``fill_expires_at`` / ``set_checksum_if_empty``: write a value only when
-  the record has none (old U1 records, NFR3.16, NFR3.19).
+  ``AdvancedGenerationStore``, which also stamps the last use.
+- ``begin_delete`` / ``delete_record``: ``deleting`` first, the record
+  last, so a failed S3 deletion leaves a ``deleting`` row to retry.
+- ``fill_expires_at`` / ``set_checksum_if_empty``: write a value only when
+  the record has none (older records lack them).
 
 ``expires_at`` is the table's TTL attribute, so it is the one time written as
 a Number of epoch seconds (``_expiry_number``); every other time is ISO text.
@@ -77,7 +77,7 @@ def _epoch(value: datetime) -> int:
 
 
 def _expiry_number(value: datetime) -> dict[str, str]:
-    """``expires_at`` as the DynamoDB Number the TTL reads (BR13.6)."""
+    """``expires_at`` as the DynamoDB Number the TTL reads."""
     return {"N": str(_epoch(value))}
 
 
@@ -169,7 +169,7 @@ class SourceFileStore:
         stale_before: datetime,
         created_after: datetime,
     ) -> SourceFile:
-        """Move the owner's upload to ``inspecting`` (BR3.3, NFR5.19).
+        """Move the owner's upload to ``inspecting``.
 
         Args:
             source_file_id: The upload.
@@ -219,7 +219,7 @@ class SourceFileStore:
         *,
         now: datetime,
     ) -> SourceFile:
-        """Write the inspection result and move ``inspecting -> ready`` (BR3.3).
+        """Write the inspection result and move ``inspecting -> ready``.
 
         The multipart upload ID is dropped (the upload is complete).
 
@@ -284,7 +284,7 @@ class SourceFileStore:
         max_refreshes: int,
         now: datetime,
     ) -> SourceFile:
-        """Count one part URL refresh of the owner's uploading file (BR2.4).
+        """Count one part URL refresh of the owner's uploading file.
 
         Returns:
             The file with the new count.
@@ -338,7 +338,7 @@ class SourceFileStore:
     def clear_in_use(self, source_file_id: str, generation_id: str) -> bool:
         """Remove the in-use mark of ``generation_id``.
 
-        The last use is written at the start (U2 BR13.3), not here.
+        The last use is written at the start, not here.
 
         Returns:
             ``False`` when the mark belongs to another generation or is gone.
@@ -352,7 +352,7 @@ class SourceFileStore:
             ExpressionAttributeValues={":generation": {"S": generation_id}},
         )
 
-    # --- U2: deletion, expiry and checksum (BR13.2, BR13.4, BR14.1) ---------------
+    # --- Deletion, expiry and checksum ---------------
 
     def begin_delete(
         self,
@@ -362,12 +362,12 @@ class SourceFileStore:
         now: datetime,
         stale_before: datetime,
     ) -> SourceFile:
-        """Move the owner's file to ``deleting`` (BR14.1, BR14.2, NFR5.27).
+        """Move the owner's file to ``deleting``.
 
         Passes for ``ready``, ``error``, ``deleting`` (a retry after a failed
         S3 deletion) and an ``inspecting`` file stuck since ``stale_before``,
         when the file has not expired and no generation holds a valid mark.
-        A record without ``expires_at`` (U1) passes the expiry part; the
+        A record without ``expires_at`` passes the expiry part; the
         caller checks its computed expiry first.
 
         Raises:
@@ -404,7 +404,7 @@ class SourceFileStore:
         return self._source_file(response["Attributes"])
 
     def delete_record(self, source_file_id: str, owner_sub: str) -> bool:
-        """Delete the owner's record once it is ``deleting`` (BR14.1).
+        """Delete the owner's record once it is ``deleting``.
 
         Returns:
             ``False`` when it is someone else's, missing or in another state.
@@ -424,7 +424,7 @@ class SourceFileStore:
     def fill_expires_at(
         self, source_file_id: str, owner_sub: str, expires_at: datetime
     ) -> bool:
-        """Write ``expires_at`` on the owner's record that has none (NFR3.16).
+        """Write ``expires_at`` on the owner's record that has none.
 
         Returns:
             ``False`` when it already has one, or is someone else's or missing.
@@ -444,7 +444,7 @@ class SourceFileStore:
         )
 
     def set_checksum_if_empty(self, source_file_id: str, checksum: str) -> bool:
-        """Write the checksum when the record holds none or an empty one (NFR3.19).
+        """Write the checksum when the record holds none or an empty one.
 
         Returns:
             ``False`` when a checksum is already there or the file is missing.
@@ -467,11 +467,11 @@ class SourceFileStore:
     def max_display_seq(self, owner_sub: str, filename: str, *, now: datetime) -> int:
         """Highest ``display_seq`` of the owner's unexpired files of ``filename``.
 
-        A record without ``display_seq`` (U1) counts as 1; one without
+        A record without ``display_seq`` counts as 1; one without
         ``expires_at`` is counted (its computed expiry is the Catalog's).
 
         Returns:
-            0 when there is none (BR11.3).
+            0 when there is none.
         """
         highest = 0
         start_key: dict[str, Any] | None = None

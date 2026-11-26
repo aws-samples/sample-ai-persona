@@ -38,14 +38,14 @@ import { acknowledgeAll, iam5ExportedResourceId, iam5ResourceId, NAG_REASONS } f
 import { resolveSurveyRunSettings, SurveyRunSettings } from './survey-run';
 
 /**
- * AwsCustomResource のシングルトンの Lambda の construct ID。CDK は公開の定数
- * PROVIDER_FUNCTION_UUID のハイフンを除いた値に 'AWS' を前に付けて作る。
+ * AwsCustomResource's singleton Lambda construct ID. CDK builds it from the public constant
+ * PROVIDER_FUNCTION_UUID with hyphens removed and 'AWS' prepended.
  */
 const AWS_CUSTOM_RESOURCE_PROVIDER_ID = `AWS${AwsCustomResource.PROVIDER_FUNCTION_UUID.replace(/-/g, '')}`;
 
 /**
- * grantReadWriteData がテーブルに付ける操作と同じもの（読み・書き・DescribeTable）。U9 で
- * `<テーブルの ARN>/index/*` を付けないため、grantReadWriteData を明示の文に置き換えた。
+ * Same actions grantReadWriteData adds to a table (read, write, DescribeTable). It is replaced by
+ * explicit statements so that `<table ARN>/index/*` is not granted.
  */
 const TABLE_READ_WRITE_ACTIONS = [
   'dynamodb:BatchGetItem',
@@ -61,7 +61,7 @@ const TABLE_READ_WRITE_ACTIONS = [
   'dynamodb:DeleteItem',
   'dynamodb:DescribeTable',
 ];
-/** grantReadWriteData がカスタマー管理キーに付ける操作と同じもの（Sessions のキー）。 */
+/** Same actions grantReadWriteData adds to a customer-managed key (the Sessions key). */
 const TABLE_KEY_READ_WRITE_ACTIONS = [
   'kms:Decrypt',
   'kms:DescribeKey',
@@ -79,10 +79,10 @@ function defaultPolicyOf(role: iam.IRole): IConstruct {
   return policy;
 }
 
-/** imageTag が渡されなかったときのタグ。deploy.sh は ③ の前にこの値なら止める（R-09）。 */
+/** Tag used when no imageTag is passed. deploy.sh stops before step 3 if it is still this value. */
 export const UNSET_IMAGE_TAG = 'unset';
 
-/** 認証の出来事の件数のメトリクス（infrastructure-specification.md「メトリクスフィルタ」）。 */
+/** Metrics for authentication events (metric filters). */
 const AUTH_METRICS: { name: string; event: string; dimensions?: Record<string, string> }[] = [
   { name: 'LoginFailed', event: 'auth.login_failed' },
   { name: 'SessionExpired', event: 'auth.session_expired' },
@@ -90,14 +90,14 @@ const AUTH_METRICS: { name: string; event: string; dimensions?: Record<string, s
   { name: 'CsrfRejected', event: 'auth.csrf_rejected' },
   { name: 'CircuitOpened', event: 'auth.circuit_opened' },
   { name: 'DecryptFailed', event: 'auth.decrypt_failed' },
-  // U2: 認可で拒否した件数（not_found / denied / hidden / role_required）。アラームは作らない
+  // Authorization denials (not_found / denied / hidden / role_required). No alarm is created
   { name: 'AuthzDenied', event: 'authz.denied', dimensions: { reason: '$.reason' } },
 ];
 
 /**
- * 高度な生成（ベータ、U1）の件数のメトリクス（monitoring-design.md、NFR6.6〜NFR6.8）。event と
- * status の値はアプリのログ（src/managers/shared/advanced_generation_log.py の 2 つの出来事）と同じ。
- * 次元の値は列挙の値（段階の名前とエラーコード）だけ。アラームは作らない（公開の Stage だけ）。
+ * Metrics for advanced generation (beta) events. The event and status values match the app log
+ * (the two events in src/managers/shared/advanced_generation_log.py).
+ * Dimension values are enum values only (stage names and error codes). No alarms (public Stage only).
  */
 const ADVANCED_GENERATION_METRICS: {
   name: string;
@@ -118,7 +118,7 @@ const ADVANCED_GENERATION_METRICS: {
     status: 'error',
     dimensions: { error_code: '$.error_code' },
   },
-  // U2（NFR6.10）: 消したはずのファイルが S3 に残った数と、使い回しのコピーで止まった数
+  // Files that should have been deleted but remain in S3, and runs stopped by a reused copy
   {
     name: 'SourceDeleteFailed',
     event: 'advanced_generation.source_deleted',
@@ -131,8 +131,8 @@ const ADVANCED_GENERATION_METRICS: {
     status: 'failed',
     dimensions: { error_code: '$.error_code' },
   },
-  // U6（NFR6.22）: AI による詳細分析を外した数（失敗 5 回・取り消しの失敗）と、書き換えを見つけた数。
-  // アプリのログはこの 2 つにも status（disabled・detected）を持たせる。アラームは足さない
+  // Detailed analysis (run_code) disabled (5 failures, failed cancellation) and tampering detected.
+  // The app log also carries status (disabled, detected) for these two. No alarms
   {
     name: 'RunCodeDisabled',
     event: 'advanced_generation.run_code_disabled',
@@ -142,22 +142,23 @@ const ADVANCED_GENERATION_METRICS: {
   { name: 'TamperDetected', event: 'advanced_generation.tamper_detected', status: 'detected' },
 ];
 
-/** dev の Stage のバケットの CORS に足すローカルのアプリのオリジン（security-design.md §5）。 */
+/** Local app origins added to the dev Stage bucket CORS. */
 const LOCAL_APP_ORIGIN = 'http://localhost:8000';
 
 const HTTPS = ec2.Port.tcp(443);
 
-/** Cognito のアプリクライアントのトークンの有効期間（公開・閉域で同じ。BR3.3）。 */
+/** Lifetime of the Cognito app client tokens (same for public and closed). */
 const TOKEN_VALIDITY = {
-  // 反映の遅れ（最大 61 分）と最長 7 日のセッションの前提（logical-components.md）
+  // Revocation takes up to 61 minutes to propagate, and sessions last at most 7 days
   accessTokenValidity: Duration.minutes(60),
   idTokenValidity: Duration.minutes(60),
   refreshTokenValidity: Duration.days(7),
 } as const;
 
 /**
- * 閉域のアプリに渡すパスワードの条件（U1 閉域、BR3.6）。User Pool の条件（PASSWORD_POLICY）から
- * 作り、値を二重に持たない。アプリは src/models/password_policy.py の PasswordPolicy.from_settings で読む。
+ * Password requirements passed to the closed-network app. Built from the User Pool policy
+ * (PASSWORD_POLICY) so the values are not duplicated. The app reads them with
+ * PasswordPolicy.from_settings in src/models/password_policy.py.
  */
 const PASSWORD_POLICY_ENVIRONMENT: Record<string, string> = {
   PASSWORD_MIN_LENGTH: String(PASSWORD_POLICY.minLength),
@@ -167,16 +168,16 @@ const PASSWORD_POLICY_ENVIRONMENT: Record<string, string> = {
   PASSWORD_REQUIRE_SYMBOLS: String(PASSWORD_POLICY.requireSymbols),
 };
 
-/** ログイン方式で値が変わる環境変数（authEnvironment が作る）。 */
+/** Environment variables whose values depend on the login mode (built by authEnvironment). */
 interface AuthEnvironment {
   AUTH_MODE: AuthMode;
-  /** oidc だけ（Managed Login のドメイン）。 */
+  /** oidc only (Managed Login domain). */
   COGNITO_DOMAIN?: string;
-  /** admin_api だけ（パスワードの条件 5 つ）。 */
+  /** admin_api only (the five password requirements). */
   passwordPolicy?: Record<string, string>;
 }
 
-/** 入口ごとに決まる、アプリの URL と Cognito のアプリクライアント。 */
+/** App URL and Cognito app client, decided per entry point. */
 interface AppEntry {
   appBaseUrl: string;
   client: cognito.UserPoolClient;
@@ -185,33 +186,33 @@ interface AppEntry {
 export interface AppStackProps extends StackProps {
   parameter: AppParameter;
   data: DataStack;
-  /** Edge スタックの WebACL の ARN（WAF が無効なら undefined。閉域では渡さない）。 */
+  /** ARN of the Edge stack WebACL (undefined when WAF is disabled; not passed in the closed network). */
   webAclArn?: string;
-  /** タスクの台数（1〜10。Stage で検査する）。 */
+  /** Number of tasks (1 to 10, validated in the Stage). */
   appDesiredCount: number;
-  /** Stage の解決済みの設定（既定は公開。U1 閉域、ADR-002）。 */
+  /** Resolved Stage settings (public by default). */
   profile?: ResolvedProfile;
 }
 
 /**
- * App スタック: 状態を持たないもの（FR9.1、FR9.3、ADR-001）。
+ * App stack: everything that holds no state.
  *
- * VPC・内部 ALB・ECS Fargate・CloudFront・Cognito のアプリクライアント・
- * アプリのロググループとメトリクスフィルタ。Data・Edge から参照で受け取り、
- * 壊して作り直せる。イメージはコンテキスト imageTag のタグを使う（latest は使わない）。
+ * VPC, internal ALB, ECS Fargate, CloudFront, the Cognito app client, and the app log group and
+ * metric filters. References come from the Data and Edge stacks, and this stack can be destroyed
+ * and recreated. The image uses the tag from the imageTag context (never latest).
  *
- * 閉域構成（profile.deploymentMode=closed、U1 閉域）では、ClosedNetwork の VPC と
- * HTTPS だけの内部 ALB を使い、CloudFront と Managed Login を作らない。アプリクライアントは
- * 管理 API のログインだけにし、SG の結線・Private Hosted Zone の Alias・検証用 EC2 を足す。
- * 公開構成のテンプレートは変えない（test/public-stage-invariants.test.ts、BR2.2）。
+ * In closed mode (profile.deploymentMode=closed) it uses the ClosedNetwork VPC and an HTTPS-only
+ * internal ALB, and creates no CloudFront or Managed Login. The app client is for admin API login
+ * only, and SG wiring, the Private Hosted Zone Alias and the test EC2 are added.
+ * The public template must not change (test/public-stage-invariants.test.ts).
  */
 export class AppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
 
     const { parameter, data, webAclArn, appDesiredCount } = props;
-    // U5 BR1.10: profile なし（テストで直接作るとき）は parameter から公開の profile を作る
-    // （明示したモデル ID と範囲を黙って捨てない）
+    // Without a profile (stacks created directly in tests), build a public profile from the parameters
+    // so explicit model IDs and ranges are not silently dropped
     const profile =
       props.profile ??
       resolveDeploymentProfile({
@@ -224,9 +225,9 @@ export class AppStack extends Stack {
         enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels,
       });
     const closed = profile.closedNetwork;
-    // 推論の ARN（U5 BR2.4）: タスクロールと cdk-nag の抑止で同じ一覧
+    // Inference ARNs: the same list for the task role and the cdk-nag suppressions
     const inferenceArns = bedrockInferenceArns(this, profile);
-    // アンケートの並列数と打ち切り時間（範囲外なら synth で止める、NFR3.4・NFR3.5）
+    // Survey concurrency and timeout (synth fails when out of range)
     const surveySettings = resolveSurveyRunSettings(parameter);
     const imageTag = this.resolveImageTag();
 
@@ -236,14 +237,14 @@ export class AppStack extends Stack {
         vpcCidr: closed.vpcCidr,
         domainName: closed.domainName,
         createTestEnvironment: closed.createTestEnvironment,
-        // 閉域対応 U2（BR2.1、BR3.1）
+        // Endpoint AZ count and Resolver settings
         endpointAzCount: closed.endpointAzCount,
         resolver: closed.resolver,
       })
       : undefined;
     const vpc = network ? network.vpc : new Vpc(this, 'Vpc', { envName: parameter.envName }).vpc;
 
-    // アプリのログ（NFR8.4: dev で 30 日、RETAIN）と認証の出来事のメトリクス（NFR8.3）
+    // App log (30 days in dev, RETAIN) and authentication event metrics
     const logGroup = new logs.LogGroup(this, 'AppLogGroup', {
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: RemovalPolicy.RETAIN,
@@ -259,7 +260,7 @@ export class AppStack extends Stack {
       });
     }
 
-    // アンケートのステートマシン（基盤設計 2.2）。推論は Step Functions のサービスが呼ぶ
+    // Survey state machine. Step Functions itself calls inference
     const { partition, account, region } = this;
     const surveyRun = new SurveyRunStateMachine(this, 'SurveyRun', {
       bucket: data.uploadBucket.bucket,
@@ -283,9 +284,9 @@ export class AppStack extends Stack {
           { stateMachine: surveyRun, settings: surveySettings },
           this.authEnvironment(profile, data),
         ),
-        // U3 閉域（BR5.1）: 閉域のタスクにだけ末尾に足す。公開の環境変数の並びは変えない（BR5.2）
+        // Appended at the end for closed tasks only, so the public environment variable order does not change
         ...(profile.closedFeatureEnvironment ?? {}),
-        // U5（BR1.7）: jp のときだけ渡す（アプリの既定は global。公開構成のテンプレートを変えない）
+        // Passed only for jp (the app default is global; keeps the public template unchanged)
         ...(profile.inferenceScope === 'jp' ? { INFERENCE_SCOPE: 'jp' } : {}),
       },
       secrets: {
@@ -296,7 +297,7 @@ export class AppStack extends Stack {
         ? {
           ingress: { kind: 'closed' as const, certificateArn: closed.certificateArn },
           subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-          // 閉域対応 U2（BR2.4）: タスクはエンドポイントと同じ AZ、内部 ALB は 2 AZ のまま
+          // Tasks share the endpoint AZs; the internal ALB stays on both AZs
           serviceSubnets: network.placement.computeSubnets,
         }
         : {}),
@@ -316,13 +317,13 @@ export class AppStack extends Stack {
     app.container.addSecret('COGNITO_CLIENT_SECRET', ecs.Secret.fromSecretsManager(clientSecret));
 
     this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, surveyRun, profile, inferenceArns);
-    // 高度な生成（ベータ、U1、FR2.5、BR1.4）: 閉域の Stage では作らない（アプリは
-    // closedFeatureEnvironment の ENABLE_ADVANCED_GENERATION=false で止まる）
+    // Advanced generation (beta) is not created in the closed Stage (the app stops on
+    // ENABLE_ADVANCED_GENERATION=false from closedFeatureEnvironment)
     if (!network) {
       this.addAdvancedGeneration(app, logGroup, data, parameter, appBaseUrl);
     }
-    // 閉域対応 U2（BR1.1、BR1.3）: アクセス先の資源（ロググループ・秘密）ができてから、タスクロールと
-    // 同じ参照でエンドポイントのポリシーを付ける
+    // Attach endpoint policies after the resources they grant access to (log groups, secrets) exist,
+    // using the same references as the task role
     if (network) {
       network.restrictEndpoints(
         this.endpointAccessScope(
@@ -335,7 +336,7 @@ export class AppStack extends Stack {
       );
     }
 
-    // cdk-nag の抑止（U9、NFR7.15、NFR3.14）。理由は nag-reasons.ts
+    // cdk-nag suppressions; reasons are in nag-reasons.ts
     acknowledgeAll(clientSecret, ['SMG4'], NAG_REASONS.cognitoClientSecret);
     this.acknowledgeCustomResourceRole();
     this.acknowledgeIamWildcards(app, surveyRun, data, parameter, inferenceArns);
@@ -344,15 +345,15 @@ export class AppStack extends Stack {
     new CfnOutput(this, 'ClusterName', { value: app.cluster.clusterName });
     new CfnOutput(this, 'ServiceName', { value: app.service.serviceName });
     if (network?.resolverEndpoint) {
-      // 閉域対応 U2（BR3.5）: IP は aws route53resolver list-resolver-endpoint-ip-addresses で調べる
+      // Find the IPs with: aws route53resolver list-resolver-endpoint-ip-addresses
       new CfnOutput(this, 'ResolverEndpointId', { value: network.resolverEndpoint.attrResolverEndpointId });
     }
   }
 
   /**
-   * 高度な生成（ベータ、U1、infrastructure-specification.md）の公開の Stage だけの資源:
-   * Code Interpreter とタスクロールの 3 つの操作・アプリの CODE_INTERPRETER_ID、バケットの CORS、
-   * メトリクスフィルタ。3 つのテーブル・ライフサイクルの規則・タグの権限は両方の Stage に共通。
+   * Resources of advanced generation (beta) that exist only in the public Stage:
+   * the Code Interpreter with three task role actions and the app's CODE_INTERPRETER_ID, the bucket
+   * CORS, and metric filters. The three tables, lifecycle rules and tag permissions are shared by both Stages.
    */
   private addAdvancedGeneration(
     app: FargateAppService,
@@ -366,7 +367,7 @@ export class AppStack extends Stack {
       executionRole: CODE_INTERPRETER_EXECUTION_ROLE,
     });
     app.container.addEnvironment('CODE_INTERPRETER_ID', codeInterpreter.codeInterpreterId);
-    // セッションの開始・呼び出し・停止は、この Code Interpreter だけ（NFR3.4）
+    // Starting, invoking and stopping sessions is allowed on this Code Interpreter only
     app.taskDefinition.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
         'bedrock-agentcore:StartCodeInterpreterSession',
@@ -397,14 +398,14 @@ export class AppStack extends Stack {
   }
 
   /**
-   * ブラウザからのパートの PUT の CORS（NFR3.10、BR2.8、security-design.md §5）。
+   * CORS for browser PUTs of upload parts (see also the Edge origin).
    *
-   * バケットは Data スタックにあり、オリジン（CloudFront のドメイン）は App スタックで決まるため、
-   * App スタックのカスタムリソースが PutBucketCors で設定する（Data → App の参照を作らない）。
-   * PUT だけを許し、パートの ETag を画面が読めるようにする。CORS は認可ではない（書き込みを守るのは
-   * 署名付き URL）。消すときは CORS の設定だけを外す。カスタムリソースの Lambda はスタックに 1 つの
-   * シングルトン（アプリクライアントの秘密の取得と同じ）で、このリソースの権限は
-   * s3:PutBucketCORS をこのバケットにだけ（DeleteBucketCors の IAM の操作も s3:PutBucketCORS）。
+   * The bucket is in the Data stack, but the origin (the CloudFront domain) is decided in the App stack,
+   * so a custom resource in the App stack sets it with PutBucketCors (no Data to App reference).
+   * Only PUT is allowed, and the part ETag is exposed to the page. CORS is not authorization; signed
+   * URLs protect writes. Deleting removes only the CORS configuration. The custom resource Lambda is
+   * a per-stack singleton (shared with the app client secret lookup), and this resource only needs
+   * s3:PutBucketCORS on this bucket (the DeleteBucketCors IAM action is also s3:PutBucketCORS).
    */
   private addUploadBucketCors(bucket: s3.IBucket, origins: string[]): void {
     const physicalResourceId = PhysicalResourceId.of('UploadBucketCors');
@@ -445,9 +446,9 @@ export class AppStack extends Stack {
   }
 
   /**
-   * タスクロールが読み書きするテーブルすべて（閉域対応 U2 BR1.3）。エンドポイントのポリシーの
-   * アクセス先に使う。grantTaskRole の文はテーブルごとに操作が違うため、文はそのまま並べる
-   * （テーブルを足したら両方に足す。抜けは test/closed-stage.test.ts の BR1.4 のテストが落ちる）。
+   * All tables the task role reads and writes. Used as the access targets of the endpoint policies.
+   * The grantTaskRole statements differ per table, so they are listed as they are
+   * (add a table to both; a miss fails the test in test/closed-stage.test.ts).
    */
   private taskTables(data: DataStack): dynamodb.ITableV2[] {
     const { database } = data;
@@ -464,8 +465,8 @@ export class AppStack extends Stack {
   }
 
   /**
-   * 閉域のエンドポイントのポリシーで許すアクセス先（閉域対応 U2、entities.md の EndpointAccessScope）。
-   * ARN は手で書かず、タスクロールと実行ロールの権限と同じ参照から作る（BR1.3）。
+   * Access targets allowed by the closed endpoint policies (EndpointAccessScope).
+   * ARNs are not written by hand; they come from the same references as the task and execution role permissions.
    */
   private endpointAccessScope(
     data: DataStack,
@@ -481,19 +482,19 @@ export class AppStack extends Stack {
       tableArns: this.taskTables(data).map((table) => table.tableArn),
       userPoolArn: data.cognito.userPool.userPoolArn,
       secretArns: secrets.map((secret) => secret.secretArn),
-      // ロググループの ARN（CreateLogStream）と、CDK の logGroupArn（<ARN>:*。ログストリームを含む）
+      // Log group ARN (CreateLogStream) and the CDK logGroupArn (<ARN>:*, which includes log streams)
       logGroupArns: [`arn:${partition}:logs:${region}:${account}:log-group:${logGroup.logGroupName}`, logGroup.logGroupArn],
       repositoryArn: data.ecr.repository.repositoryArn,
       memoryArn: data.memory.memoryArn,
       inferenceArns,
       knowledgeBaseArn: `arn:${partition}:bedrock:${region}:${account}:knowledge-base/*`,
-      // タスクロールの states の文と同じ参照（grantTaskRole、基盤設計 3.3）
+      // Same reference as the task role states statement (grantTaskRole)
       stateMachineArn: surveyRun.stateMachine.stateMachineArn,
       stateMachineExecutionsArn: surveyRun.executionsArn,
     };
   }
 
-  /** 公開の入口: CloudFront（VPC オリジン）と Managed Login のアプリクライアント。 */
+  /** Public entry: CloudFront (VPC origin) and the Managed Login app client. */
   private createPublicEntry(app: FargateAppService, data: DataStack, webAclArn?: string): AppEntry {
     const cdn = new CloudFrontDistribution(this, 'CloudFront', {
       loadBalancer: app.loadBalancer,
@@ -506,8 +507,8 @@ export class AppStack extends Stack {
   }
 
   /**
-   * 閉域の入口（U1 閉域）: 管理 API のログインのアプリクライアント、検証用 EC2（指定したとき
-   * だけ）、SG の結線、Private Hosted Zone の頂点の ALB への Alias。CloudFront は作らない（BR5.5）。
+   * Closed entry: the app client for admin API login, the test EC2 (only when requested), SG wiring,
+   * and the Private Hosted Zone apex Alias to the ALB. No CloudFront is created.
    */
   private createClosedEntry(
     app: FargateAppService,
@@ -520,16 +521,16 @@ export class AppStack extends Stack {
       throw new Error('The closed profile has no network settings or APP_BASE_URL.');
     }
     const client = this.createAdminApiClient(data);
-    // 閉域対応 U2（BR2.4）: 検証用 EC2 もエンドポイントと同じ AZ に置く
+    // The test EC2 is also placed in the endpoint AZs
     const validation = closed.createTestEnvironment
       ? new ValidationEnvironment(this, 'Validation', { vpc: network.vpc, subnets: network.placement.computeSubnets })
       : undefined;
     this.wireClosedSecurityGroups(app, network, closed.allowedCidrs, validation);
-    // アプリは起動時に一度だけ GetMemory を引き、失敗すると長期記憶を無効にしたまま動く。
-    // エンドポイントとタスクの SG のルールができてからサービスを作る（CloudFormation は
-    // 依存のないリソースを並べて作るため）。
+    // The app calls GetMemory once at startup and keeps running with long-term memory disabled if it fails.
+    // Create the service after the endpoint and task SG rules exist (CloudFormation creates
+    // independent resources in parallel).
     app.service.node.addDependency(network, app.taskSecurityGroup);
-    // FQDN（zone の頂点）を内部 ALB に向ける（BR4.4）
+    // Point the FQDN (zone apex) at the internal ALB
     new route53.ARecord(this, 'AppAlias', {
       zone: network.hostedZone,
       target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(app.loadBalancer)),
@@ -538,12 +539,12 @@ export class AppStack extends Stack {
   }
 
   /**
-   * 閉域の SG の結線（U1 閉域、security-design.md §3 の表、BR5.3・BR5.4、NFR3.2・NFR3.6）。
+   * SG wiring for the closed network.
    *
-   * ALB からタスクへの 80 は FargateAppService（listener.addTargets）が両側に足す。ここでは
-   * 送り元から ALB への 443、タスク・検証用 EC2 からエンドポイントへの 443、タスクから
-   * S3・DynamoDB のゲートウェイ型エンドポイント（プレフィックスリスト）への 443 を足す。
-   * SG どうしのルールは別のリソース（SecurityGroupIngress / Egress）になり、循環しない。
+   * Port 80 from the ALB to the tasks is added on both sides by FargateAppService (listener.addTargets).
+   * This adds 443 from the clients to the ALB, 443 from the tasks and test EC2 to the endpoints, and
+   * 443 from the tasks to the S3 and DynamoDB gateway endpoints (prefix lists). Rules between SGs are
+   * separate resources (SecurityGroupIngress / Egress), so there is no cycle.
    */
   private wireClosedSecurityGroups(
     app: FargateAppService,
@@ -574,8 +575,8 @@ export class AppStack extends Stack {
   }
 
   /**
-   * IAM4: client.userPoolClientSecret が作る AwsCustomResource の Lambda（スタックに 1 つの
-   * シングルトン）のロール。CDK の内部の作るもの。
+   * IAM4: role of the AwsCustomResource Lambda created by client.userPoolClientSecret (a per-stack
+   * singleton). CDK creates it internally.
    */
   private acknowledgeCustomResourceRole(): void {
     const provider = this.node.tryFindChild(AWS_CUSTOM_RESOURCE_PROVIDER_ID);
@@ -594,12 +595,12 @@ export class AppStack extends Stack {
   }
 
   /**
-   * IAM5（ワイルドカード）の抑止をロールごと・指摘ごとに付ける（NFR7.16）。
+   * Attach IAM5 (wildcard) suppressions per role and per finding.
    *
-   * Data スタックから受け取る ARN（バケット・Memory）の指摘の ID には、CDK が論理 ID から
-   * 作る出力名が入る。その名前はコードに書かず、iam5ExportedResourceId で参照から求める。
-   * テーブルの GSI は名前で付けるため `/index/*` の指摘は出ない。バケットの接頭辞を足す
-   * 変更は、ここと test/cdk-nag.test.ts を一緒に直す。
+   * For ARNs received from the Data stack (bucket, Memory), the finding ID contains an output name
+   * CDK derives from the logical ID. That name is not written in code; iam5ExportedResourceId resolves
+   * it from the reference. Table GSIs are granted by name, so no `/index/*` finding appears. When adding
+   * a bucket prefix, update this and test/cdk-nag.test.ts together.
    */
   private acknowledgeIamWildcards(
     app: FargateAppService,
@@ -610,7 +611,7 @@ export class AppStack extends Stack {
   ): void {
     const bucketObjects = (...suffixes: string[]) =>
       suffixes.map((suffix) => iam5ExportedResourceId(data, data.uploadBucket.bucket.bucketArn, suffix));
-    // `*` を含む ARN だけが IAM5 の指摘になる（明示したモデル ID の ARN に `*` がないこともある）
+    // Only ARNs containing `*` become IAM5 findings (an explicit model ID ARN may have no `*`)
     const inference = inferenceArns.filter((arn) => arn.includes('*')).map((arn) => iam5ResourceId(this, arn));
 
     const taskPolicy = defaultPolicyOf(app.taskDefinition.taskRole);
@@ -626,7 +627,7 @@ export class AppStack extends Stack {
       [iam5ResourceId(this, `arn:${this.partition}:bedrock:${this.region}:${this.account}:knowledge-base/*`)],
       NAG_REASONS.bedrockAccountResources,
     );
-    // アンケートの実行（開始・確認・停止）は、このステートマシンの実行だけ（基盤設計 3.2）
+    // Survey runs (start, check, stop) are limited to executions of this state machine
     acknowledgeAll(taskPolicy, [iam5ResourceId(this, surveyRun.executionsArn)], NAG_REASONS.surveyExecutions);
     acknowledgeAll(
       taskPolicy,
@@ -655,7 +656,7 @@ export class AppStack extends Stack {
     this.acknowledgeSurveyRun(surveyRun, bucketObjects);
   }
 
-  /** The survey state machine's cdk-nag findings (基盤設計 2.2・3.1). */
+  /** The survey state machine's cdk-nag findings. */
   private acknowledgeSurveyRun(
     surveyRun: SurveyRunStateMachine,
     bucketObjects: (...suffixes: string[]) => string[],
@@ -669,7 +670,7 @@ export class AppStack extends Stack {
       bucketObjects('/survey-runs/*', '/survey-runs/*/results/*'),
       NAG_REASONS.surveyRunObjects,
     );
-    // `*` を含む ARN だけが IAM5 の指摘になる（jp のプロファイルの ARN には `*` がない）
+    // Only ARNs containing `*` become IAM5 findings (the jp profile ARNs have no `*`)
     const modelArns = surveyRun.modelArns.filter((arn) => arn.includes('*'));
     acknowledgeAll(rolePolicy, modelArns.map((arn) => iam5ResourceId(this, arn)), NAG_REASONS.surveyModel);
     acknowledgeAll(
@@ -684,7 +685,7 @@ export class AppStack extends Stack {
     if (tag) {
       return tag;
     }
-    // synth・cdk diff・Data / Edge だけのデプロイを止めないため、エラーにしない（R-09）
+    // Not an error, so synth, cdk diff and Data / Edge-only deploys are not blocked
     Annotations.of(this).addWarning(
       'imageTag context is not set; the App stack uses the placeholder tag "unset". ' +
         'Deploy the App stack only through deploy.sh (it passes -c imageTag=<git short hash>).',
@@ -693,8 +694,8 @@ export class AppStack extends Stack {
   }
 
   /**
-   * ログイン方式で値が変わる環境変数（U1 閉域、BR3.6）。モードで分岐してから domainHost を読む
-   * （閉域の User Pool にはドメインがなく、読むとエラーになるため。Functional Design レビュー）。
+   * Environment variables whose values depend on the login mode. Branch on the mode before reading
+   * domainHost (the closed User Pool has no domain, and reading it throws).
    */
   private authEnvironment(profile: ResolvedProfile, data: DataStack): AuthEnvironment {
     if (profile.authMode === 'admin_api') {
@@ -704,9 +705,9 @@ export class AppStack extends Stack {
   }
 
   /**
-   * タスクの環境変数。ログイン方式の値（auth）は今と同じ位置に置く: AUTH_MODE は先頭、
-   * COGNITO_DOMAIN は COGNITO_USER_POOL_ID の次、パスワードの条件は末尾。並び順はタスク定義の
-   * テンプレートに出るため、公開構成のテンプレートを変えないよう順番を保つ（BR2.2）。
+   * Task environment variables. The login-mode values (auth) keep their positions: AUTH_MODE first,
+   * COGNITO_DOMAIN right after COGNITO_USER_POOL_ID, password requirements last. The order appears in
+   * the task definition template, so it is kept to leave the public template unchanged.
    */
   private commonEnvironment(
     parameter: AppParameter,
@@ -720,43 +721,43 @@ export class AppStack extends Stack {
       Object.entries(data.database.applicationTables).map(([name, table]) => [name, table.tableName]),
     );
     const environment: Record<string, string> = {
-      // ログイン方式（DeploymentProfile が決める。public は oidc、closed は admin_api）
+      // Login mode (decided by DeploymentProfile: oidc for public, admin_api for closed)
       AUTH_MODE: auth.AUTH_MODE,
       AWS_REGION: region,
       DYNAMODB_REGION: region,
       COGNITO_USER_POOL_ID: data.cognito.userPool.userPoolId,
       ...(auth.COGNITO_DOMAIN !== undefined ? { COGNITO_DOMAIN: auth.COGNITO_DOMAIN } : {}),
       SESSIONS_TABLE_NAME: data.database.sessionsTable.tableName,
-      // 部署ごとの共有の索引（U4、src/config.py の RESOURCE_SHARES_TABLE_NAME）
+      // Per-department sharing index (src/config.py RESOURCE_SHARES_TABLE_NAME)
       RESOURCE_SHARES_TABLE_NAME: data.database.resourceSharesTable.tableName,
-      // 生成候補と紐付け（U5、src/config.py の PERSONA_CANDIDATES / PERSONA_BINDINGS）
+      // Generation candidates and bindings (src/config.py PERSONA_CANDIDATES / PERSONA_BINDINGS)
       PERSONA_CANDIDATES_TABLE_NAME: data.database.personaCandidatesTable.tableName,
       PERSONA_BINDINGS_TABLE_NAME: data.database.personaBindingsTable.tableName,
-      // 議論の発言・レポートとインタビュー（U6、src/config.py の DISCUSSION_* / INTERVIEW_*）
+      // Discussion messages, reports and interviews (src/config.py DISCUSSION_* / INTERVIEW_*)
       ...Object.fromEntries(
         Object.entries(data.database.discussionChildTables).map(([name, table]) => [
           name,
           table.tableName,
         ]),
       ),
-      // カスタムペルソナデータの登録情報（U7、src/config.py の CUSTOM_PERSONA_DATA_TABLE_NAME）
+      // Custom persona data registry (src/config.py CUSTOM_PERSONA_DATA_TABLE_NAME)
       CUSTOM_PERSONA_DATA_TABLE_NAME: data.database.customPersonaDataTable.tableName,
       ...tableNames,
       S3_BUCKET_NAME: data.uploadBucket.bucket.bucketName,
-      // Strategy ID はアプリが起動時に GetMemory で引く（手で書き写さない）
+      // The app looks up the Strategy ID with GetMemory at startup (do not copy it by hand)
       ENABLE_LONG_TERM_MEMORY: 'true',
       AGENTCORE_MEMORY_ID: data.memory.memoryId,
       AGENTCORE_MEMORY_REGION: region,
-      // U5 BR1.10: 3 つのモデル ID は ResolvedProfile から（明示した値か、範囲の既定）
+      // The three model IDs come from ResolvedProfile (explicit values or the range defaults)
       BEDROCK_MODEL_ID: profile.modelIds.bedrockModelId,
       AGENT_MODEL_ID: profile.modelIds.agentModelId,
       ENABLE_ADDITIONAL_PERSONA_MODELS: String(parameter.enableAdditionalPersonaModels ?? false),
-      // optional のため未指定時は既定 true。String(undefined) で "undefined" が渡るのを防ぐ
+      // Optional, so default to true when unset. Avoids passing String(undefined) as "undefined"
       ENABLE_DATASET_ANALYSIS: String(parameter.enableDatasetAnalysis ?? true),
-      // 高度な生成（ベータ、U1）の kill switch。閉域の Stage は closedFeatureEnvironment の false で上書きする
+      // Kill switch for advanced generation (beta). The closed Stage overrides it with false from closedFeatureEnvironment
       ENABLE_ADVANCED_GENERATION: String(parameter.enableAdvancedGeneration ?? true),
       SURVEY_S3_PREFIX: parameter.surveyS3Prefix ?? 'survey-results/',
-      // アンケートの実行基盤（基盤設計 4 章、src/config.py の SURVEY_*）。打ち切り時間はステートマシンと同じ値
+      // Survey runtime (src/config.py SURVEY_*). The timeout is the same value as the state machine
       SURVEY_STATE_MACHINE_ARN: survey.stateMachine.stateMachine.stateMachineArn,
       SURVEY_RUN_LEASE_TABLE_NAME: data.database.surveyRunLeaseTable.tableName,
       SURVEY_EXECUTION_TIMEOUT_SECONDS: String(survey.settings.timeoutSeconds),
@@ -771,7 +772,7 @@ export class AppStack extends Stack {
     return environment;
   }
 
-  /** 公開のアプリクライアント: Managed Login（OIDC の認可コード）でログインする。 */
+  /** Public app client: logs in through Managed Login (OIDC authorization code). */
   private createOidcClient(data: DataStack, domainName: string): cognito.UserPoolClient {
     const client = new cognito.UserPoolClient(this, 'AppClient', {
       userPool: data.cognito.userPool,
@@ -788,8 +789,8 @@ export class AppStack extends Stack {
       enableTokenRevocation: true,
       preventUserExistenceErrors: true,
     });
-    // Managed Login のブランディング（Cognito の既定の見た目、Infrastructure Design R-07）。
-    // クライアントごとの設定のため、クライアントと同じ App スタックに置く。
+    // Managed Login branding (the Cognito default look).
+    // It is a per-client setting, so it lives in the same App stack as the client.
     new cognito.CfnManagedLoginBranding(this, 'ManagedLoginBranding', {
       userPoolId: data.cognito.userPool.userPoolId,
       clientId: client.userPoolClientId,
@@ -799,10 +800,9 @@ export class AppStack extends Stack {
   }
 
   /**
-   * 閉域のアプリクライアント（U1 閉域、BR3.3）: アプリが管理 API（AdminInitiateAuth）で
-   * ログインする。認証フローは ADMIN_USER_PASSWORD_AUTH だけ（REFRESH_TOKEN_AUTH は CDK が
-   * 足す）。OAuth を無効にし、Managed Login のブランディングは作らない。シークレット・
-   * トークンの失効・有効期間は公開と同じ。
+   * Closed app client: the app logs in through the admin API (AdminInitiateAuth). The only auth flow is
+   * ADMIN_USER_PASSWORD_AUTH (CDK adds REFRESH_TOKEN_AUTH). OAuth is disabled and no Managed Login
+   * branding is created. Secret, token revocation and token lifetimes are the same as public.
    */
   private createAdminApiClient(data: DataStack): cognito.UserPoolClient {
     return new cognito.UserPoolClient(this, 'AppClient', {
@@ -818,18 +818,17 @@ export class AppStack extends Stack {
   }
 
   /**
-   * アップロード用バケットの権限（U5、NFR1.33、infrastructure-specification.md）。
+   * Permissions on the upload bucket.
    *
-   * grantReadWrite を明示的な文に置き換え、古いバージョンの読み出し（GetObjectVersion*）は
-   * 付けない。消したものは古いバージョンとして 7 日残るが、アプリからは読めない。
-   * 高度な生成 U2（BR14.1、NFR3.15）: 利用者がファイルを消したら中身をすぐになくすため、
-   * sources/* の s3:DeleteObjectVersion と、prefix を sources/ に限る条件付きの
-   * s3:ListBucketVersions だけを足す（ほかの接頭辞の版には触れない）。生成の開始で同じキーへ
-   * コピーし直す CopyObject（BR13.4）は s3:GetObject・s3:PutObject で足りる。タグの操作は紐付けの印を付け外しする
-   * uploads/* と candidates/* と、高度な生成の保存前の分析の記録（タグ pending=true を付けて書き、
-   * 保存でタグなしに写す、BR9.1・BR9.4）の analysis-records/* だけ。分割アップロード
-   * （CreateMultipartUpload・UploadPart・CompleteMultipartUpload）は s3:PutObject、ListParts は
-   * s3:ListMultipartUploadParts で、今の文のまま足りる。
+   * grantReadWrite is replaced by explicit statements, and reading old versions (GetObjectVersion*) is
+   * not granted. Deleted objects remain as old versions for 7 days but the app cannot read them.
+   * To purge content immediately when a user deletes a file, only s3:DeleteObjectVersion on sources/*
+   * and a conditional s3:ListBucketVersions limited to the sources/ prefix are added (versions under
+   * other prefixes are untouched). CopyObject back onto the same key at generation start needs only
+   * s3:GetObject and s3:PutObject. Tagging actions apply only to uploads/* and candidates/* (binding
+   * marks) and analysis-records/* (pre-save analysis records of advanced generation, written with tag
+   * pending=true and copied untagged on save). Multipart upload (CreateMultipartUpload, UploadPart,
+   * CompleteMultipartUpload) is covered by s3:PutObject, and ListParts by s3:ListMultipartUploadParts.
    */
   private grantUploadBucket(taskRole: iam.IRole, bucket: s3.IBucket): void {
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
@@ -854,7 +853,7 @@ export class AppStack extends Stack {
       actions: ['s3:ListBucket', 's3:ListBucketMultipartUploads'],
       resources: [bucket.bucketArn],
     }));
-    // U2: 上げたファイルの全版の削除（S3Service.delete_all_versions）
+    // Delete all versions of an uploaded file (S3Service.delete_all_versions)
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['s3:DeleteObjectVersion'],
       resources: [bucket.arnForObjects('sources/*')],
@@ -874,8 +873,8 @@ export class AppStack extends Stack {
     profile: ResolvedProfile,
     inferenceArns: string[],
   ): void {
-    // テーブルの読み書きはテーブルの ARN と、アプリが Query する GSI の ARN（名前で付ける）に
-    // 絞る（U9）。操作は grantReadWriteData と同じ。Sessions はカスタマー管理キーの権限も付ける
+    // Table reads and writes are limited to the table ARN and the ARNs of the GSIs the app queries (by name).
+    // Same actions as grantReadWriteData. Sessions also gets the customer-managed key permissions
     const { database } = data;
     const readWriteTables = [...Object.values(database.applicationTables), database.sessionsTable];
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
@@ -888,15 +887,15 @@ export class AppStack extends Stack {
     for (const table of readWriteTables) {
       table.encryptionKey?.grant(taskRole, ...TABLE_KEY_READ_WRITE_ACTIONS);
     }
-    // リソースを指定できない一覧の API だけを * で付ける（U9、NFR7.16。例外の一覧は
-    // test/iam-wildcards.test.ts）。DatabaseService は起動時に ListTables で接続を確かめる
-    // 閉域のエンドポイントのポリシーも同じ定数を使う（閉域対応 U2 BR1.3）
+    // Only list APIs that cannot take a resource are granted with * (exceptions are listed in
+    // test/iam-wildcards.test.ts). DatabaseService checks the connection with ListTables at startup.
+    // The closed endpoint policies use the same constant
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [...TASK_LIST_ACTIONS],
       resources: ['*'],
     }));
-    // 部署ごとの共有の索引（U4、security-design.md §8）。Scan は付けない（member の一覧で
-    // Scan をしない、BR3.6）。トランザクションはこれらの操作の権限で動く
+    // Per-department sharing index. No Scan (member listing does not scan).
+    // Transactions run with the permissions of these actions
     data.database.resourceSharesTable.grant(
       taskRole,
       'dynamodb:GetItem',
@@ -907,7 +906,7 @@ export class AppStack extends Stack {
       'dynamodb:DeleteItem',
       'dynamodb:ConditionCheckItem',
     );
-    // 生成候補（U5、NFR1.40）。押さえは条件付きの UpdateItem。Scan・Query は付けない
+    // Generation candidates. Claims use a conditional UpdateItem. No Scan or Query
     data.database.personaCandidatesTable.grant(
       taskRole,
       'dynamodb:GetItem',
@@ -917,7 +916,7 @@ export class AppStack extends Stack {
       'dynamodb:UpdateItem',
       'dynamodb:DeleteItem',
     );
-    // 紐付け（U5、ADR-007）。テーブルと TargetIndex（名前で付ける）に、Scan を除く 7 つの操作
+    // Bindings. Seven actions except Scan on the table and TargetIndex (by name)
     const bindings = data.database.personaBindingsTable;
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
@@ -931,9 +930,9 @@ export class AppStack extends Stack {
       ],
       resources: [bindings.tableArn, ...data.database.queriedIndexArns(bindings)],
     }));
-    // 議論の発言・レポートとインタビュー（U6、NFR1.64）。Scan を除く 8 つの操作を 4 テーブル
-    // を並べた 1 つの文で付ける（GSI はないため、インデックスの ARN は並ばない）。ポリシーの上限（10,240 文字）に近いため
-    // テーブルごとに文を足さない。後始末のスクリプトはタスクロールでは動かさない
+    // Discussion messages, reports and interviews. Eight actions except Scan in one statement listing the
+    // four tables (no GSIs, so no index ARNs). The policy size limit (10,240 chars) is close, so do not
+    // add a statement per table. Cleanup scripts do not run with the task role
     const childTables = Object.values(data.database.discussionChildTables);
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
@@ -951,8 +950,8 @@ export class AppStack extends Stack {
         ...data.database.queriedIndexArns(table),
       ]),
     }));
-    // カスタムペルソナデータの登録情報（U7、NFR1.80、NFR1.81）。名前の押さえはトランザクション
-    // （ConditionCheckItem）、一覧は件数の小さい Scan。GSI がないため Query とインデックスは付けない
+    // Custom persona data registry. Name claims use a transaction (ConditionCheckItem) and listing is a
+    // small Scan. There is no GSI, so no Query or index access
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
         'dynamodb:GetItem',
@@ -966,22 +965,22 @@ export class AppStack extends Stack {
       resources: [data.database.customPersonaDataTable.tableArn],
     }));
     this.grantUploadBucket(taskRole, data.uploadBucket.bucket);
-    // 部署の一覧（DepartmentDirectory、ADR-009）と所有者の名前の写し（OwnerDirectory、U4）。
-    // v1 の User Pool の ListGroups・ListUsers だけ（NFR3.8、NFR2.7）
+    // Department listing (DepartmentDirectory) and the owner name copy (OwnerDirectory): only
+    // ListGroups and ListUsers on the v1 User Pool
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListGroups', 'cognito-idp:ListUsers'],
       resources: [data.cognito.userPool.userPoolArn],
     }));
-    // 閉域の管理 API のログイン（U1 閉域、BR3.4、NFR1.1）。この Stage の User Pool だけ。
-    // 公開（oidc）には付けない（BR3.5）
+    // Closed-network admin API login, on this Stage's User Pool only.
+    // Not granted for public (oidc)
     if (profile.authMode === 'admin_api') {
       taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
         actions: ['cognito-idp:AdminInitiateAuth', 'cognito-idp:AdminRespondToAuthChallenge'],
         resources: [data.cognito.userPool.userPoolArn],
       }));
     }
-    // Bedrock（U9、NFR7.16）: 操作は v0 と同じで、リソースを種類ごとに絞る。
-    // minimizePolicies は同じリソースの文をまとめるため、種類ごとに文を分ける
+    // Bedrock: same actions as v0, with resources narrowed per type.
+    // minimizePolicies merges statements with the same resource, so keep one statement per type
     const { partition, account } = Stack.of(this);
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
@@ -990,13 +989,13 @@ export class AppStack extends Stack {
       ],
       resources: inferenceArns,
     }));
-    // ナレッジベースの検索は、このアカウント・リージョンの KB だけ
+    // Knowledge base retrieval is limited to KBs in this account and region
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['bedrock:Retrieve'],
       resources: [`arn:${partition}:bedrock:${this.region}:${account}:knowledge-base/*`],
     }));
-    // アンケートの実行（基盤設計 3.2、NFR5.6）: 開始はこのステートマシンだけ、確認と停止はその実行だけ。
-    // バッチ推論のジョブの操作と iam:PassRole は付けない（FR8.2）
+    // Survey runs: start only on this state machine, check and stop only on its executions.
+    // No batch inference job actions and no iam:PassRole
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['states:StartExecution'],
       resources: [surveyRun.stateMachine.stateMachineArn],
@@ -1005,13 +1004,13 @@ export class AppStack extends Stack {
       actions: ['states:DescribeExecution', 'states:StopExecution'],
       resources: [surveyRun.executionsArn],
     }));
-    // 進行役の担当者の記録（BR2.3）。条件付きの取得・延長・手放しの 4 つの操作だけ
+    // Facilitator assignment record: only four conditional get, extend and release actions
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
       resources: [data.database.surveyRunLeaseTable.tableArn],
     }));
-    // AgentCore Memory は、この Stage の Memory だけ（ListMemories は上の一覧の文）。
-    // ListEvents などの子の操作のため <ARN>/* も並べる
+    // AgentCore Memory: this Stage's Memory only (ListMemories is in the list statement above).
+    // <ARN>/* is also listed for child actions such as ListEvents
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
         'bedrock-agentcore:GetMemory',
@@ -1031,14 +1030,14 @@ export class AppStack extends Stack {
       }));
     }
     if (parameter.enableAdditionalPersonaModels) {
-      // 追加ペルソナベースモデル（Bedrock Mantle 経由の非 Anthropic モデル）。CreateInference は
-      // このアカウントの project に絞る。リージョンは *（アプリの resolve_call_region が非対応の
-      // リージョンから us-east-1 へ送るため、スタックのリージョンと呼び先が食い違う）
+      // Additional persona base models (non-Anthropic models via Bedrock Mantle). CreateInference is limited
+      // to this account's project. The region is * because the app's resolve_call_region sends unsupported
+      // regions to us-east-1, so the stack region and the call region differ
       taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
         actions: ['bedrock-mantle:CreateInference'],
         resources: [`arn:${partition}:bedrock-mantle:*:${account}:project/*`],
       }));
-      // CallWithBearerToken はリソースの種類を持たないため * のまま（例外）
+      // CallWithBearerToken has no resource type, so it stays * (exception)
       taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
         actions: ['bedrock-mantle:CallWithBearerToken'],
         resources: ['*'],

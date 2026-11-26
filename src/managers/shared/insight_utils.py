@@ -1,7 +1,7 @@
-"""インサイト生成・カテゴリー保存の共通ユーティリティ。
+"""Shared utilities for insight generation and category saving.
 
-DiscussionManager, AgentDiscussionManager から共通利用される
-インサイト処理ロジックを集約する。
+Collects the insight handling used by DiscussionManager and
+AgentDiscussionManager.
 """
 
 import logging
@@ -18,20 +18,20 @@ def normalize_and_deduplicate_insights(
     raw_insights: List[Dict],
     categories: Optional[List[InsightCategory]] = None,
 ) -> List[Dict]:
-    """AIServiceから返された生インサイトデータを正規化・重複除去する。
+    """Normalize and de-duplicate the raw insight data returned by AIService.
 
-    ビジネスルール:
-    - カテゴリ名の部分一致による正規化
-    - confidence scoreの0.0-1.0クランプ
-    - description min-length (>10) フィルタ
-    - description重複除去
+    Business rules:
+    - Normalize category names by partial match
+    - Clamp the confidence score to 0.0-1.0
+    - Filter by description min-length (>10)
+    - De-duplicate descriptions
 
     Args:
-        raw_insights: AIServiceが返した生データ
-        categories: 有効なカテゴリー（Noneなら正規化スキップ）
+        raw_insights: Raw data returned by AIService.
+        categories: Valid categories (None skips normalization).
 
     Returns:
-        正規化済みインサイトリスト
+        Normalized insight list.
     """
     valid_category_names = [cat.name for cat in categories] if categories else []
 
@@ -66,7 +66,7 @@ def normalize_and_deduplicate_insights(
 
 
 def _normalize_category(category: str, valid_categories: List[str]) -> str:
-    """カテゴリ名を部分一致で正規化する。"""
+    """Normalize a category name by partial match."""
     for valid_cat in valid_categories:
         if valid_cat in category or category in valid_cat:
             return valid_cat
@@ -74,7 +74,7 @@ def _normalize_category(category: str, valid_categories: List[str]) -> str:
 
 
 def _deduplicate_by_description(insights: List[Dict]) -> List[Dict]:
-    """descriptionの重複を除去する。"""
+    """Remove duplicate descriptions."""
     unique = []
     seen: set = set()
     for insight in insights:
@@ -92,23 +92,23 @@ def attach_insights_to_discussion(
     ai_service: "AIService",  # type: ignore[name-defined]  # noqa: F821
     logger: logging.Logger,
 ) -> Discussion:
-    """議論にインサイトを生成・付与し、カテゴリー設定を保存する。
+    """Generate insights for a discussion, attach them and save the category settings.
 
-    1. AIServiceでインサイト抽出（生データ）
-    2. Manager層で正規化・重複除去
-    3. 議論オブジェクトにインサイト追加（先頭の 100 件まで、U6 BR2.6）
-    4. カテゴリーをagent_configに保存
-    5. 失敗時はインサイトなしの議論をそのまま返す（例外を握りつぶし警告ログ）
+    1. Extract insights (raw data) with AIService
+    2. Normalize and de-duplicate in the Manager layer
+    3. Add insights to the discussion (first 100 only)
+    4. Save the categories to agent_config
+    5. On failure return the discussion without insights (exception swallowed, warning logged)
 
     Args:
-        discussion: インサイトを付与する議論オブジェクト
-        messages: 議論の発言（U6: 発言は本体の外に置く）
-        categories: カスタムカテゴリー（Noneならデフォルト使用）
-        ai_service: AIServiceインスタンス
-        logger: ロガー
+        discussion: Discussion to attach insights to.
+        messages: The discussion's messages (kept outside the discussion body).
+        categories: Custom categories (defaults used if None).
+        ai_service: AIService instance.
+        logger: Logger.
 
     Returns:
-        Discussion: インサイト付き議論オブジェクト
+        Discussion: The discussion with insights.
     """
     try:
         insights = generate_insights(messages, discussion.topic, categories, ai_service)
@@ -138,7 +138,7 @@ def generate_insights(
     categories: Optional[List[InsightCategory]],
     ai_service: "AIService",  # type: ignore[name-defined]  # noqa: F821
 ) -> List[Insight]:
-    """発言からインサイトを抽出し、正規化・重複除去したものを返す（打ち切りなし）。"""
+    """Extract insights from messages and return them normalized and de-duplicated (no truncation)."""
     raw_insights = ai_service.extract_insights(
         messages, categories=categories, topic=topic
     )
@@ -149,9 +149,9 @@ def save_categories_to_config(
     discussion: Discussion,
     categories: List[InsightCategory],
 ) -> Discussion:
-    """カテゴリーを議論のagent_configに保存する。
+    """Save the categories to the discussion's agent_config.
 
-    純粋関数: Discussionの新インスタンスを返す。
+    Pure function: returns a new Discussion instance.
     """
     if not categories:
         return discussion
@@ -165,12 +165,12 @@ def save_categories_to_config(
 
 
 def get_default_insight_categories() -> List[InsightCategory]:
-    """デフォルトのインサイトカテゴリーを取得する。"""
+    """Get the default insight categories."""
     return InsightCategory.get_default_categories()
 
 
 def _parse_insights(insight_data_list: List[dict]) -> List[Insight]:
-    """構造化データからInsightオブジェクトのリストを生成する。"""
+    """Build a list of Insight objects from structured data."""
     insights: List[Insight] = []
     for data in insight_data_list:
         if not isinstance(data, dict):

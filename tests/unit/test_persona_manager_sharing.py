@@ -1,8 +1,7 @@
-"""PersonaManager の所有と共有・判定の単体テスト（U4）。
+"""Unit tests for PersonaManager ownership, sharing and access decisions.
 
-ResourceSharing と AccessPolicy は本物、Store はメモリ上の偽物、PersonaStore と
-OwnerDirectory はモックにする。対応: BR3.7、BR3.8、BR6.1〜BR6.7、NFR1.13、NFR1.15、
-NFR2.3、AC3.1.4、AC4.1.3、AC4.1.4、AC5.1.2、AC5.1.4。
+ResourceSharing and AccessPolicy are real, the Store is an in-memory fake, and
+PersonaStore and OwnerDirectory are mocks.
 """
 
 from dataclasses import replace
@@ -126,7 +125,7 @@ def manager(world, owners, s3) -> PersonaManager:
         s3_service=s3,
         resource_sharing=sharing,
         owners=owners,
-        # U5: the deletion cleanup reads bindings; no long-term memory in tests
+        # the deletion cleanup reads bindings; no long-term memory in tests
         binding_store=bindings,
         memory_service=None,
     )
@@ -137,7 +136,7 @@ def _ids(listing: Any) -> list[str]:
 
 
 # =============================================================================
-# 保存（BR6.1）
+# Save
 # =============================================================================
 
 
@@ -170,7 +169,7 @@ def world_persona() -> Persona:
 
 
 # =============================================================================
-# タブ別の一覧と件数（BR3、BR3.7、BR6.3、BR6.4）
+# Per-tab listing and counts
 # =============================================================================
 
 
@@ -207,15 +206,15 @@ class TestList:
 
         assert _ids(listing) == ["p1"]
         assert listing.owners == {"p1": f"氏名-{MEMBER_A.sub}"}
-        assert listing.shared_with == {"p1": ["営業部"]}  # 共有元（自分の所属）
-        assert listing.manageable == frozenset()  # BR6.4
+        assert listing.shared_with == {"p1": ["営業部"]}  # sharer (own department)
+        assert listing.manageable == frozenset()
 
     def test_row_unshared_after_the_index_was_read_is_hidden(self, manager, world):
         world.add("p1", MEMBER_A.sub, {"sales"})
-        world.store.bodies["p1"].pop("shared_group_ids")  # 本体だけ外れた
+        world.store.bodies["p1"].pop("shared_group_ids")  # only the body lost it
         listing = manager.list_personas(MEMBER_B, "shared", None)
         assert listing.items == []
-        assert listing.counts["shared"] == 1  # 件数は索引のまま
+        assert listing.counts["shared"] == 1  # the count stays as in the index
 
     def test_own_rows_show_where_they_are_shared(self, manager, world):
         world.add("p1", MEMBER_A.sub, {"plan", "old-dept"})
@@ -285,7 +284,7 @@ class TestList:
 class TestSearch:
     def test_search_stays_inside_the_tab(self, manager, world):
         world.add("p1", MEMBER_A.sub, name="田中")
-        world.add("p2", MEMBER_B.sub, name="田中")  # 他人のもの
+        world.add("p2", MEMBER_B.sub, name="田中")  # someone else's
         listing = manager.search_personas(MEMBER_A, "mine", "田中")
         assert _ids(listing) == ["p1"] and not listing.search_truncated
 
@@ -357,7 +356,7 @@ class TestSearch:
 
 
 # =============================================================================
-# 詳細・編集・更新・削除（BR6.2、BR6.4、BR6.6、BR6.7）
+# Detail, edit, update, delete
 # =============================================================================
 
 
@@ -397,17 +396,17 @@ class TestDetail:
         assert detail.persona.name == "新しい名前" and detail.manageable
         assert detail.owner_label == f"氏名-{MEMBER_A.sub}"
         assert detail.shared_with == ["企画部", "営業部"]
-        world.persona_store.get.assert_not_called()  # 読み直さない
+        world.persona_store.get.assert_not_called()  # no re-read
 
     def test_describe_refuses_an_unreadable_persona(self, manager, world, owners):
         world.add("p1", MEMBER_A.sub)
         persona = world._get("p1")
         with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
             manager.describe_persona(MEMBER_B, persona)
-        owners.labels.assert_not_called()  # 所有者の名前を引かない
+        owners.labels.assert_not_called()  # owner names are not looked up
 
     def test_get_persona_needs_read(self, manager, world):
-        """U5 (BR4.5): get_persona takes the user and checks read."""
+        """get_persona takes the user and checks read."""
         world.add("p1", MEMBER_A.sub)
         assert manager.get_persona(MEMBER_A, "p1").id == "p1"
         with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):

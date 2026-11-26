@@ -2,18 +2,18 @@
 Agent Discussion Manager for AI Persona System.
 Handles AI agent mode discussion setup, execution, and persistence.
 
-v1.0.0 U6 (``functional-design/rules.md``):
+Rules:
 
-- BR2.8: running needs ``ai:execute``; the participants were read with the
+- Running needs ``ai:execute``; the participants were read with the
   decision before the run (``PersonaManager.get_personas_for_use``).
-- BR6.1: each participant's agent is built with an ``ExecutionContext``; the
+- Each participant's agent is built with an ``ExecutionContext``; the
   runner writes long-term memory only for the personas they own.
-- BR6.2: the discussion ID is decided at the start and is also the memory
+- The discussion ID is decided at the start and is also the memory
   session ID.
-- BR7.1: right before every persona statement the participants are checked
+- Right before every persona statement the participants are checked
   again (one ``ResourceLookup.get_many``); an unreadable participant stops the
-  run, nothing is saved, and the stream sends ``stopped`` (M12).
-- The result is saved through ``DiscussionRecords`` (ADR-006).
+  run, nothing is saved, and the stream sends ``stopped``.
+- The result is saved through ``DiscussionRecords``.
 """
 
 import json
@@ -134,11 +134,11 @@ class AgentDiscussionManager:
             dataset_analysis_service: Dataset tools (the singleton when omitted)
             knowledge_base_store: Registered knowledge bases for the KB tool
                 (the singleton when omitted)
-            file_attachments: The per-task ``FileAttachments`` (U5)
-            binding_store: ``PersonaBindings`` for KB / dataset tools (U5)
-            discussion_records: The per-task ``DiscussionRecords`` (U6)
-            participants: The per-task ``ParticipantReader`` (U6)
-            resource_lookup: Usage scopes of organization assets (U6)
+            file_attachments: The per-task ``FileAttachments``
+            binding_store: ``PersonaBindings`` for KB / dataset tools
+            discussion_records: The per-task ``DiscussionRecords``
+            participants: The per-task ``ParticipantReader``
+            resource_lookup: Usage scopes of organization assets
             ai_service: Extracts insights (the singleton when omitted)
         """
         self.logger = logging.getLogger(__name__)
@@ -185,9 +185,9 @@ class AgentDiscussionManager:
             self._resource_lookup = _access_parts().lookup
             self._agent_integration.bind_lookup(self._resource_lookup)
 
-    # =========================================================================
-    # エージェントの組み立て
-    # =========================================================================
+    # ==========================================================================
+    # Agent assembly
+    # ==========================================================================
 
     def _create_persona_agents(
         self,
@@ -203,18 +203,18 @@ class AgentDiscussionManager:
         principal: Principal,
     ) -> List[PersonaAgent]:
         """
-        Create one agent per persona for ``principal`` (BR6.1).
+        Create one agent per persona for ``principal``.
 
         Args:
             personas: List of Persona objects (read with the decision)
             system_prompts: Dictionary mapping persona_id to system_prompt
             enable_memory: Whether to use long-term memory
-            session_id: Memory session (the discussion ID, BR6.2)
+            session_id: Memory session (the discussion ID)
             memory_mode: The user's choice; personas the user does not own only
                 retrieve (``ExecutionContext.write_memory``)
             enable_dataset: Whether to enable external dataset access
             enable_kb: Whether to enable knowledge base access
-            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
+            persona_models: persona_id -> model_id map (default model if omitted)
             principal: The runner
 
         Returns:
@@ -269,8 +269,9 @@ class AgentDiscussionManager:
                 self.logger.info(f"Created persona agent: {persona.name}")
 
             except AgentConfigurationError as e:
-                # 追加ペルソナベースモデル無効等の設定不足は個別ペルソナの失敗として
-                # 握り潰さず、DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED（CONFIG）として即時通知する。
+                # Configuration shortfalls such as disabled additional persona base models are not
+                # swallowed as an individual persona failure; they are reported immediately as
+                # DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED (CONFIG).
                 self.logger.error(
                     f"Configuration error creating agent for persona {persona.name}: "
                     f"{type(e).__name__}"
@@ -360,7 +361,7 @@ class AgentDiscussionManager:
     def _validate_model_selection(
         self, model_ids: Optional[Mapping[str, Optional[str]]]
     ) -> None:
-        """選択されたmodel_idが利用可能か検証する。"""
+        """Check that the selected model_id is available."""
         validate_model_selection(
             model_ids,
             AgentDiscussionManagerError,
@@ -368,9 +369,9 @@ class AgentDiscussionManager:
             ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED,
         )
 
-    # =========================================================================
-    # ラウンドの実行（BR7.1）
-    # =========================================================================
+    # ==========================================================================
+    # Running rounds
+    # ==========================================================================
 
     def _rounds(
         self,
@@ -425,7 +426,7 @@ class AgentDiscussionManager:
                     speaker = self._select_next_speaker(persona_agents, spoken_in_round)
                     if speaker is None:
                         break
-                    # BR7.1: 発言の直前に参加者全員を確かめ直す
+                    # Re-check all participants right before a statement
                     if not self._participant_reader.can_read_all(
                         principal, participant_ids
                     ):
@@ -585,15 +586,16 @@ class AgentDiscussionManager:
         *,
         principal: Optional[Principal] = None,
     ) -> tuple:
-        """ドキュメントを読み込みエージェントに添付する。
+        """Load documents and attach them to the agent.
 
-        U5（R-02）: 読むのは、保存時の紐付けと同じ条件（``FileAttachments.
-        attachable_file``: 本人の・期限内の・まだどこにも紐付いていない資料）を満たす
-        ものだけ。1 つでも満たさなければ、議論を走らせる前に ``FILE_NOT_FOUND`` で止める。
+        Only files that meet the same condition as attaching at save time
+        (``FileAttachments.attachable_file``: the user's own, unexpired, not yet
+        attached anywhere) are read. If even one does not, stop with
+        ``FILE_NOT_FOUND`` before running the discussion.
 
         Returns:
             ``(documents, document_context, document_contents)``; documents are
-            :class:`DocumentRef` (no S3 key, BR5.2).
+            :class:`DocumentRef` (no S3 key).
         """
         documents: Optional[List[DocumentRef]] = None
         document_context = None
@@ -624,7 +626,7 @@ class AgentDiscussionManager:
             metadata = load_documents_metadata(document_ids, read_file)
 
             if metadata:
-                # 環境既定モデル（Gemma4 等の Mantle 系）にも添付の大きさの検証を当てる
+                # Apply the attachment size validation to the environment default model too (Mantle-family such as Gemma4)
                 effective_persona_models = resolve_effective_persona_models(
                     (agent.get_persona_id() for agent in persona_agents),
                     persona_models,
@@ -679,7 +681,7 @@ class AgentDiscussionManager:
         persona_agents: List[PersonaAgent],
         facilitator: Optional[FacilitatorAgent] = None,
     ) -> None:
-        """エージェントリソースを解放してメモリリークを防ぐ。"""
+        """Release agent resources to prevent memory leaks."""
         try:
             dispose_agents(
                 persona_agents,
@@ -701,16 +703,16 @@ class AgentDiscussionManager:
                 f"エージェントリソース解放中に予期しないエラー: {type(e).__name__}"
             )
 
-    # =========================================================================
-    # ワークフロー制御メソッド（agent_service.py FacilitatorAgent から移動）
-    # =========================================================================
+    # ==========================================================================
+    # Workflow control methods (moved from FacilitatorAgent in agent_service.py)
+    # ==========================================================================
 
     def _select_next_speaker(
         self,
         persona_agents: List[PersonaAgent],
         spoken_in_round: List[str],
     ) -> Optional[PersonaAgent]:
-        """次の発言者をランダムに選択する（全員発言済みなら None）。"""
+        """Pick the next speaker at random (None if everyone has spoken)."""
         import random
 
         available_agents = [
@@ -733,16 +735,16 @@ class AgentDiscussionManager:
         latest_facilitator_message: Optional[str] = None,
     ) -> str:
         """
-        ペルソナエージェントへの発言促進プロンプトを生成する。
+        Generate the prompt that urges a persona agent to speak.
 
         Args:
-            persona_agent: 対象ペルソナエージェント
-            topic: 議論テーマ
-            context: 直近の発言メッセージ
-            current_round: 現在のラウンド番号
-            total_rounds: 総ラウンド数
-            round_summaries: 各ラウンドの要約リスト
-            latest_facilitator_message: ファシリテータの最新要約
+            persona_agent: Target persona agent
+            topic: Discussion topic
+            context: Most recent messages
+            current_round: Current round number
+            total_rounds: Total number of rounds
+            round_summaries: List of round summaries
+            latest_facilitator_message: Facilitator's latest summary
         """
         persona_id = persona_agent.get_persona_id()
         is_first_round = current_round == 1
@@ -821,14 +823,14 @@ class AgentDiscussionManager:
         previous_summaries: Optional[List[str]] = None,
     ) -> str:
         """
-        ラウンド要約用プロンプトを構築する。
+        Build the prompt for a round summary.
 
         Args:
-            round_number: ラウンド番号
-            round_messages: そのラウンドのメッセージリスト
-            topic: 議論トピック
-            total_rounds: 総ラウンド数
-            previous_summaries: 過去ラウンドの要約リスト
+            round_number: Round number
+            round_messages: Messages of that round
+            topic: Discussion topic
+            total_rounds: Total number of rounds
+            previous_summaries: Summaries of earlier rounds
         """
         statements = [
             msg
@@ -880,9 +882,9 @@ class AgentDiscussionManager:
 
         return "\n".join(parts)
 
-    # =========================================================================
-    # フルフローAPI（Router から呼ぶ入口）
-    # =========================================================================
+    # ==========================================================================
+    # Full-flow API (entry points called from the Router)
+    # ==========================================================================
 
     def _prepare_run(
         self,
@@ -902,7 +904,7 @@ class AgentDiscussionManager:
         )
         self._validate_memory_mode(memory_mode)
         self._lookup_for_assets()
-        discussion_id = str(uuid.uuid4())  # BR6.2: 記憶のセッション ID = 議論の ID
+        discussion_id = str(uuid.uuid4())  # Memory session ID = discussion ID
         persona_agents = self._create_persona_agents(
             personas,
             {},
@@ -919,7 +921,7 @@ class AgentDiscussionManager:
                 rounds, additional_instructions, facilitator_model=facilitator_model
             )
         except Exception:
-            # facilitator 作成失敗時は、作成済みの persona_agents をここで解放する
+            # If creating the facilitator fails, release the persona_agents already created here
             self._cleanup_agents(persona_agents)
             raise
         return discussion_id, persona_agents, facilitator
@@ -940,15 +942,15 @@ class AgentDiscussionManager:
         persona_models: Optional[Dict[str, str]] = None,
         facilitator_model: Optional[str] = None,
     ) -> Generator[str, None, None]:
-        """agentモード議論のフルフロー（ストリーミング）。
+        """Full flow of an agent mode discussion (streaming).
 
         Yields:
-            str: SSE data行（``message_start`` / ``message_delta`` /
-            ``message_end``、最後に ``complete`` か ``stopped``）
+            str: SSE data lines (``message_start`` / ``message_delta`` /
+            ``message_end``, finally ``complete`` or ``stopped``)
 
         Raises:
-            AccessDeniedError: ``ai:execute`` がない
-            AgentDiscussionManagerError: バリデーション失敗、エージェント/DB例外
+            AccessDeniedError: No ``ai:execute``
+            AgentDiscussionManagerError: Validation failure, agent/DB exception
         """
         discussion_id, persona_agents, facilitator = self._prepare_run(
             principal,
@@ -1029,12 +1031,12 @@ class AgentDiscussionManager:
         persona_models: Optional[Dict[str, str]] = None,
         facilitator_model: Optional[str] = None,
     ) -> Discussion:
-        """agentモード議論のフルフロー（非ストリーミング）。
+        """Full flow of an agent mode discussion (non-streaming).
 
         Raises:
-            AccessDeniedError: ``ai:execute`` がない
-            CodedError: ``PERSONA_NOT_FOUND``（実行中に参加者が読めなくなった。保存しない）
-            AgentDiscussionManagerError: バリデーション失敗、エージェント/DB例外
+            AccessDeniedError: No ``ai:execute``
+            CodedError: ``PERSONA_NOT_FOUND`` (a participant became unreadable during the run; not saved)
+            AgentDiscussionManagerError: Validation failure, agent/DB exception
         """
         discussion_id, persona_agents, facilitator = self._prepare_run(
             principal,
@@ -1128,7 +1130,7 @@ class AgentDiscussionManager:
         return self._discussion_records.save_new(principal, discussion, messages)
 
     def _validate_memory_mode(self, memory_mode: str) -> None:
-        """memory_modeのバリデーション。"""
+        """Validate memory_mode."""
         valid_modes = ["full", "retrieve_only", "disabled"]
         if memory_mode not in valid_modes:
             raise AgentDiscussionManagerError(
@@ -1142,7 +1144,7 @@ class AgentDiscussionManager:
         messages: List[Message],
         categories: Optional[List[InsightCategory]],
     ) -> Discussion:
-        """インサイト生成・カテゴリー保存の共通処理（100 件まで、BR2.6）。"""
+        """Common handling of insight generation and category saving (up to 100)."""
         from .shared.insight_utils import attach_insights_to_discussion
 
         return attach_insights_to_discussion(

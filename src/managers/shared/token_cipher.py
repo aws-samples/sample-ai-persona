@@ -1,5 +1,4 @@
-"""
-Encryption of OIDC tokens stored in LoginSession (BR1.14, NFR3.2).
+"""Encryption of OIDC tokens stored in LoginSession.
 
 The key list arrives as JSON (Secrets Manager ``token-encryption-keys``,
 passed by ECS as the ``TOKEN_ENCRYPTION_KEYS`` environment variable)::
@@ -9,8 +8,7 @@ passed by ECS as the ``TOKEN_ENCRYPTION_KEYS`` environment variable)::
 Each ``k_<version>`` string is stretched with HKDF-SHA256 into a 32-byte
 AES-256-GCM key; the string itself is never used as the key. ``current``
 selects the key used for new ciphertexts, while every listed version stays
-readable so that key rotation never produces unreadable values
-(``security-design.md``).
+readable so that key rotation never produces unreadable values.
 
 Ciphertext format: ``<version>.<base64url(nonce || ciphertext+tag)>`` with a
 fresh 96-bit nonce per value and the version bound as associated data.

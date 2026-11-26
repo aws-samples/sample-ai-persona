@@ -1,6 +1,6 @@
-"""DynamoDB reads and writes of advanced generations (``AdvancedGenerations``, C5).
+"""DynamoDB reads and writes of advanced generations (``AdvancedGenerations``).
 
-One table, two kinds of partitions (contract C5, scalability-design.md §2):
+One table, two kinds of partitions:
 
 ==============================  ============================  ===================
 ``pk``                          ``sk``                        item
@@ -17,8 +17,8 @@ items have no ``created_at``) and is for display only, never for the lock.
 
 The start writes the lock, the generation and the in-use marks of the source
 files (``SourceFiles``, by table name: stores never import each other) in one
-``TransactWriteItems`` (BR7.5, BR6.4). Every later state change is conditioned
-on the current state (BR7.1); a failed condition is dropped and logged, and
+``TransactWriteItems``. Every later state change is conditioned
+on the current state; a failed condition is dropped and logged, and
 the caller gets ``False``. Business rules stay in the Manager.
 """
 
@@ -75,19 +75,19 @@ class AdvancedGenerationStoreError(CodedError):
 
 
 class GenerationLockHeld(AdvancedGenerationStoreError):
-    """The owner already has a generation whose lock has not expired (BR7.5)."""
+    """The owner already has a generation whose lock has not expired."""
 
     code = ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING
 
 
 class GenerationSourceUnavailable(AdvancedGenerationStoreError):
-    """A source file is not the owner's free ready table, or is missing (BR6.4)."""
+    """A source file is not the owner's free ready table, or is missing."""
 
     code = ErrorCode.GENERATION_SOURCE_NOT_FOUND
 
 
 class GenerationResultTooLarge(AdvancedGenerationStoreError):
-    """A result slice or the whole result is over its size limit (NFR5.1)."""
+    """A result slice or the whole result is over its size limit."""
 
     code = ErrorCode.GENERATION_RESULT_TOO_LARGE
 
@@ -98,7 +98,7 @@ class _ConditionFailed(AdvancedGenerationStoreError):
 
 @dataclass(frozen=True)
 class FinishOutcome:
-    """Which of the independent finishing writes took effect (W5-8)."""
+    """Which of the independent finishing writes took effect."""
 
     lock_released: bool
     marks_released: bool
@@ -249,7 +249,7 @@ class AdvancedGenerationStore:
 
     @classmethod
     def item_size(cls, data: Mapping[str, Any]) -> int:
-        """Size of a generation item as written: its keys plus ``data`` (NFR5.1).
+        """Size of a generation item as written: its keys plus ``data``.
 
         Args:
             data: Plain attribute values (``AdvancedGeneration.to_dict()`` shape).
@@ -273,14 +273,14 @@ class AdvancedGenerationStore:
         now: datetime,
         source_expires_at: datetime | None = None,
     ) -> None:
-        """Write the lock, the generation and the in-use marks at once (BR7.5, BR6.4).
+        """Write the lock, the generation and the in-use marks at once.
 
         Nothing is written when any condition fails: a lock that has not
         expired, an existing generation, or a source file that is not the
         owner's unexpired ``ready`` table with a free mark. The same update
         stamps ``last_used_at`` and, when ``source_expires_at`` is given, the
-        new ``expires_at`` of each file (U2 BR13.3). A file without
-        ``expires_at`` (U1) passes the expiry part; the Manager checks it.
+        new ``expires_at`` of each file. A file without
+        ``expires_at`` passes the expiry part; the Manager checks it.
 
         Raises:
             GenerationLockHeld: The owner's lock is still held.
@@ -392,22 +392,22 @@ class AdvancedGenerationStore:
         removes: Sequence[str] = (),
         unless_requested: bool = False,
     ) -> bool:
-        """Move ``expected -> new_status`` and write ``updates`` with it (BR7.1).
+        """Move ``expected -> new_status`` and write ``updates`` with it.
 
         Args:
             generation_id: The generation.
             expected: The state the generation must be in.
             new_status: The state to move to.
             updates: Plain attribute values (``to_dict()`` shapes) to set.
-            removes: Attributes to remove with the move (U5: the request and
+            removes: Attributes to remove with the move (the request and
                 ``awaiting_since``).
             unless_requested: Also require that no control request is pending
-                (U5 BR31.2: ``done`` never overwrites a cancel).
+                (``done`` never overwrites a cancel).
 
         Returns:
             ``False`` when the generation is missing, not in ``expected`` or
             (``unless_requested``) has a pending request (the write is dropped
-            and logged, NFR5.18).
+            and logged).
         """
         names = {"#status": "status"}
         values: dict[str, Any] = {
@@ -435,7 +435,7 @@ class AdvancedGenerationStore:
         return written
 
     def heartbeat(self, generation_id: str, *, now: datetime) -> bool:
-        """Write ``heartbeat_at`` while the generation has not ended (BR7.3)."""
+        """Write ``heartbeat_at`` while the generation has not ended."""
         values: dict[str, Any] = {":now": {"S": _stamp(now)}}
         placeholders = []
         for i, state in enumerate(_RUNNING_STATES):
@@ -472,7 +472,7 @@ class AdvancedGenerationStore:
             expression += " REMOVE " + ", ".join(f"#r{i}" for i in range(len(dropped)))
         return expression
 
-    # --- U5: control requests and the reader's end (reliability-design.md) ----------
+    # --- Control requests and the reader's end ----------
 
     def put_control_request(
         self,
@@ -482,7 +482,7 @@ class AdvancedGenerationStore:
         allowed_statuses: Sequence[GenerationStatus],
         require_empty: bool,
     ) -> bool:
-        """Write the pending request while the state allows it (BR29.3, BR31.1).
+        """Write the pending request while the state allows it.
 
         Args:
             generation_id: The generation.
@@ -573,7 +573,7 @@ class AdvancedGenerationStore:
         updates: Mapping[str, Any] | None = None,
         removes: Sequence[str] = (),
     ) -> bool:
-        """A reader ends a generation only if nothing moved since it read (BR32.1).
+        """A reader ends a generation only if nothing moved since it read.
 
         Args:
             field: ``heartbeat_at`` (stalled, a cancel without a thread) or
@@ -619,8 +619,8 @@ class AdvancedGenerationStore:
         """``planning -> awaiting_plan_approval`` and the longer lock, at once.
 
         One ``TransactWriteItems`` writes the move with ``awaiting_since`` and
-        ``updates``, the lock's ``lock_until`` and each file's ``in_use_until``
-        (NFR5.43). The lock and the marks are only touched while they belong
+        ``updates``, the lock's ``lock_until`` and each file's ``in_use_until``.
+        The lock and the marks are only touched while they belong
         to ``generation_id``.
 
         Returns:
@@ -705,7 +705,7 @@ class AdvancedGenerationStore:
         now: datetime,
         expires_at: int,
     ) -> GenerationEvent:
-        """Number and write one progress event (BR7.2).
+        """Number and write one progress event.
 
         The number comes from ``event_sequence`` on the generation item (an
         atomic counter), so events of one generation never share a number.
@@ -752,7 +752,7 @@ class AdvancedGenerationStore:
         """Events after ``after_sequence`` (all of them when ``None``), in order.
 
         The range is closed on both ends (``BETWEEN``): the generation and part
-        items of the same partition sort after ``EVENT#`` (NFR5.2).
+        items of the same partition sort after ``EVENT#``.
         """
         pk = generation_pk(generation_id)
         if after_sequence is None:
@@ -783,7 +783,7 @@ class AdvancedGenerationStore:
         max_part_bytes: int,
         max_total_bytes: int,
     ) -> dict[str, int]:
-        """Split result lists into slices and write them (contract C5, NFR5.1).
+        """Split result lists into slices and write them.
 
         Every slice stays within ``max_part_bytes``; all slices together within
         ``max_total_bytes``. The limits are checked before anything is written.
@@ -871,7 +871,7 @@ class AdvancedGenerationStore:
         now: datetime,
         expires_at: int,
     ) -> FinishOutcome:
-        """Release the lock and the marks and write the end (W5-8, NFR5.15).
+        """Release the lock and the marks and write the end.
 
         Each step is tried on its own; one failure never skips the others.
         The lock and the marks are only removed while they still belong to
@@ -888,7 +888,7 @@ class AdvancedGenerationStore:
     def release_holds(
         self, generation_id: str, owner_sub: str, source_file_ids: Sequence[str]
     ) -> tuple[bool, bool]:
-        """Release the lock and the in-use marks only, not the end (U5 review fix).
+        """Release the lock and the in-use marks only, not the end.
 
         Each step is tried on its own, and each only while it still belongs
         to ``generation_id``.
@@ -909,7 +909,7 @@ class AdvancedGenerationStore:
         return lock_released, all(marks)
 
     def release_lock(self, owner_sub: str, generation_id: str) -> bool:
-        """Delete the owner's lock while it belongs to ``generation_id`` (ADR-009).
+        """Delete the owner's lock while it belongs to ``generation_id``.
 
         Returns:
             ``False`` when the lock is gone or held by another generation.
@@ -927,7 +927,7 @@ class AdvancedGenerationStore:
             "update_item",
             TableName=self.source_files_table_name,
             Key={"source_file_id": {"S": source_file_id}},
-            # U2 BR13.3: the last use was stamped at the start; only the mark goes
+            # the last use was stamped at the start; only the mark goes
             UpdateExpression="REMOVE in_use_by, in_use_until",
             ConditionExpression="in_use_by = :generation",
             ExpressionAttributeValues={":generation": {"S": generation_id}},

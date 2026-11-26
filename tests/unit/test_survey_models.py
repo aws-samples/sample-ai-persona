@@ -1,4 +1,4 @@
-"""Survey関連モデル（Survey, TemplateImage, PersonaStatistics, VisualAnalysisData, InsightReport）の単体テスト"""
+"""Unit tests for the Survey models (Survey, TemplateImage, PersonaStatistics, VisualAnalysisData, InsightReport)."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -144,7 +144,7 @@ class TestSurvey:
         assert restored.datasource == "my_data"
 
     def test_from_dict_without_datasource_field(self):
-        """既存データ（datasourceフィールドなし）との後方互換性"""
+        """Backward compatibility with existing data (no datasource field)."""
         data = {
             "id": "test-id",
             "name": "テスト",
@@ -164,7 +164,7 @@ class TestSurvey:
 
 
 # =============================================================================
-# U7: 所有者・共有先・テンプレートの写し（entities.md、約束 C8）
+# Owner, shared targets and template copy
 # =============================================================================
 
 
@@ -372,7 +372,7 @@ class TestSurveyOwnershipAndSnapshot:
 
 
 # =============================================================================
-# オンデマンド推論への移行（entities.md の Survey、FR3、FR5、FR11）
+# Migration to on-demand inference
 # =============================================================================
 
 
@@ -392,7 +392,7 @@ def _base_record(**extra: object) -> dict:
 
 
 class TestSurveyQueue:
-    """A new survey waits in the queue (FR3.1, FR3.2)."""
+    """A new survey waits in the queue."""
 
     def test_create_new_is_queued_with_run_queue_and_queued_at(self):
         survey = Survey.create_new(
@@ -433,7 +433,7 @@ class TestSurveyQueue:
 
 
 class TestSurveyExecutionFields:
-    """The new fields round-trip; None and zero counts are not written (BR8.2)."""
+    """The new fields round-trip; None and zero counts are not written."""
 
     def test_roundtrip_of_every_new_field(self):
         data = _base_record(
@@ -485,7 +485,7 @@ class TestSurveyExecutionFields:
 
 
 class TestLegacyInFlight:
-    """BR8.1: running / pending without an execution and a queue entry."""
+    """running / pending without an execution and a queue entry."""
 
     @pytest.mark.parametrize("status", ["running", "pending"])
     def test_old_running_and_pending_are_interrupted(self, status):
@@ -512,7 +512,7 @@ class TestSurveyRunItem:
     """One line of the Distributed Map input (entities.md SurveyRunItem)."""
 
     def test_body_item_embeds_the_encoded_body_as_is(self):
-        """本文は 1 回だけ JSON にしたものを、行にそのまま埋め込む（2 回変換しない）。"""
+        """The body is JSON-encoded once and embedded in the line as-is (no double conversion)."""
         item = SurveyRunItem(record_id="p1", model_id="m", body_json='{"a": "あ"}')
         line = item.to_json_line()
         assert json.loads(line) == {
@@ -536,7 +536,7 @@ class TestSurveyRunItem:
 
     @pytest.mark.parametrize("body_json", ['{"a":\n1}', '{"a":\r\n1}'])
     def test_a_body_over_several_lines_is_refused(self, body_json):
-        """埋め込む本文が複数行だと JSONL の行が割れるため、受け付けない。"""
+        """A multi-line body would split the JSONL line, so it is rejected."""
         with pytest.raises(ValueError):
             SurveyRunItem(record_id="p1", model_id="m", body_json=body_json)
 

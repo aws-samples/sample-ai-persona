@@ -1,7 +1,6 @@
-"""Settings ルーターの API テスト（U3 のダイアログ、U7 の admin 限定と利用範囲）。
+"""API tests for the Settings router (dialogs, admin-only access and scope).
 
-本物の DatasetManager・SettingsManager を moto の上で動かす（tests/api/u7_world.py）。
-U7 の対応: BR3.1、BR3.2、BR6.3、NFR1.72、NFR3.13、NFR4.14、AC5.2.1〜AC5.2.3、AC5.3.1〜AC5.3.3。
+Run the real DatasetManager and SettingsManager on moto (tests/api/u7_world.py).
 """
 
 import re
@@ -29,7 +28,7 @@ def aw(client, survey_world):
 
 
 # =============================================================================
-# admin は今のまま使える
+# admin keeps working as before
 # =============================================================================
 
 
@@ -83,7 +82,7 @@ class TestAdminScreens:
 
 
 # =============================================================================
-# 利用範囲のダイアログ（BR3.2、AC5.3.1〜AC5.3.3）
+# the scope dialog
 # =============================================================================
 
 
@@ -154,7 +153,7 @@ class TestScopeDialog:
 
 
 # =============================================================================
-# member には /settings 以下の全経路が 404（BR3.1、AC5.2.1〜AC5.2.3）
+# members get a 404 on every route under /settings
 # =============================================================================
 
 _MEMBER_ROUTES = [
@@ -240,7 +239,7 @@ def test_scope_saves_need_the_csrf_header(test_app, method, path):
 
 
 # =============================================================================
-# U3 WF3: 設定画面のモーダルは components/dialog.html で描く（今のまま）
+# the settings modal is drawn with components/dialog.html
 # =============================================================================
 
 
@@ -252,7 +251,7 @@ class TestSettingsModalsUseSharedDialog:
             outer = dialog_markup(html, dialog_id)
             assert "data-dialog-backdrop-close" not in outer
             assert f'data-dialog-open="{dialog_id}"' in html
-        # 開閉は app.js の Dialog が持つ（hidden クラスの付け外しをやめた）
+        # open/close is owned by the Dialog in app.js (no more toggling the hidden class)
         assert "classList.remove('hidden')" not in html
         assert "classList.add('hidden')" not in html
 
@@ -343,7 +342,7 @@ class TestManagedKnowledgeBase:
 
 
 # =============================================================================
-# 閉域対応 U3: Data Agent を使ってよくない環境（BR3.2 の 1・2、BR3.8）
+# environments where the Data Agent must not be used
 # =============================================================================
 
 HTMX = {"HX-Request": "true"}
@@ -417,7 +416,7 @@ class TestDataAgentNotAllowedRoutes:
 
 
 # =============================================================================
-# U6: 高度な生成（ベータ）の区画（C11、BR34、NFR3.31、NFR3.32、AC11.1.6）
+# the advanced generation (beta) section
 # =============================================================================
 
 _SECTION = "/settings/advanced-generation"
@@ -500,7 +499,7 @@ class TestAdvancedGenerationSection:
         ag.put_if_version.assert_not_called()
 
     def test_a_vanished_department_tells_the_cause_in_the_section(self, aw, ag, client):
-        """BR34.3: a department gone since the screen opened, still checked."""
+        """A department gone since the screen opened is still checked."""
         from src.models.errors import CodedError, ErrorCode
         from web.error_messages import user_message_for
 
@@ -550,7 +549,7 @@ class TestAdvancedGenerationSection:
 
 
 class TestAdvancedGenerationSectionWhenTheFeatureIsOff:
-    """The closed network Stage passes ENABLE_ADVANCED_GENERATION=false (BR1.3)."""
+    """The closed network Stage passes ENABLE_ADVANCED_GENERATION=false."""
 
     @pytest.fixture
     def off(self, monkeypatch):

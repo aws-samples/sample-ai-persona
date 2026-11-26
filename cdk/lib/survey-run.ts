@@ -1,35 +1,37 @@
 /**
- * アンケートのステートマシンの設定と定義（基盤設計 2.2、functional-spec.md WF5）。
+ * Settings and definition of the survey state machine.
  *
- * ここは CDK の構成部品を作らない純粋な関数だけを置く（test/app-stack.test.ts で形を固定する）。
- * 資源を作るのは constructs/survey-run-state-machine.ts。
+ * Only pure functions live here, with no CDK constructs (test/app-stack.test.ts pins the shape).
+ * The resources are created in constructs/survey-run-state-machine.ts.
  *
- * Distributed Map（ItemReader は S3 の JSONL、子の実行は Express）から bedrock:invokeModel を呼ぶ。
- * 入力と結果の場所はアンケートごとに変わるため、ItemReader と ResultWriter のバケット・キー・prefix を
- * 実行の入力（JSONPath）から取る。CDK 2.265.0 の S3JsonLItemReader と ResultWriterV2 はキーと
- * prefix を固定の文字列にしかできないため、ASL を直接書く（基盤設計のレビュー R-02）。
+ * A Distributed Map (ItemReader reads JSONL from S3, child executions are Express) calls
+ * bedrock:invokeModel. The input and result locations differ per survey, so the ItemReader and
+ * ResultWriter bucket, key and prefix come from the execution input (JSONPath). CDK 2.265.0's
+ * S3JsonLItemReader and ResultWriterV2 only accept fixed strings for key and prefix, so the ASL
+ * is written directly.
  */
 
-/** 1 件の実行の並列数の既定と範囲（BR2.6、NFR3.4）。 */
+/** Default and allowed range of parallelism for one execution. */
 export const DEFAULT_SURVEY_MAX_CONCURRENCY = 64;
 const MAX_CONCURRENCY_RANGE = { min: 1, max: 1000 } as const;
-/** 1 件の実行の打ち切り時間（秒）の既定と範囲（BR3.3、NFR3.5）。 */
+/** Default and allowed range of the execution time limit in seconds. */
 export const DEFAULT_SURVEY_EXECUTION_TIMEOUT_SECONDS = 7200;
 const EXECUTION_TIMEOUT_RANGE = { min: 600, max: 86_400 } as const;
 
 /**
- * 1 回の推論の打ち切り（秒）。Express の子の実行は 5 分まで。再試行を含めた最悪
- * （7 回 × 30 秒 + 待ちの上限の合計 62 秒 = 272 秒）でも収まる（NFR3.15、基盤設計のレビュー R-01）。
+ * Time limit of one inference in seconds. An Express child execution lasts at most 5 minutes;
+ * the worst case with retries (7 attempts x 30 s + 62 s of waits = 272 s) still fits.
  */
 export const INVOKE_TIMEOUT_SECONDS = 30;
 
 /**
- * 一時的なエラーの再試行（BR3.5 に MaxDelaySeconds 16 を足した、基盤設計 2.2）。
+ * Retry for transient errors.
  *
- * 対象は InvokeModel の例外のうち、時間をおけば通りうるものだけ（Step Functions の統合では
- * `Bedrock.<例外名>`）。ValidationException・AccessDeniedException・ResourceNotFoundException・
- * ServiceQuotaExceededException・ModelErrorException は、同じ依頼をやり直しても直らないので含めない。
- * 対象を足しても回数（MaxAttempts）は変わらないので、最悪の時間は変わらない（NFR3.15）。
+ * Only InvokeModel exceptions that may succeed after a pause are listed (`Bedrock.<name>` in the
+ * Step Functions integration). ValidationException, AccessDeniedException,
+ * ResourceNotFoundException, ServiceQuotaExceededException and ModelErrorException are excluded
+ * because repeating the same request cannot fix them. Adding error types does not change
+ * MaxAttempts, so the worst-case duration is unchanged.
  */
 export const INVOKE_RETRY = Object.freeze({
   ErrorEquals: [
@@ -54,7 +56,7 @@ export interface SurveyRunSettings {
 }
 
 /**
- * The parallelism and the time limit, defaulted and checked (NFR3.4, NFR3.5).
+ * The parallelism and the time limit, defaulted and checked.
  *
  * Throws an Error naming the parameter when a value is not an integer in its range, so a
  * wrong value stops `cdk synth` instead of reaching the state machine.
@@ -84,7 +86,7 @@ function integerIn(name: string, value: number, range: { min: number; max: numbe
   return value;
 }
 
-/** One persona's InvokeModel Task: the body in the item, or in S3 (BR6.3). */
+/** One persona's InvokeModel Task: the body in the item, or in S3. */
 function invokeTask(model: Record<string, unknown>): Record<string, unknown> {
   return {
     Type: 'Task',
@@ -95,7 +97,7 @@ function invokeTask(model: Record<string, unknown>): Record<string, unknown> {
       ContentType: 'application/json',
       Accept: 'application/json',
     },
-    // 応答の本文だけを残す（依頼の本文を出力に複製しない、functional-spec.md 6 章）
+    // Keep only the response body so the request body is not copied into the output
     ResultSelector: { 'content.$': '$.Body.content' },
     TimeoutSeconds: INVOKE_TIMEOUT_SECONDS,
     Retry: [{ ...INVOKE_RETRY, ErrorEquals: [...INVOKE_RETRY.ErrorEquals] }],
@@ -104,11 +106,11 @@ function invokeTask(model: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * The state machine definition (ASL) of one survey execution (WF5).
+ * The state machine definition (ASL) of one survey execution.
  *
- * The execution input is `{ bucket, input_key, result_prefix }` (functional-spec.md 6章). Item
- * failures never fail the execution (ToleratedFailurePercentage 100, BR3.6): the app judges the
- * 5% rule from the ResultWriter output (BR4.1).
+ * The execution input is `{ bucket, input_key, result_prefix }`. Item
+ * failures never fail the execution (ToleratedFailurePercentage 100): the app judges the
+ * 5% failure rule from the ResultWriter output.
  */
 export function surveyRunDefinition(settings: SurveyRunSettings): Record<string, unknown> {
   return {

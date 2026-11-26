@@ -1,8 +1,8 @@
-"""WAF のログイン系のパスとアプリのルートの照合（U9、NFR4.16、約束 C11）。
+"""The WAF login paths match the app's routes.
 
-``cdk/lib/edge-stack.ts`` の ``LOGIN_RATE_LIMITED_PATHS`` は、アプリのログイン系の URL と
-食い違うとレート制限が効かなくなる。TypeScript は実行せず、定数の行を文字列として読み、
-``web/routers/auth.py`` のルートと ``NEW_PASSWORD_PATH`` に照らす。
+If ``LOGIN_RATE_LIMITED_PATHS`` in ``cdk/lib/edge-stack.ts`` drifts from the app's login
+URLs, rate limiting stops working. TypeScript is not executed; the constant lines are read
+as strings and checked against the routes in ``web/routers/auth.py`` and ``NEW_PASSWORD_PATH``.
 """
 
 import re
@@ -97,5 +97,5 @@ def test_an_encoded_path_reaches_the_same_route_and_is_counted(encoded, path):
 
 
 def test_the_check_reads_the_auth_routes():
-    """空振りしないこと（ルートの一覧が読めている）。"""
+    """The check is not vacuous (the route list was actually read)."""
     assert {"/login", "/auth/callback"} <= _route_paths()

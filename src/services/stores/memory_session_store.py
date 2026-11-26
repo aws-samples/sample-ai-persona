@@ -1,5 +1,5 @@
 """
-In-process LoginSession store for ``AUTH_MODE=local`` (BR1.15).
+In-process LoginSession store for ``AUTH_MODE=local``.
 
 Same port (:class:`src.models.login_session.SessionStore`) and the same
 semantics as :class:`src.services.session_store_service.SessionStoreService`,
@@ -22,7 +22,7 @@ class MemorySessionStore:
         self._challenges: dict[str, LoginChallenge] = {}
         self._lock = Lock()
 
-    # --- LoginChallenge (U8; same semantics as SessionStoreService) -------------
+    # --- LoginChallenge (same semantics as SessionStoreService) -------------
 
     def put_challenge(self, challenge: LoginChallenge) -> None:
         """Store a challenge."""

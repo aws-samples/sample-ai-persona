@@ -1,5 +1,5 @@
 """
-Departments and users for ``AUTH_MODE=local`` (development only, U4).
+Departments and users for ``AUTH_MODE=local`` (development only).
 
 Without a Cognito user pool there are no ``group:`` groups and no user list.
 So that the share dialog and the owner column work on a developer machine,

@@ -1,16 +1,9 @@
 """
 Summary Memory Strategy Implementation
-Summary戦略の実装
+Summary strategy implementation
 
-AgentCore MemoryのSummary戦略を使用して、議論の要約を長期記憶として保存・検索する。
-MemoryClientを使用してAgentCore Memoryと連携する。
-
-Requirements:
-    - 2.2: SummaryStrategy実装
-    - 3.1: AgentCore Memory接続
-    - 3.2: 記憶の保存（actor_id, session_id関連付け）
-    - 3.3: セマンティック検索
-    - 3.4: 記憶の削除
+Uses the AgentCore Memory Summary strategy to store and retrieve discussion summaries as long-term memory.
+Works with AgentCore Memory through MemoryClient.
 """
 
 import logging
@@ -33,22 +26,22 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryOperationError(Exception):
-    """メモリ操作エラー"""
+    """Memory operation error."""
 
     pass
 
 
 class SummaryStrategy(MemoryStrategy):
     """
-    Summary記憶戦略の実装
+    Summary memory strategy implementation
 
-    AgentCore MemoryのSummary戦略を使用して、議論の要約を長期記憶として保存する。
+    Uses the AgentCore Memory Summary strategy to store discussion summaries as long-term memory.
     namespace pattern: /strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}
 
     Attributes:
-        memory_id: AgentCore MemoryリソースID
-        region: AWSリージョン
-        memory_strategy_id: namespaceで使用するmemoryStrategyId
+        memory_id: AgentCore Memory resource ID
+        region: AWS region
+        memory_strategy_id: memoryStrategyId used in the namespace
     """
 
     # Namespace pattern for summary strategy (must start with /)
@@ -63,19 +56,19 @@ class SummaryStrategy(MemoryStrategy):
         memory_strategy_id: Optional[str] = None,
     ):
         """
-        SummaryStrategyを初期化
+        Initialize SummaryStrategy
 
         Args:
-            memory_id: AgentCore MemoryリソースID
-            region: AWSリージョン（デフォルト: us-east-1）
-            memory_strategy_id: namespaceで使用するmemoryStrategyId（デフォルト: configから取得）
+            memory_id: AgentCore Memory resource ID
+            region: AWS region (default: us-east-1)
+            memory_strategy_id: memoryStrategyId used in the namespace (default: taken from config)
         """
         from src.config import config
 
         self.memory_id = memory_id
         self.region = region
 
-        # memory_strategy_idが指定されていない場合はconfigから取得
+        # If memory_strategy_id is not given, take it from config
         if memory_strategy_id is None:
             self.memory_strategy_id = config.SUMMARY_MEMORY_STRATEGY_ID
         else:
@@ -85,7 +78,7 @@ class SummaryStrategy(MemoryStrategy):
         self._init_client()
 
     def _init_client(self) -> None:
-        """AgentCore Memory Clientを初期化"""
+        """Initialize the AgentCore Memory Client."""
         try:
             from bedrock_agentcore.memory import MemoryClient
 
@@ -107,14 +100,14 @@ class SummaryStrategy(MemoryStrategy):
 
     def _build_namespace(self, actor_id: str, session_id: str) -> str:
         """
-        namespaceを構築
+        Build the namespace
 
         Args:
-            actor_id: ペルソナID
-            session_id: 議論ID
+            actor_id: Persona ID
+            session_id: Discussion ID
 
         Returns:
-            構築されたnamespace文字列
+            The built namespace string
         """
         return self.NAMESPACE_PATTERN.format(
             memoryStrategyId=self.memory_strategy_id,
@@ -123,18 +116,18 @@ class SummaryStrategy(MemoryStrategy):
         )
 
     def namespaces_for(self, actor_id: str) -> List[str]:
-        """Namespaces that hold every summary record of ``actor_id`` (U5)."""
+        """Namespaces that hold every summary record of ``actor_id``."""
         return [self._build_actor_namespace_prefix(actor_id)]
 
     def _build_actor_namespace_prefix(self, actor_id: str) -> str:
         """
-        actor_idに基づくnamespaceプレフィックスを構築
+        Build a namespace prefix from actor_id
 
         Args:
-            actor_id: ペルソナID
+            actor_id: Persona ID
 
         Returns:
-            namespaceプレフィックス
+            Namespace prefix
         """
         return f"/strategies/{self.memory_strategy_id}/actors/{actor_id}"
 
@@ -146,22 +139,22 @@ class SummaryStrategy(MemoryStrategy):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
-        議論の要約を長期記憶として保存
+        Save a discussion summary as long-term memory
 
-        AgentCore Memoryのcreate_eventを使用してイベントを作成し、
-        Summary戦略によって自動的に長期記憶が抽出される。
+        Creates an event with AgentCore Memory's create_event, and the
+        Summary strategy then extracts long-term memory automatically.
 
         Args:
-            actor_id: ペルソナID（AgentCore MemoryのactorIdとして使用）
-            session_id: 議論ID（AgentCore MemoryのsessionIdとして使用）
-            content: 保存する記憶の内容
-            metadata: 追加のメタデータ（重要度、タイプ等）
+            actor_id: Persona ID (used as the actorId in AgentCore Memory)
+            session_id: Discussion ID (used as the sessionId in AgentCore Memory)
+            content: Content of the memory to save
+            metadata: Additional metadata (importance, type, etc.)
 
         Returns:
-            保存されたイベントのID
+            ID of the saved event
 
         Raises:
-            MemoryOperationError: 保存に失敗した場合
+            MemoryOperationError: If saving fails
         """
         try:
             # Create event with the content as a conversation turn
@@ -205,18 +198,18 @@ class SummaryStrategy(MemoryStrategy):
 
     def retrieve(self, actor_id: str, query: str, top_k: int = 5) -> List[MemoryEntry]:
         """
-        関連する記憶をセマンティック検索で取得
+        Retrieve related memories by semantic search
 
         Args:
-            actor_id: ペルソナID
-            query: 検索クエリ（トピックやキーワード）
-            top_k: 取得する最大件数（デフォルト: 5）
+            actor_id: Persona ID
+            query: Search query (topic or keywords)
+            top_k: Maximum number of results (default: 5)
 
         Returns:
-            関連する記憶エントリのリスト（関連度スコア降順）
+            List of related memory entries (by relevance score, descending)
 
         Raises:
-            MemoryOperationError: 検索に失敗した場合
+            MemoryOperationError: If the search fails
         """
         try:
             namespace_prefix = self._build_actor_namespace_prefix(actor_id)
@@ -276,20 +269,20 @@ class SummaryStrategy(MemoryStrategy):
 
     def delete(self, actor_id: str, memory_id: str) -> bool:
         """
-        特定の記憶を削除
+        Delete a specific memory
 
         Args:
-            actor_id: ペルソナID
-            memory_id: 削除する記憶のID（memoryRecordId）
+            actor_id: Persona ID
+            memory_id: ID of the memory to delete (memoryRecordId)
 
         Returns:
-            削除に成功した場合True、記憶が見つからない場合False
+            True if deletion succeeded, False if the memory was not found
 
         Raises:
-            MemoryOperationError: 削除に失敗した場合
+            MemoryOperationError: If deletion fails
         """
         try:
-            # U5 R-01: only a record under this actor's namespace is deleted
+            # Only a record under this actor's namespace is deleted
             found = self._client.get_memory_record(
                 memoryId=self.memory_id, memoryRecordId=memory_id
             )
@@ -340,16 +333,16 @@ class SummaryStrategy(MemoryStrategy):
 
     def list_all(self, actor_id: str) -> List[MemoryEntry]:
         """
-        ペルソナの全記憶を取得
+        Get all memories of a persona
 
         Args:
-            actor_id: ペルソナID
+            actor_id: Persona ID
 
         Returns:
-            ペルソナに関連する全ての記憶エントリのリスト
+            List of all memory entries related to the persona
 
         Raises:
-            MemoryOperationError: 取得に失敗した場合
+            MemoryOperationError: If retrieval fails
         """
         try:
             namespace_prefix = self._build_actor_namespace_prefix(actor_id)
@@ -397,14 +390,14 @@ class SummaryStrategy(MemoryStrategy):
         self, record: Dict[str, Any], actor_id: str
     ) -> Optional[MemoryEntry]:
         """
-        API応答をMemoryEntryに変換
+        Convert an API response to a MemoryEntry
 
         Args:
-            record: AgentCore Memory APIからの応答レコード
-            actor_id: ペルソナID
+            record: Response record from the AgentCore Memory API
+            actor_id: Persona ID
 
         Returns:
-            MemoryEntryオブジェクト、変換に失敗した場合はNone
+            A MemoryEntry object, or None if conversion fails
         """
         try:
             # Extract memory record ID
@@ -440,7 +433,7 @@ class SummaryStrategy(MemoryStrategy):
             metadata = {
                 "namespace": namespace,
                 "strategy_id": record.get("memoryStrategyId"),
-                "strategy_type": "summary",  # 戦略タイプを識別
+                "strategy_type": "summary",  # Identify the strategy type
             }
 
             return MemoryEntry(
@@ -459,18 +452,18 @@ class SummaryStrategy(MemoryStrategy):
 
     def _extract_session_id_from_namespace(self, namespace: str) -> str:
         """
-        namespaceからsession_idを抽出
+        Extract the session_id from a namespace
 
         Args:
-            namespace: namespace文字列（例: "/strategies/summary/actors/actor123/sessions/session456"）
+            namespace: Namespace string (e.g. "/strategies/summary/actors/actor123/sessions/session456")
 
         Returns:
-            抽出されたsession_id、抽出できない場合は空文字列
+            The extracted session_id, or an empty string if it cannot be extracted
         """
         if not namespace:
             return ""
 
-        # 新しいパターン: /strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}
+        # New pattern: /strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}
         parts = namespace.strip("/").split("/")
         # parts = ["strategies", "{memoryStrategyId}", "actors", "{actorId}", "sessions", "{sessionId}"]
         if (
@@ -481,7 +474,7 @@ class SummaryStrategy(MemoryStrategy):
         ):
             return parts[5]
 
-        # 旧パターン（後方互換性）: summaries/{actorId}/{sessionId}
+        # Old pattern (backward compatibility): summaries/{actorId}/{sessionId}
         if len(parts) >= 3 and parts[0] == "summaries":
             return parts[2]
 

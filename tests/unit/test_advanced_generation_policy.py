@@ -1,4 +1,4 @@
-"""AdvancedGenerationPolicy: who may use the advanced generation (BR1.1〜BR1.3).
+"""AdvancedGenerationPolicy: who may use the advanced generation.
 
 Usable only when the environment allows it (``ENABLE_ADVANCED_GENERATION``),
 a Code Interpreter is configured, the administrator opened it to the user
@@ -137,7 +137,7 @@ class TestEnsureAvailable:
         assert policy.upload_limit_bytes() == 123
 
 
-# --- U6: the administrator's setting (BR34, BR35.1, NFR5.56, NFR5.57) --------
+# --- The administrator's setting ---------------------------------------------
 
 NOW = datetime(2026, 11, 22, 10, 0, tzinfo=timezone.utc)
 DEPARTMENTS = [Department("sales", "営業部"), Department("hr", "人事部")]
@@ -307,7 +307,7 @@ class TestSaveSetting:
         store.put_if_version.assert_not_called()
 
     def test_a_vanished_department_tells_the_cause_and_the_count(self) -> None:
-        """BR34.3: the screen asks to take off the departments that are gone."""
+        """The screen asks to take off the departments that are gone."""
         policy, store = _policy(_stored())
 
         with raises_code(

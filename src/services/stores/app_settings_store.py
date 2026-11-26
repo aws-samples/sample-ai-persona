@@ -1,8 +1,8 @@
-"""DynamoDB reads of application settings (``AppSettings``, contract C6).
+"""DynamoDB reads of application settings (``AppSettings``).
 
-PK ``setting_key``. U1 only reads the advanced generation setting: when it is
-missing, ``AdvancedGenerationPolicy`` opens the feature to administrators only
-(BR1.2). U6 writes it with the optimistic ``version`` (BR34.4, NFR3.32): the
+PK ``setting_key``. It holds the advanced generation setting: when it is
+missing, ``AdvancedGenerationPolicy`` opens the feature to administrators only.
+It is written with the optimistic ``version``: the
 version read is the condition of the conditional ``PutItem``.
 """
 
@@ -81,7 +81,7 @@ class AppSettingsStore:
 
         ``0`` means no item yet: the write needs the item to be missing.
         Otherwise ``version`` must equal ``expected_version``. The item is
-        written with ``version = expected_version + 1`` (BR34.4).
+        written with ``version = expected_version + 1``.
 
         Args:
             setting_key: The setting (``advanced_generation``).

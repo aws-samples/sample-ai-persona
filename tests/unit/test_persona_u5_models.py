@@ -1,8 +1,9 @@
-"""U5 の新しい型（entities.md、BR1.6、BR5.1〜BR5.3）。
+"""New types: generation candidates, bindings, uploaded files, delete-all result.
 
-生成候補（PersonaCandidate・BehaviorDatasetCandidate・CandidateClaim）、紐付け
-（PersonaBinding）、アップロードファイル（UploadedFile・AttachResult）、長期記憶の
-削除の結果（DeleteAllResult）、Dataset.owner_persona_id を確かめる。
+Covers the generation candidates (PersonaCandidate, BehaviorDatasetCandidate,
+CandidateClaim), bindings (PersonaBinding), uploaded files (UploadedFile,
+AttachResult), the long-term memory delete result (DeleteAllResult) and
+Dataset.owner_persona_id.
 """
 
 from dataclasses import FrozenInstanceError
@@ -77,7 +78,7 @@ class TestPersonaCandidate:
         assert candidate.generation_id == "gen-1"
         assert candidate.expires_at == int(NOW.timestamp()) + 28800
         assert candidate.persona_payload["name"] == "佐藤 花子"
-        # 所有・共有・ID は候補の中身に入れない（保存のとき新しく決める）
+        # ownership, sharing and ID are not part of a candidate (decided anew on save)
         for key in ("id", "owner_sub", "shared_group_ids", "avatar_path"):
             assert key not in candidate.persona_payload
 

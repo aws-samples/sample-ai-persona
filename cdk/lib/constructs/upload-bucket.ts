@@ -4,30 +4,30 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 /**
- * 高度な生成の上げたファイルを使える日数（U2、BR13.2）。アプリの src/config.py の
- * ADVANCED_SOURCE_RETENTION_DAYS と同じ値にする（tests/infra/test_source_retention.py が確かめる）。
+ * Number of days an uploaded file remains usable for advanced generation. Must match
+ * ADVANCED_SOURCE_RETENTION_DAYS in src/config.py (checked by tests/infra/test_source_retention.py).
  */
 export const SOURCE_RETENTION_DAYS = 7;
-/** DynamoDB の TTL の遅れ（最大 2 日ほど）に合わせた、S3 の今の版を消すまでの余裕（BR13.6）。 */
+/** DynamoDB TTL deletion can lag up to ~2 days, so S3 expiry of the current version waits that long. */
 export const SOURCE_LIFECYCLE_MARGIN_DAYS = 2;
 
 /**
- * アップロードファイル用の S3 バケット（v1.0.0、Data スタック）。
+ * S3 bucket for uploaded files (v1.0.0, Data stack).
  *
- * 物理名は自動生成にし（v0 のバケットと並べて置けるように）、RETAIN にする。
- * オブジェクトの自動削除（autoDeleteObjects）は使わない（project.md の Forbidden）。
+ * The physical name is auto-generated (so it can coexist with the v0 bucket) and RETAIN is set.
+ * Automatic object deletion (autoDeleteObjects) is not used (forbidden in this project).
  *
- * U5 のライフサイクル（infrastructure-specification.md、NFR1.33、NFR1.41）:
- * - `candidates/` の生成候補の一時 CSV は 1 日で失効（候補そのものは 8 時間）
- * - タグ `pending=true`（紐付く前のアップロード）は 1 日で失効（使えるのは 24 時間）
- * - 古いバージョンは 7 日で削除、期限切れの削除マーカーを掃除、未完了のマルチパートは 7 日で中止
- * - `survey-runs/` のアンケートの実行の入出力は 7 日で失効、古いバージョンは 1 日（NFR5.14）
- * - 高度な生成（ベータ、U1）: `sources/` の未完了のマルチパートは 1 日で中止、古いバージョンは 1 日。
- *   U2 で今の版を 9 日で失効させる（BR13.6）。
- *   `analysis-records/` の古いバージョンは 1 日。暗号化（SSE-S3）は変えない（NFR3.2）
+ * Lifecycle:
+ * - Temporary CSVs of generated candidates under `candidates/` expire in 1 day (the candidates themselves in 8 hours)
+ * - Objects tagged `pending=true` (uploads not yet attached) expire in 1 day (usable for 24 hours)
+ * - Old versions are removed after 7 days, expired delete markers are cleaned up, incomplete multipart uploads abort after 7 days
+ * - Survey run input/output under `survey-runs/` expires in 7 days, old versions after 1 day
+ * - Advanced generation (beta): incomplete multipart uploads under `sources/` abort after 1 day and old versions go after 1 day.
+ *   The current version expires after 9 days.
+ *   Old versions under `analysis-records/` go after 1 day. Encryption (SSE-S3) is unchanged
  *
- * CORS はここに書かない: 許すオリジンは App スタックの CloudFront のドメインのため、App スタックの
- * カスタムリソースが PutBucketCors で設定する（Data → App の参照を作らない、NFR3.10）。
+ * CORS is not set here: the allowed origin is the CloudFront domain of the App stack, so a custom resource in the
+ * App stack sets it with PutBucketCors (no Data -> App reference).
  */
 export class UploadBucket extends Construct {
   public readonly bucket: s3.Bucket;
@@ -58,19 +58,19 @@ export class UploadBucket extends Construct {
           expiredObjectDeleteMarker: true,
           abortIncompleteMultipartUploadAfter: Duration.days(7),
         },
-        // アンケートの実行の入出力（ペルソナの属性・依頼の本文・回答が入る）。アプリは終わったら消す
-        // （BR10.1）。消し損ねの備えに今の版を 7 日、消したあとの古いバージョンを 1 日で消す（NFR5.14）。
-        // 上の全体の規則（古いバージョン 7 日）と重なるが、S3 は短い方を守る
+        // Survey run input/output (persona attributes, request text and answers). The app deletes it when done.
+        // As a safety net for missed deletions, the current version goes after 7 days and old versions after 1 day.
+        // This overlaps the bucket-wide rule above (old versions 7 days), but S3 honors the shorter one
         {
           id: 'ExpireSurveyRuns',
           prefix: 'survey-runs/',
           expiration: Duration.days(7),
           noncurrentVersionExpiration: Duration.days(1),
         },
-        // 高度な生成（ベータ、U1、NFR5.5）: ブラウザからの分割アップロード。途中で止まったパートを
-        // 1 日で中止し、消したファイルの古いバージョンを 1 日で消す。
-        // U2（BR13.6、NFR5.25）: 今の版を作成から 9 日（保存の 7 日 + 余裕 2 日）で消す。生成で使うたびに
-        // アプリが同じキーへコピーし直して作成日を新しくする（BR13.4）。規則の ID は変えない
+        // Advanced generation (beta): multipart uploads from the browser. Abort stalled parts
+        // after 1 day and remove old versions of deleted files after 1 day.
+        // Expire the current version 9 days after creation (7 days retention + 2 days margin, the DynamoDB TTL lag). Each use in
+        // generation makes the app copy the object onto the same key to refresh its creation date. The rule ID stays unchanged
         {
           id: 'AbortIncompleteSourceUploads',
           prefix: 'sources/',
@@ -78,8 +78,8 @@ export class UploadBucket extends Construct {
           noncurrentVersionExpiration: Duration.days(1),
           expiration: Duration.days(SOURCE_RETENTION_DAYS + SOURCE_LIFECYCLE_MARGIN_DAYS),
         },
-        // 分析の記録の古いバージョンを 1 日で消す。保存前の記録（タグ pending=true）は上の
-        // ExpireUnattachedUploads で消える（infrastructure-specification.md「決めたこと」）
+        // Remove old versions of analysis records after 1 day. Records before saving (tag pending=true)
+        // are removed by ExpireUnattachedUploads above
         {
           id: 'ExpireNoncurrentAnalysisRecords',
           prefix: 'analysis-records/',

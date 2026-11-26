@@ -1,4 +1,4 @@
-"""v0 / v1 の環境の名前を CloudFormation と ECS から引くテスト（移行スクリプト）。"""
+"""Tests for looking up v0 / v1 environment names from CloudFormation and ECS (migration script)."""
 
 from typing import Any
 

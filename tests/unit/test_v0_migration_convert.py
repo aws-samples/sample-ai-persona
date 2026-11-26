@@ -1,8 +1,8 @@
-"""v0 のアイテムを v1 の形へ変換する純粋関数のテスト（移行スクリプト）。
+"""Tests for the pure functions that convert v0 items to the v1 shape (migration script).
 
-v0（v0.19.1）の DynamoDB アイテムの形をフィクスチャにし、v1 のモデルで読める形に
-なること、S3 の参照が v1 のバケットへ書き換わること、移せないものが理由付きで
-スキップされることを確かめる。
+Fixtures use the shape of v0 (v0.19.1) DynamoDB items. They check that the result can be
+read by the v1 models, that S3 references are rewritten to the v1 bucket, and that
+items that cannot be moved are skipped with a reason.
 """
 
 from decimal import Decimal

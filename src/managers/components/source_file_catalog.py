@@ -1,4 +1,4 @@
-"""The owner of uploaded source files (advanced generation U1/U2, contract C4).
+"""The owner of uploaded source files (advanced generation).
 
 ``SourceUploadManager`` creates, inspects, lists and deletes the files,
 ``AdvancedPersonaGenerationManager`` reads them for a generation and releases
@@ -8,23 +8,23 @@ rules on files live in this component (``.claude/rules/architecture.md``,
 Component layer):
 
 - Only the owner sees a file; someone else's file, a missing file and an
-  expired file get the same NOT_FOUND code (NFR3.9, BR13.5, BR15.1).
-- Whether a file is still alive is decided in one place, :meth:`_is_live`
-  (U2 NFR5.29): not past ``expires_at``. A U1 record without ``expires_at``
+  expired file get the same NOT_FOUND code.
+- Whether a file is still alive is decided in one place, :meth:`_is_live`:
+  not past ``expires_at``. A legacy record without ``expires_at``
   counts from its last use or its creation (``ADVANCED_SOURCE_RETENTION_DAYS``).
-- A generation uses only the owner's live ``ready`` table (BR6.2, BR13.1).
+- A generation uses only the owner's live ``ready`` table.
 - A user holds at most ``ADVANCED_UPLOAD_MAX_FILES`` live files: uploading
-  ones younger than 24 hours, inspecting and ready ones (BR2.1, BR12.3). The
+  ones younger than 24 hours, inspecting and ready ones. The
   count reads the eventually consistent GSI, so two starts at the same moment
-  may both pass (accepted in U1, scalability-design.md §2).
-- An inspection stuck past 15 minutes may start again (NFR5.19) and may be
-  deleted (BR14.1).
-- Deletion goes ``deleting`` -> every S3 version -> the record (BR14.1); a
-  file in use is refused with ``SOURCE_FILE_IN_USE`` (BR14.2).
-- Old U1 records get their ``expires_at`` written, or are deleted when past
-  it, a few at a time while the list is read (NFR3.16).
+  may both pass (accepted).
+- An inspection stuck past 15 minutes may start again and may be
+  deleted.
+- Deletion goes ``deleting`` -> every S3 version -> the record; a
+  file in use is refused with ``SOURCE_FILE_IN_USE``.
+- Legacy records get their ``expires_at`` written, or are deleted when past
+  it, a few at a time while the list is read.
 - The in-use mark is set in the start transaction of the generation store and
-  removed here by whoever ends the generation (BR6.4).
+  removed here by whoever ends the generation.
 
 The ``SourceFileStore``, the ``S3Service`` and the caller's exception type are
 given to the constructor; this component never reads ``service_factory``.
@@ -65,7 +65,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
-#: U5 BR30.3: files that will be ready later (an error file never will).
+#: Files that will be ready later (an error file never will).
 _NOT_READY_YET = frozenset({SourceFileStatus.UPLOADING, SourceFileStatus.INSPECTING})
 _HELD_STATES = frozenset(
     {SourceFileStatus.UPLOADING, SourceFileStatus.INSPECTING, SourceFileStatus.READY}
@@ -78,7 +78,7 @@ def _utc_now() -> datetime:
 
 @dataclass(frozen=True)
 class ReconcileOutcome:
-    """What one pass over the old U1 records did (NFR3.16, never stored)."""
+    """What one pass over the legacy records did (never stored)."""
 
     filled: int = 0
     deleted: int = 0
@@ -101,7 +101,7 @@ class SourceFileCatalog:
         """
         Args:
             store: ``SourceFiles`` reads and conditional writes.
-            s3: The upload bucket; needed only to delete files (U2).
+            s3: The upload bucket; needed only to delete files.
             error_type: The caller's Manager exception; every refusal and
                 every store failure is raised as this type.
             clock: Aware-UTC clock for the expiry checks (tests).
@@ -111,7 +111,7 @@ class SourceFileCatalog:
         self._error_type = error_type
         self._clock = clock or _utc_now
 
-    # --- expiry (one place, NFR5.29) --------------------------------------------
+    # Expiry (one place)
 
     @staticmethod
     def _retention_days() -> int:
@@ -121,15 +121,15 @@ class SourceFileCatalog:
         return source_file.effective_expires_at(self._retention_days()) <= now
 
     def _is_live(self, source_file: SourceFile, now: datetime) -> bool:
-        """Not being deleted and not past its expiry (BR13.5)."""
+        """Not being deleted and not past its expiry."""
         return source_file.is_live(now, self._retention_days())
 
     def new_expiry(self, now: Optional[datetime] = None) -> datetime:
-        """``now`` + the retention: the expiry at creation and at each use (BR13.2)."""
+        """``now`` + the retention: the expiry at creation and at each use."""
         return (now or self._clock()) + timedelta(days=self._retention_days())
 
     def next_display_seq(self, owner_sub: str, filename: str) -> int:
-        """The number of a new file of ``filename`` (highest live one + 1, BR11.3)."""
+        """The number of a new file of ``filename`` (highest live one + 1)."""
         now = self._clock()
         highest = self._call(
             lambda: self._store.max_display_seq(owner_sub, filename, now=now)
@@ -144,7 +144,7 @@ class SourceFileCatalog:
         """The owner's unexpired file; anything else is ``not_found_code``.
 
         A ``deleting`` file is returned (its row says the deletion failed and
-        can be retried, BR14.1); :meth:`ready_table` refuses it.
+        can be retried); :meth:`ready_table` refuses it.
         """
         found = self._call(lambda: self._store.get_for_owner(source_file_id, owner_sub))
         if found is None or self._expired(found, self._clock()):
@@ -152,7 +152,7 @@ class SourceFileCatalog:
         return found
 
     def ready_table(self, owner_sub: str, source_file_id: str) -> SourceFile:
-        """The owner's live ready table for a generation (BR6.2, BR13.1, BR13.5).
+        """The owner's live ready table for a generation.
 
         Raises:
             CodedError: ``GENERATION_SOURCE_NOT_FOUND`` when it is someone
@@ -171,16 +171,16 @@ class SourceFileCatalog:
     def ready_sources(
         self, owner_sub: str, source_file_ids: Sequence[str]
     ) -> list[SourceFile]:
-        """The owner's live ready files for one generation (U4 BR23.1, NFR3.24).
+        """The owner's live ready files for one generation.
 
-        Documents alone (1〜10), or up to three tables with documents (U6
-        BR37.1), the tables within 1GB together (NFR5.54).
+        Documents alone (1 to 10), or up to three tables with documents,
+        the tables within 1GB together.
 
         Raises:
             CodedError: ``UPLOAD_SOURCE_INVALID`` (nothing, more than ten, or
                 four tables or more: ``reason=tables``, ``max=3``),
                 ``GENERATION_SOURCE_TOO_LARGE`` (``limit=tables_total``),
-                ``GENERATION_SOURCE_NOT_READY`` (U5: a file still uploading or
+                ``GENERATION_SOURCE_NOT_READY`` (a file still uploading or
                 being inspected), ``GENERATION_SOURCE_NOT_FOUND`` (any file
                 someone else's, missing, expired, failed or being deleted).
         """
@@ -194,7 +194,7 @@ class SourceFileCatalog:
         code = ErrorCode.GENERATION_SOURCE_NOT_FOUND
         found = [self.get_owned(owner_sub, i, not_found_code=code) for i in ids]
         if any(s.status in _NOT_READY_YET for s in found):
-            # U5 BR30.3: still uploading or being inspected; the user waits
+            # Still uploading or being inspected; the user waits
             raise self._error_type(
                 "source file is not ready yet",
                 code=ErrorCode.GENERATION_SOURCE_NOT_READY,
@@ -205,14 +205,14 @@ class SourceFileCatalog:
         tables = [s for s in found if s.kind is SourceKind.TABLE]
         max_tables = int(config.ADVANCED_MAX_TABLES)
         if len(tables) > max_tables:
-            # U6 BR37.1 (replaces U4's one table): up to three tables
+            # Up to three tables
             raise self._error_type(
                 "too many tables for one generation",
                 code=ErrorCode.UPLOAD_SOURCE_INVALID,
                 context={"reason": "tables", "max": max_tables},
             )
         if sum(s.size_bytes for s in tables) > int(config.ADVANCED_UPLOAD_MAX_BYTES):
-            # U6 NFR5.54: the tables together stay within the 1GB of one table
+            # The tables together stay within the 1GB of one table
             raise self._error_type(
                 "tables over the total size",
                 code=ErrorCode.GENERATION_SOURCE_TOO_LARGE,
@@ -223,13 +223,13 @@ class SourceFileCatalog:
     def list_owned(
         self, owner_sub: str, *, reconcile: bool = False
     ) -> list[SourceFile]:
-        """The owner's files for the list, newest first (W2-1, BR13.1).
+        """The owner's files for the list, newest first.
 
         Leaves out expired files and uploads abandoned for 24 hours; keeps
         ``deleting`` ones (shown as "削除できませんでした"). With ``reconcile``
-        the same read also feeds :meth:`reconcile_legacy` (no extra read,
-        performance-design.md NFR2.6); what it fills or deletes does not change
-        what is shown, because expiry is judged the same way here.
+        the same read also feeds :meth:`reconcile_legacy` (no extra read);
+        what it fills or deletes does not change what is shown, because
+        expiry is judged the same way here.
         """
         now = self._clock()
         oldest = now - timedelta(seconds=config.ADVANCED_UPLOAD_PENDING_MAX_SECONDS)
@@ -246,7 +246,7 @@ class SourceFileCatalog:
         return sorted(shown, key=lambda f: f.created_at, reverse=True)
 
     def held_count(self, owner_sub: str, *, now: datetime) -> int:
-        """Live files of the owner (abandoned uploads are not counted, NFR5.5)."""
+        """Live files of the owner (abandoned uploads are not counted)."""
         oldest = now - timedelta(seconds=config.ADVANCED_UPLOAD_PENDING_MAX_SECONDS)
         files = self._call(lambda: self._store.list_for_owner(owner_sub))
         return sum(
@@ -258,7 +258,7 @@ class SourceFileCatalog:
         )
 
     def ensure_room(self, owner_sub: str, *, now: datetime) -> None:
-        """Refuse a new upload when the owner already holds the maximum (BR2.1).
+        """Refuse a new upload when the owner already holds the maximum.
 
         Raises:
             CodedError: ``UPLOAD_TOO_MANY_FILES`` with ``max_files``.
@@ -274,10 +274,10 @@ class SourceFileCatalog:
     def availability(
         self, owner_sub: str, record: AnalysisRecord
     ) -> tuple[SourceAvailability, ...]:
-        """Whether each file of an analysis record is still there (BR14.3).
+        """Whether each file of an analysis record is still there.
 
         ``available`` needs the owner's live file with the recorded checksum.
-        A U1 record has no file IDs: one ``unknown`` per checksum. A failed
+        A legacy record has no file IDs: one ``unknown`` per checksum. A failed
         read is ``unknown`` too (the record is still shown).
         """
         if not record.source_file_ids:
@@ -319,7 +319,7 @@ class SourceFileCatalog:
     def record_url_refresh(
         self, owner_sub: str, source_file_id: str, *, now: datetime
     ) -> SourceFile:
-        """Count one part URL refresh of the owner's uploading file (BR2.4).
+        """Count one part URL refresh of the owner's uploading file.
 
         Raises:
             CodedError: ``UPLOAD_NOT_FOUND`` when someone else's, missing, no
@@ -338,7 +338,7 @@ class SourceFileCatalog:
     def begin_inspection(
         self, owner_sub: str, source_file_id: str, *, now: datetime
     ) -> SourceFile:
-        """``uploading -> inspecting`` once, or again after 15 minutes (NFR5.19).
+        """``uploading -> inspecting`` once, or again after 15 minutes.
 
         Raises:
             CodedError: ``UPLOAD_NOT_FOUND`` when someone else's, missing,
@@ -357,7 +357,7 @@ class SourceFileCatalog:
         )
 
     def inspection_in_progress(self, source_file: SourceFile, now: datetime) -> bool:
-        """An ``inspecting`` file updated within the last 15 minutes (BR11.4)."""
+        """An ``inspecting`` file updated within the last 15 minutes."""
         return (
             source_file.status is SourceFileStatus.INSPECTING
             and source_file.updated_at is not None
@@ -372,7 +372,7 @@ class SourceFileCatalog:
         *,
         now: datetime,
     ) -> SourceFile:
-        """Keep the inspection result and make the file ready (BR3.3).
+        """Keep the inspection result and make the file ready.
 
         Raises:
             CodedError: ``UPLOAD_NOT_FOUND`` when the file is no longer
@@ -394,7 +394,7 @@ class SourceFileCatalog:
             return False
 
     def cancel_upload(self, owner_sub: str, source_file_id: str) -> bool:
-        """Delete the owner's upload while it is still uploading (W2-6)."""
+        """Delete the owner's upload while it is still uploading."""
         return bool(
             self._call(lambda: self._store.delete_uploading(source_file_id, owner_sub))
         )
@@ -402,10 +402,10 @@ class SourceFileCatalog:
     def release(
         self, source_file_id: str, generation_id: str, *, now: datetime
     ) -> bool:
-        """Remove the in-use mark of ``generation_id`` (BR6.4; never raises).
+        """Remove the in-use mark of ``generation_id`` (never raises).
 
         ``now`` is kept for the callers; the end no longer stamps the last
-        use (U2 BR13.3).
+        use.
         """
         try:
             return self._store.clear_in_use(source_file_id, generation_id)
@@ -414,14 +414,14 @@ class SourceFileCatalog:
             return False
 
     def fill_checksum(self, source_file_id: str, checksum: str) -> bool:
-        """Write the checksum of a file whose record holds none (NFR3.19)."""
+        """Write the checksum of a file whose record holds none."""
         try:
             return self._store.set_checksum_if_empty(source_file_id, checksum)
         except SourceFileStoreError as e:
             logger.warning("source file checksum not written (%s)", e.code.value)
             return False
 
-    # --- deletion (BR14.1, BR14.2) ----------------------------------------------
+    # Deletion
 
     def delete_owned(self, owner_sub: str, source_file_id: str) -> int:
         """Delete the owner's file: ``deleting``, every S3 version, the record.
@@ -487,7 +487,7 @@ class SourceFileCatalog:
             logger.info("source file record already gone")
         return int(removed)
 
-    # --- old U1 records (NFR3.16) -----------------------------------------------
+    # Legacy records
 
     def reconcile_legacy(
         self, owner_sub: str, files: Sequence[SourceFile]

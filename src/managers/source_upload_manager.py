@@ -1,29 +1,29 @@
-"""Uploads of tables for the advanced generation (beta) U1 (W2, W3).
+"""Uploads of tables and documents for the advanced generation (beta).
 
 The browser sends the file straight to S3 in 16MB parts with presigned
-``UploadPart`` URLs (BR2.3, BR2.6); this Manager only answers the start,
+``UploadPart`` URLs; this Manager only answers the start,
 part URL refresh, completion, status and cancel requests:
 
-- Start (BR2.1〜BR2.3): CSV / TSV only, at most the environment's limit (the
+- Start: CSV / TSV only, at most the environment's limit (the
   exact limit is accepted), at most ten live files. Nothing is issued and
   nothing is written to S3 when a check fails.
-- Refresh (BR2.4): new URLs for part numbers of the owner's uploading file,
+- Refresh: new URLs for part numbers of the owner's uploading file,
   24 times at most per upload.
-- Completion (BR2.7, BR3.1〜BR3.3, NFR5.19, NFR5.20): takes effect once (or
+- Completion: takes effect once (or
   again after a 15-minute stuck inspection); the sizes S3 holds must add up to
   the declared size and stay within the limit, otherwise the upload is
   aborted and the file goes to ``error``. Then the first bytes only are read
   and inspected, the checksum is read and the file becomes ``ready``.
-- Cancel (W2-6): drops the parts and the record of an uploading file.
-- U2: a number for files of the same name and a 7-day expiry at the start
-  (BR11.3, BR13.2); a second completion returns the current row (BR11.4);
-  one error code per fix of the table (BR12.1); the list of the owner's live
-  files with the repair of old records (W2-1, NFR3.16); and the deletion of
-  every S3 version and the record (W2-6, BR14.1, BR14.2).
+- Cancel: drops the parts and the record of an uploading file.
+- A number for files of the same name and a 7-day expiry at the start;
+  a second completion returns the current row;
+  one error code per fix of the table; the list of the owner's live
+  files with the repair of old records; and the deletion of
+  every S3 version and the record.
 
 Only the owner sees an upload; someone else's, a missing and an expired one
-are the same ``UPLOAD_NOT_FOUND`` (NFR3.9, BR15.1). URLs are returned, never
-logged or stored; logs carry IDs, states, codes and counts only (BR15.3).
+are the same ``UPLOAD_NOT_FOUND``. URLs are returned, never
+logged or stored; logs carry IDs, states, codes and counts only.
 """
 
 from __future__ import annotations
@@ -68,8 +68,8 @@ logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
-#: Extensions accepted: tables (BR2.1) and documents (U4 BR21.1). Excel files
-#: are saved as CSV first; an old Word file as .docx (BR21.2).
+#: Extensions accepted: tables and documents. Excel files
+#: are saved as CSV first; an old Word file as .docx.
 _EXTENSIONS = {
     f".{fmt.value}": fmt
     for fmt in (
@@ -92,7 +92,7 @@ _CONTENT_TYPES = frozenset(
         "application/csv",
         "application/vnd.ms-excel",
         "application/octet-stream",
-        # U4: documents
+        # Documents
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "text/markdown",
@@ -128,7 +128,7 @@ def _format_of(filename: str) -> SourceFormat:
 
 
 def _limit_for(source_format: SourceFormat, table_limit: int) -> int:
-    """1GB for a table (BR2.2), 100MB for a document (BR21.1)."""
+    """1GB for a table, 100MB for a document."""
     if source_format.kind is SourceKind.DOCUMENT:
         return int(config.ADVANCED_DOCUMENT_MAX_BYTES)
     return table_limit
@@ -173,7 +173,7 @@ class SourceUploadManager:
         size_bytes: int,
         content_type: str,
     ) -> UploadSession:
-        """Start a multipart upload and issue every part URL (BR2.1〜BR2.3).
+        """Start a multipart upload and issue every part URL.
 
         Raises:
             AccessDeniedError: The user lacks ``ai:execute``.
@@ -191,7 +191,7 @@ class SourceUploadManager:
             )
         self._check_size(int(size_bytes), source_format)
         now = self._clock()
-        # BR21.3: tables and documents count together
+        # Tables and documents count together
         self._source_file_catalog.ensure_room(principal.sub, now=now)
         part_size = int(config.ADVANCED_UPLOAD_PART_SIZE_BYTES)
         draft = SourceFile.create_new(
@@ -202,7 +202,7 @@ class SourceUploadManager:
             now=now,
             kind=source_format.kind,
         )
-        # BR11.3, BR13.2: the number is fixed now and the 7 days start now
+        # The number is fixed now and the 7 days start now
         draft = draft.update(
             display_seq=self._source_file_catalog.next_display_seq(
                 principal.sub, draft.filename
@@ -225,7 +225,7 @@ class SourceUploadManager:
     def refresh_part_urls(
         self, principal: Principal, source_file_id: str, part_numbers: Sequence[int]
     ) -> UploadSession:
-        """New URLs for parts not sent yet (BR2.4, FD-Q7).
+        """New URLs for parts not sent yet.
 
         Raises:
             SourceUploadError: ``UPLOAD_NOT_FOUND`` (someone else's, missing or
@@ -266,7 +266,7 @@ class SourceUploadManager:
         source_file_id: str,
         parts: Iterable[tuple[int, str]],
     ) -> SourceFile:
-        """Complete the upload once and inspect its head (BR2.7, BR3.1〜BR3.3).
+        """Complete the upload once and inspect its head.
 
         Args:
             principal: The uploader.
@@ -275,7 +275,7 @@ class SourceUploadManager:
 
         Returns:
             The ready file with its metadata. A second completion (another
-            tab, U2 BR11.4) gets the row as it is now, without inspecting
+            tab) gets the row as it is now, without inspecting
             again: ``inspecting`` (the first one is still at it), ``ready``
             or ``error``.
 
@@ -311,7 +311,7 @@ class SourceUploadManager:
     def _completed_before(
         self, principal: Principal, source_file_id: str, now: datetime
     ) -> SourceFile:
-        """The row of an upload another request completed (BR11.4, NFR5.31)."""
+        """The row of an upload another request completed."""
         found = self._source_file_catalog.get_owned(
             principal.sub, source_file_id, not_found_code=ErrorCode.UPLOAD_NOT_FOUND
         )
@@ -327,7 +327,7 @@ class SourceUploadManager:
     def _finish_parts(
         self, source_file: SourceFile, parts: list[tuple[int, str]]
     ) -> None:
-        """Check the sizes S3 holds, then complete or abort (BR2.7)."""
+        """Check the sizes S3 holds, then complete or abort."""
         upload_id = source_file.multipart_upload_id
         if not upload_id:
             return
@@ -397,7 +397,7 @@ class SourceUploadManager:
         head: bytes,
         now: datetime,
     ) -> DocumentMetadata:
-        """Head and tail of a document (U4 BR22.1〜BR22.3, NFR3.25)."""
+        """Head and tail of a document."""
         size = source_file.size_bytes
         tail = (
             head
@@ -431,12 +431,12 @@ class SourceUploadManager:
         )
 
     def list_uploads(self, principal: Principal) -> list[SourceFile]:
-        """The owner's files for the list, newest first (W2-1, BR13.1, BR15.1).
+        """The owner's files for the list, newest first.
 
         Expired files and uploads abandoned for 24 hours are left out;
-        ``deleting`` ones stay (their deletion can be retried). Old U1
+        ``deleting`` ones stay (their deletion can be retried). Old
         records are given their expiry, or deleted once past it, a few at a
-        time (NFR3.16); that never stops the list.
+        time; that never stops the list.
 
         Raises:
             SourceUploadError: ``ADVANCED_GENERATION_UNAVAILABLE`` or a store
@@ -454,7 +454,7 @@ class SourceUploadManager:
         )
 
     def inspection_stuck(self, source_file: SourceFile) -> bool:
-        """An ``inspecting`` file untouched for 15 minutes (it may be deleted, BR14.1)."""
+        """An ``inspecting`` file untouched for 15 minutes (it may be deleted)."""
         return (
             source_file.status is SourceFileStatus.INSPECTING
             and not self._source_file_catalog.inspection_in_progress(
@@ -463,7 +463,7 @@ class SourceUploadManager:
         )
 
     def delete_source(self, principal: Principal, source_file_id: str) -> None:
-        """Delete the owner's file: every S3 version and the record (W2-6, BR14.1).
+        """Delete the owner's file: every S3 version and the record.
 
         Deleting stays possible when the feature is closed meanwhile, so the
         user can always remove their data. A failed S3 deletion leaves the
@@ -472,7 +472,7 @@ class SourceUploadManager:
         Raises:
             SourceUploadError: ``UPLOAD_NOT_FOUND`` (someone else's, missing,
                 expired, uploading or inspecting), ``SOURCE_FILE_IN_USE``
-                (BR14.2) or an S3 / store code.
+                or an S3 / store code.
         """
         try:
             versions = self._source_file_catalog.delete_owned(
@@ -497,7 +497,7 @@ class SourceUploadManager:
         )
 
     def cancel_upload(self, principal: Principal, source_file_id: str) -> None:
-        """Drop the parts and the record of the owner's uploading file (W2-6).
+        """Drop the parts and the record of the owner's uploading file.
 
         Cancelling stays possible when the feature is closed meanwhile, so that
         no parts are left behind.

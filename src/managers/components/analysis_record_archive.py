@@ -1,4 +1,4 @@
-"""The analysis record of an advanced generation in S3 (U1, BR9.1〜BR9.4, C7).
+"""The analysis record of an advanced generation in S3.
 
 ``AdvancedPersonaGenerationManager`` deposits and reads the record of a
 finished generation; ``PersonaManager`` copies it when a candidate is saved
@@ -8,12 +8,12 @@ other, so the record lives in this component
 
 - The record is ``analysis-records/<owner_sub>/<record_id>.json``. A pending
   record (record ID = generation ID) carries the tag ``pending=true``; the
-  bucket lifecycle removes it (BR9.3).
+  bucket lifecycle removes it.
 - A pending record is not readable once 24 hours have passed since the
-  generation finished (``GENERATION_EXPIRED``, AC10.2.3).
-- Saving copies it, without tags, to the saved persona's ID (BR9.4). One copy
+  generation finished (``GENERATION_EXPIRED``).
+- Saving copies it, without tags, to the saved persona's ID. One copy
   belongs to one persona; deleting the persona removes that copy only.
-- The body never holds a presigned URL (BR6.2): a deposit that would is
+- The body never holds a presigned URL: a deposit that would is
   refused.
 
 The ``S3Service`` and the caller's exception type are given to the
@@ -40,14 +40,14 @@ logger = logging.getLogger(__name__)
 
 #: Key prefix of analysis records (the lifecycle rule filters on it).
 RECORD_PREFIX = "analysis-records"
-#: Tag of a record no persona has been saved from yet (contract C7).
+#: Tag of a record no persona has been saved from yet.
 PENDING_TAGS = {"pending": "true"}
 #: Query parameters that only a presigned URL carries.
 _PRESIGNED_MARKERS = ("X-Amz-Signature", "X-Amz-Credential", "Signature=")
 
 
 def record_key(owner_sub: str, record_id: str) -> str:
-    """``analysis-records/<owner_sub>/<record_id>.json`` (contract C7)."""
+    """``analysis-records/<owner_sub>/<record_id>.json``."""
     return f"{RECORD_PREFIX}/{owner_sub}/{record_id}.json"
 
 
@@ -70,7 +70,7 @@ class AnalysisRecordArchive:
         self._error_type = error_type
 
     def deposit(self, record: AnalysisRecord) -> str:
-        """Write a pending record (BR9.1).
+        """Write a pending record.
 
         Returns:
             The key written.
@@ -102,7 +102,7 @@ class AnalysisRecordArchive:
         finished_at: Optional[datetime],
         now: datetime,
     ) -> AnalysisRecord:
-        """The record of a finished generation, within 24 hours (BR9.3).
+        """The record of a finished generation, within 24 hours.
 
         Raises:
             CodedError: ``GENERATION_EXPIRED`` past the window (or when the
@@ -122,7 +122,7 @@ class AnalysisRecordArchive:
         return record
 
     def commit_copy(self, owner_sub: str, record_id: str, persona_id: str) -> str:
-        """Copy the pending record to the saved persona's ID, without tags (BR9.4).
+        """Copy the pending record to the saved persona's ID, without tags.
 
         Returns:
             The persona's record ID (``persona_id``).
@@ -139,7 +139,7 @@ class AnalysisRecordArchive:
         return persona_id
 
     def discard_copy(self, owner_sub: str, persona_id: str) -> None:
-        """Remove the copy of one persona (other copies stay, BR9.4).
+        """Remove the copy of one persona (other copies stay).
 
         Raises:
             CodedError: ``GENERATION_OPERATION_FAILED`` when S3 failed.

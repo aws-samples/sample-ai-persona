@@ -15,16 +15,16 @@ export interface SurveyRunStateMachineProps {
 }
 
 /**
- * アンケートのステートマシン（基盤設計 2.2・3.1、Standard、Distributed Map）。
+ * Survey state machine (Standard, Distributed Map).
  *
- * - 名前は指定しない（CDK が論理 ID から作る）。RETAIN のステートマシンとロググループが作成の失敗や
- *   切り戻しのあとに残っても、同じ名前で作り直して「すでに存在する」で失敗しないようにする
- * - CDK の StateMachine は削除の方針を指定しないと DESTROY になるため、RETAIN を明示する
- *   （project.md の Forbidden、基盤設計のレビュー R-08）
- * - ログは ERROR だけで入出力を含めない（NFR2.3、NFR5.11、NFR7.5）。X-Ray は使わない
- * - 実行ロールの文は基盤設計 3.1 の表のとおり。ASL を直接書くため L2 は権限を足さない
- *   （ログの出力の権限だけは CDK が足す）。自分の ARN を指す文はロールの外の Policy に置き、
- *   ステートマシン → ロール → ステートマシンの循環を作らない
+ * - No name is set (CDK derives it from the logical ID), so a RETAIN state machine and log group
+ *   left after a failed create or rollback do not make a recreate fail with "already exists"
+ * - CDK StateMachine defaults to DESTROY unless a removal policy is given, so RETAIN is explicit
+ *   (RemovalPolicy.DESTROY is forbidden in this project)
+ * - Logs are ERROR only and exclude input/output. X-Ray is not used
+ * - Execution role statements are listed one by one. ASL is written directly, so the L2 adds no permissions
+ *   (except log delivery, which CDK adds). The statement pointing at its own ARN lives in a Policy outside
+ *   the role, to avoid a state machine -> role -> state machine cycle
  */
 export class SurveyRunStateMachine extends Construct {
   public readonly stateMachine: sfn.StateMachine;
@@ -54,18 +54,18 @@ export class SurveyRunStateMachine extends Construct {
       assumedBy: new iam.ServicePrincipal('states.amazonaws.com'),
       description: 'AI Persona survey state machine: Bedrock InvokeModel and survey-runs/ in S3',
     });
-    // 推論はアンケートのモデルだけ（NFR5.3）
+    // Inference only for the survey model
     this.role.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'],
       resources: modelArns,
     }));
-    // 入力の JSONL・画像ありの Body・ResultWriter のマルチパートの読み取り。GetObjectVersion は付けない
-    // （消したあとの古いバージョンを読ませない、NFR5.14a）。ListBucket も付けない（1 つのオブジェクトを読むだけ）
+    // Read the input JSONL, bodies with images and ResultWriter multipart parts. No GetObjectVersion
+    // (so old versions after a delete cannot be read). No ListBucket either (it reads single objects only)
     this.role.addToPolicy(new iam.PolicyStatement({
       actions: ['s3:GetObject'],
       resources: [bucket.arnForObjects('survey-runs/*')],
     }));
-    // ResultWriter の書き込み（NFR5.4）
+    // ResultWriter writes
     this.role.addToPolicy(new iam.PolicyStatement({
       actions: ['s3:PutObject', 's3:AbortMultipartUpload', 's3:ListMultipartUploadParts'],
       resources: [bucket.arnForObjects('survey-runs/*/results/*')],
@@ -83,8 +83,8 @@ export class SurveyRunStateMachine extends Construct {
     const name = this.stateMachine.stateMachineName;
     this.executionsArn = `arn:${partition}:states:${region}:${account}:execution:${name}:*`;
     this.childExecutionsArn = `arn:${partition}:states:${region}:${account}:execution:${name}/*`;
-    // Distributed Map が子の実行を始めて見守る（NFR5.5。Step Functions 開発者ガイド「IAM policies for
-    // using Distributed Map states」の最小の例と同じ）。RedriveExecution・Map Run の操作は付けない
+    // The Distributed Map starts and watches child executions (same as the minimal example in the Step Functions
+    // developer guide "IAM policies for using Distributed Map states"). RedriveExecution and Map Run operations are not granted
     this.executionPolicy = new iam.Policy(this, 'ExecutionPolicy', {
       roles: [this.role],
       statements: [

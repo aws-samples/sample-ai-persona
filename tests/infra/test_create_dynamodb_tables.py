@@ -1,9 +1,9 @@
-"""ローカルのテーブル作成スクリプトの検査（U9、NFR2.27、NFR2.28、cicd-pipeline.md）。
+"""Checks for the local table-creation script.
 
-``scripts/create_dynamodb_tables.py`` が作るテーブルと GSI を、CDK の Data スタックの
-期待（``cdk/test/data-stack.test.ts`` の ``EXPECTED_GSIS``）と同じ内容に保つ。CDK は
-TypeScript のため pytest からは読まず、期待を手で書く。GSI を変えるときは
-両方の一覧を一緒に直す。DynamoDB は moto で、AWS には触れない。
+``scripts/create_dynamodb_tables.py`` must create the same tables and GSIs that the
+CDK Data stack expects (``EXPECTED_GSIS`` in ``cdk/test/data-stack.test.ts``). pytest
+cannot read the TypeScript, so the expectation is written out by hand; when a GSI
+changes, update both lists together. DynamoDB is moto; AWS is never touched.
 """
 
 import pytest
@@ -17,20 +17,20 @@ from scripts.create_dynamodb_tables import DynamoDBTableCreator  # noqa: E402
 PREFIX = "Test"
 REGION = "us-east-1"
 
-# U9 の期待（型固定の GSI 7 つをすべて外した）。
+# Expected state: no type-pinned GSIs remain.
 EXPECTED_GSIS: dict[str, list[str]] = {
     "Personas": ["OwnerIndex"],
     "Discussions": ["OwnerIndex"],
     "UploadedFiles": [],
     "Datasets": [],
     "SurveyTemplates": ["OwnerIndex"],
-    # 待ちと実行中の疎な索引（Step Functions への移行、NFR3.10）
+    # Sparse index for queued and running runs (after the move to Step Functions)
     "Surveys": ["OwnerIndex", "RunQueueIndex"],
     "KnowledgeBases": [],
     "Jobs": [],
 }
 
-# CDK の管理から外した古い紐付けの 2 テーブル（NFR2.28）
+# Two legacy binding tables that are no longer managed by the CDK
 REMOVED_TABLES = ("PersonaDatasetBindings", "PersonaKBBindings")
 
 

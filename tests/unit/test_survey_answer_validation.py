@@ -1,8 +1,9 @@
-"""回答のスキーマと、応答の読み取り・検査のテスト（rules.md BR5.1〜BR5.6）。
+"""Tests for the answer schema and for reading and validating responses.
 
-依頼の構造化出力のスキーマは設問 ID をキーにした必須のオブジェクトで、値は設問の種類で決まる。
-応答が JSON でない・設問が欠ける・値が列挙の外や型違いなら、その人は取れなかった回答になる
-（一部の設問だけを残すことはしない、BR5.5）。
+The structured-output schema of a request is a required object keyed by question ID,
+with values determined by the question type. If the response is not JSON, a question
+is missing, or a value is outside the enum or has the wrong type, that person counts
+as an unfetched answer (a partial set of questions is never kept).
 """
 
 import json
@@ -42,7 +43,7 @@ def _text(**answers: object) -> str:
 
 class TestSchema:
     def test_answers_object_requires_every_question(self):
-        """BR5.1: 設問 ID をキーにしたオブジェクト。全設問を必須にし、余計なキーは許さない。"""
+        """An object keyed by question ID; all questions required, extra keys not allowed."""
         schema = build_answer_schema(QUESTIONS)
 
         assert schema["required"] == ["answers"]
@@ -53,14 +54,14 @@ class TestSchema:
         assert answers["additionalProperties"] is False
 
     def test_single_choice_is_the_option_enum(self):
-        """BR5.2・FR6.1: 選択肢の文字列をそのまま列挙する（記号や改行を含んでも）。"""
+        """Choice strings are enumerated as-is (even with symbols or newlines)."""
         prop = build_answer_schema(QUESTIONS)["properties"]["answers"]["properties"][
             "q1"
         ]
         assert prop == {"type": "string", "enum": ["赤", "青|紺", "改行\nあり"]}
 
     def test_multiple_choice_is_an_array_of_the_enum(self):
-        """BR5.3: 選択肢の列挙を要素にした配列。"""
+        """An array whose items are enums of the choices."""
         prop = build_answer_schema(QUESTIONS)["properties"]["answers"]["properties"][
             "q2"
         ]
@@ -71,9 +72,9 @@ class TestSchema:
         }
 
     def test_multiple_choice_needs_at_least_one_choice(self):
-        """BR5.3: 空の配列は回答として使えない（parse_answers が外す）ので、スキーマでも許さない。
+        """An empty array is unusable as an answer (parse_answers drops it), so the schema forbids it too.
 
-        構造化出力の配列の制約は minItems の 0 と 1 だけが使える。
+        Structured-output arrays may only use a minItems of 0 or 1.
         """
         prop = build_answer_schema(QUESTIONS)["properties"]["answers"]["properties"][
             "q2"
@@ -82,14 +83,14 @@ class TestSchema:
         assert parse_answers(_text(q2=[]), QUESTIONS) is None
 
     def test_scale_is_the_integer_enum(self):
-        """BR5.4: scale_min〜scale_max の整数の列挙。"""
+        """An enum of integers from scale_min to scale_max."""
         prop = build_answer_schema(QUESTIONS)["properties"]["answers"]["properties"][
             "q3"
         ]
         assert prop == {"type": "integer", "enum": [1, 2, 3, 4, 5]}
 
     def test_free_text_is_a_string(self):
-        """BR5.6"""
+        """Answers are read from the response."""
         prop = build_answer_schema(QUESTIONS)["properties"]["answers"]["properties"][
             "q4"
         ]
@@ -110,7 +111,7 @@ class TestParseAnswers:
         assert parse_answers(_text(q1="改行\nあり"), QUESTIONS)["q1"] == "改行\nあり"
 
     def test_duplicates_are_removed_and_the_count_is_cut(self):
-        """BR5.3: 重複を除き、max_selections を超えたら先頭から切る（今の振る舞い）。"""
+        """Duplicates are removed and the list is cut from the front past max_selections (current behavior)."""
         answers = parse_answers(
             _text(q2=["寿司", "寿司", "ラーメン", "カレー"]), QUESTIONS
         )
@@ -133,7 +134,7 @@ class TestParseAnswers:
         ],
     )
     def test_anything_outside_the_schema_is_unusable(self, text):
-        """BR5.5: 一部の設問だけを残さず、その人を取れなかった回答にする。"""
+        """A partial set of questions is not kept; the person counts as an unfetched answer."""
         assert parse_answers(text, QUESTIONS) is None
 
     def test_missing_question_is_unusable(self):
@@ -146,7 +147,7 @@ class TestParseAnswers:
 
 
 class TestPromptWordingIsUnchanged:
-    """NFR2.4: 指示文と並びは今のまま。"""
+    """The instruction text and ordering are unchanged."""
 
     def test_single_choice_wording(self):
         text = format_questions_for_prompt([SINGLE])

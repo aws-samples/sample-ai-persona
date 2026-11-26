@@ -1,6 +1,8 @@
 {% extends "auth/layout.html" %}
-{# 期限切れ（reason=expired、BR1.22）とログアウト済み（reason=signed_out、R-11）の案内。
-   すぐには Cognito へ移さず、ボタンでログインを始める。 #}
+{#
+  Notice for an expired session (reason=expired) and for a completed sign-out (reason=signed_out).
+     The user is not sent to Cognito immediately; a button starts the login.
+#}
 {% block content %}
 <div data-testid="login-notice" role="status">
     {% if reason == "expired" %}

@@ -1,8 +1,8 @@
-"""本体のない発言・レポートと、親のないファイルを見つけるスクリプトの結合テスト（moto）。
+"""Integration tests (moto) for the script that finds utterances and reports without a main record, and files without a parent.
 
-BR1.6、NFR1.58。議論の削除は本体と共有を先に消し、発言・レポート・資料の後始末を
-3 回までやり直す。それでも残ったものをこのスクリプトが見つける。既定は件数を
-出すだけで何も消さない。--apply で消す。
+Deleting a discussion removes the main record and sharing first, then retries the cleanup
+of utterances, reports and documents up to 3 times. This script finds whatever is still
+left. By default it only prints counts and deletes nothing; --apply deletes.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -83,7 +83,7 @@ def _discussion(store: Any, *, body: bool = True, reports: int = 1) -> str:
         if body:
             store.put_report(report, max_reports=3, updated_at=NOW.isoformat())
             continue
-        # 本体が先に消えた議論のレポート（put_report は本体の件数を条件にする）
+        # report of a discussion whose main record was removed first (put_report is conditional on the main record's count)
         store.client.put_item(
             TableName=store.reports_table,
             Item={
@@ -156,7 +156,7 @@ class TestPlan:
         assert plan_cleanup(store, files, now=LATER).is_clean
 
     def test_a_discussion_being_saved_is_left_alone(self, stores):
-        """保存の途中（発言と資料は書いた、本体はまだ）の議論は 1 時間は対象にしない。"""
+        """A discussion mid-save (utterances and documents written, main record not yet) is not a target for one hour."""
         store, files = stores
         saving = _discussion(store, body=False, reports=0)
         _file(files, saving)
@@ -168,7 +168,7 @@ class TestPlan:
         assert plan.is_clean
 
     def test_a_file_attached_just_now_keeps_its_discussion(self, stores):
-        """発言を書く前（資料の紐付けだけ済んだ）: 古いアップロードでも紐付けの時刻で見る。"""
+        """Before utterances are written (only the document link is done): judged by the link time, even for an old upload."""
         store, files = stores
         saving = "d-attach-only"
         file_id = _attach_now(files, saving, SOON)
@@ -177,15 +177,15 @@ class TestPlan:
 
         assert plan.files == [] and plan.recent == [saving]
         assert files.get(file_id) is not None
-        # 1 時間を過ぎても本体がなければ、そのときは対象になる
+        # past one hour with no main record, it becomes a target
         later = plan_cleanup(store, files, now=SOON + 2 * 3600)
         assert [f.id for f in later.files] == [file_id]
 
     def test_old_messages_written_recently_are_left_alone(self, ddb):
-        """インタビューの保存は古い発言を移す。発言の時刻ではなく書いた時刻で見る。"""
+        """Saving an interview moves old utterances: judged by the time written, not the utterance time."""
         store = make_store(ddb, clock=lambda: LATER)
         files = UploadedFileStore(region=REGION, table_name=FILES, client=ddb)
-        saving = _discussion(store, body=False, reports=0)  # created_at は NOW
+        saving = _discussion(store, body=False, reports=0)  # created_at is NOW
 
         plan = plan_cleanup(store, files, now=LATER + 60)
 
@@ -247,7 +247,7 @@ class TestRun:
         assert files.get(orphan.id) is None
 
     def test_a_body_written_after_the_plan_is_kept(self, stores):
-        """消す直前に本体を確かめ直す: 計画のあとで保存が終わった議論は消さない。"""
+        """The main record is checked again just before deleting: a discussion whose save finished after planning is not deleted."""
         store, files = stores
         discussion = Discussion.create_new(
             topic="保存が終わる議論", participants=["p1", "p2"], mode="classic"
@@ -264,7 +264,7 @@ class TestRun:
         plan = plan_cleanup(store, files, now=LATER)
         assert plan.messages == {discussion.id: 1}
 
-        store.put_new(discussion.to_dict())  # 保存が終わった
+        store.put_new(discussion.to_dict())  # the save has finished
         kept = apply_plan(store, files, objects, plan)
 
         assert kept == [discussion.id]

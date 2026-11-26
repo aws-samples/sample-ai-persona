@@ -25,12 +25,13 @@ KB_TYPE_LABELS: Dict[str, str] = {
 
 @dataclass
 class KnowledgeBase:
-    """登録済みBedrock Knowledge Baseの情報
+    """Information about a registered Bedrock Knowledge Base.
 
-    U7: ``shared_group_ids`` は利用範囲（組織資産、BR5.1）。空なら admin だけが使える。
-    書くのは利用範囲の変更だけ（BR1.5）。
-    ``kb_type`` は検索のしかた（Self-managed KB か Managed KB か）。
-    この項目がない古いレコードは、外部の KB を登録したものなので Self-managed KB。
+    ``shared_group_ids`` is the usage scope (organization asset). When empty,
+    only admins can use it. Only a change of the usage scope is written.
+    ``kb_type`` is how it is searched (Self-managed KB or Managed KB).
+    Older records without this field were registered from an external KB, so
+    they are Self-managed KB.
     """
 
     id: str
@@ -105,5 +106,5 @@ def _known_kb_type(value: Any) -> str:
     return value if value in KB_TYPES else KB_TYPE_SELF_MANAGED
 
 
-# ペルソナと KB の紐付け（1 ペルソナに 1 つ）は U5 から src/models/persona_binding.py の
-# PersonaBinding（固定キー KB）が持つ。
+# The persona-to-KB binding (one KB per persona) is held by PersonaBinding
+# (fixed key KB) in src/models/persona_binding.py.

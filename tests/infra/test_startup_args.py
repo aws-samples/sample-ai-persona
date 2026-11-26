@@ -1,9 +1,9 @@
-"""uvicorn の起動の引数（NFR3.3、Infrastructure Design R-02）。
+"""uvicorn startup arguments.
 
-uvicorn の既定のアクセスログは URL のクエリ（/auth/callback?code=...&state=...）を
-そのまま出すため止め、アプリの http.access に置き換える。keep-alive は ALB の
-無操作タイムアウト（300 秒）より長くし、ALB より先にアプリが接続を閉じて 502 に
-なるのを防ぐ。
+uvicorn's default access log prints the URL query (/auth/callback?code=...&state=...)
+as is, so it is turned off and replaced with the app's http.access. Keep-alive is
+longer than the ALB idle timeout (300 s) so the app does not close the connection
+before the ALB and cause a 502.
 """
 
 import ast
@@ -50,8 +50,8 @@ def test_container_keeps_connections_longer_than_the_alb():
 
 
 def test_container_waits_for_a_graceful_shutdown_within_the_ecs_stop_timeout():
-    """NFR4.11・R-08: uvicorn の停止の待ちは 60 秒。進行役の回の待ち（30 秒）を含み、
-    ECS の stopTimeout（120 秒）に収まる。"""
+    """uvicorn's shutdown wait is 60 seconds. It includes the coordinator's round wait
+    (30 s) and fits within the ECS stopTimeout (120 s)."""
     cmd = _dockerfile_cmd()
     assert "--timeout-graceful-shutdown" in cmd
     seconds = int(cmd[cmd.index("--timeout-graceful-shutdown") + 1])
@@ -60,14 +60,14 @@ def test_container_waits_for_a_graceful_shutdown_within_the_ecs_stop_timeout():
 
 
 def test_container_serves_the_app_on_an_unprivileged_port():
-    """非ルートは 1024 未満を bind できないため 8080（CDK の CONTAINER_PORT と揃える）。"""
+    """A non-root user cannot bind below 1024, so 8080 is used (matches CDK's CONTAINER_PORT)."""
     cmd = _dockerfile_cmd()
     assert "web.main:app" in cmd
     assert cmd[cmd.index("--port") + 1] == "8080"
 
 
 def test_container_runs_as_a_non_root_user():
-    """最後の USER が root（UID 0）でない。"""
+    """The last USER is not root (UID 0)."""
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     users = re.findall(r"^USER\s+(\S+)\s*$", text, re.MULTILINE)
     assert users, "Dockerfile に USER がない"
@@ -83,5 +83,5 @@ def test_local_runner_uses_the_same_settings(name, expected):
 
 
 def test_local_runner_listens_on_loopback_only():
-    """手元のログイン（AUTH_MODE=local）は検証がないため、同じネットワークの人から届かせない。"""
+    """Local login (AUTH_MODE=local) does no verification, so it is not reachable from others on the same network."""
     assert _run_htmx_kwargs().get("host") == "127.0.0.1"

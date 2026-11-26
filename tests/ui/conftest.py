@@ -1,4 +1,4 @@
-"""Harness for component behaviour tests (marker ``ui``, U3 WF10).
+"""Harness for component behaviour tests (marker ``ui``).
 
 Pages are loaded from ``http://testserver/__ui__`` in headless Chromium. The app
 is not started: one ``page.route("**/*")`` handler serves everything.
@@ -10,7 +10,7 @@ is not started: one ``page.route("**/*")`` handler serves everything.
 5. anything outside ``testserver`` -> aborted (no CDN, no AWS)
 
 Component pages are Jinja templates under ``tests/ui/pages/`` rendered with the
-app's own Jinja environment. Full screens (``base.html``, the list screens, M11)
+app's own Jinja environment. Full screens (``base.html``, the list screens)
 are fetched through FastAPI's ``TestClient`` under ``AUTH_MODE=local``.
 """
 
@@ -33,7 +33,7 @@ _STATIC_DIR = _THIS_DIR.parent.parent / "web" / "static"
 HOST = "testserver"
 BASE_URL = f"http://{HOST}/__ui__"
 
-#: axe-core rule tags applied to every page (NFR Design "axe-core の検査").
+#: axe-core rule tags applied to every page.
 AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"]
 
 _CHROMIUM_MISSING = (
@@ -91,7 +91,7 @@ class UiHarness:
 
     def __init__(self, page: Any) -> None:
         self.page = page
-        # 部品の画面はローカルで描くため、待ちは短くてよい（失敗を早く返す）
+        # Pages are rendered locally, so short waits are enough (fail fast)
         page.set_default_timeout(5000)
         self.html = "<!DOCTYPE html><title>empty</title>"
         self.replies: dict[str, Reply | HeldReply] = {}
@@ -204,8 +204,8 @@ class UiHarness:
         from axe_playwright_python.sync_playwright import Axe
 
         self.settle()
-        # フェードインの途中（半透明）の文字でコントラストを測らないよう、有限の
-        # アニメーションが終わるのを待つ（回り続けるスピナーは待たない）
+        # Wait for finite animations to finish so contrast is not measured on
+        # half-faded text (endlessly spinning spinners are not waited for)
         self.page.evaluate(
             """() => Promise.all(document.getAnimations()
                 .filter((a) => a.effect && a.effect.getComputedTiming().iterations !== Infinity)

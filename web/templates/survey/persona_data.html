@@ -15,7 +15,7 @@
         </a>
     </div>
 
-    <!-- オープンデータセットのダウンロード -->
+    <!-- Open dataset download -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 class="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
             <svg class="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -36,13 +36,13 @@
     </div>
 
     {%- if not manageable %}
-    {#- member は使えるデータを見るだけ（取り込み・削除・利用範囲は admin、BR4.1） #}
+    {#- Members only view the data they can use (import, delete, and usage scope are admin-only). #}
     <p class="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6" data-testid="persona-data-member-note">
         ペルソナデータの追加・削除・利用範囲の変更は、管理者に依頼してください。ここには、あなたの所属グループで使えるデータだけが表示されます。
     </p>
     {%- endif %}
 
-    <!-- 使えるカスタムペルソナデータ -->
+    <!-- Usable custom persona data -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 class="text-lg font-semibold text-gray-900 mb-3">カスタムペルソナデータ</h2>
         <div id="custom-dataset-list" data-reload-url="/survey/persona-data/custom">
@@ -51,7 +51,7 @@
     </div>
 
     {%- if manageable %}
-    <!-- カスタムペルソナデータの追加（admin だけ） -->
+    <!-- Add custom persona data (admin only) -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6" x-data="{ source: 'csv' }" data-testid="custom-data-upload">
         <h2 class="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
             <svg class="w-5 h-5 text-teal-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -63,7 +63,7 @@
             {% if data_agent_allowed %}CSVファイルのアップロード、またはデータ分析エージェント連携でDWHから顧客セグメントを抽出して追加します。{% else %}CSVファイルをアップロードして追加します。{% endif %}
         </p>
 
-        <!-- ソース選択タブ -->
+        <!-- Source selection tabs -->
         <div class="flex border-b border-gray-200 mb-5">
             <button type="button"
                     @click="source = 'csv'"
@@ -72,7 +72,7 @@
                 {{ icon_upload("w-4 h-4") }}
                 CSVアップロード
             </button>
-            {#- DWH からの抽出は、この環境で Data Agent を使ってよいときだけ（U3 BR3.5） #}
+            {#- Extraction from DWH is offered only when Data Agent may be used in this environment. #}
             {% if data_agent_allowed %}
             <button type="button"
                     data-testid="persona-data-dwh-tab"
@@ -87,7 +87,7 @@
             {% endif %}
         </div>
 
-        <!-- CSVアップロード -->
+        <!-- CSV upload -->
         <div x-show="source === 'csv'" x-transition>
             <div class="mb-4 p-4 bg-gray-50 rounded-md">
                 <p class="text-sm text-gray-600">
@@ -143,7 +143,7 @@
             <div id="custom-upload-result" class="mt-4"></div>
         </div>
 
-        <!-- データ分析エージェント連携 -->
+        <!-- Data analysis agent integration -->
         {% if data_agent_allowed %}
         <div x-show="source === 'dwh'" x-cloak x-transition>
             <p class="text-xs text-purple-600 bg-purple-50 rounded-md p-3 mb-4">
@@ -175,7 +175,7 @@
                 </div>
             </div>
 
-            <!-- 抽出進捗表示 -->
+            <!-- Extraction progress display -->
             <div id="dwh-progress" class="mt-4 hidden">
                 <div class="bg-white rounded-lg shadow-sm border p-4">
                     <div class="flex items-center gap-3 mb-3">
@@ -186,7 +186,7 @@
                 </div>
             </div>
 
-            <!-- 抽出結果 / マッピングUI -->
+            <!-- Extraction result / mapping UI -->
             <div id="dwh-result" class="mt-4"></div>
         </div>
         {% endif %}

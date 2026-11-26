@@ -2,126 +2,124 @@ import { IConstruct } from 'constructs';
 import { CfnResource, Stack, Validations } from 'aws-cdk-lib';
 
 /**
- * cdk-nag（AwsSolutions）の抑止の理由（U9、NFR7.15、Infrastructure Design Q1〜Q4）。
+ * Reasons for the cdk-nag (AwsSolutions) suppressions.
  *
- * 同じ理由を何か所にも書かないよう、理由の文はここにだけ置く。抑止はリソース単位で、
- * 指摘の出る construct のそばで acknowledgeAll() を呼ぶ。スタックやアプリには付けない。
- * 抑止を足す・消す変更は、同じ変更で test/cdk-nag.test.ts の期待の一覧を直す。
+ * Each reason text lives only here so it is not repeated. Suppressions are per resource:
+ * call acknowledgeAll() next to the construct that raises the finding, never on a stack or the
+ * app. Any change that adds or removes a suppression must also update the expected list in
+ * test/cdk-nag.test.ts.
  */
 export const NAG_REASONS = {
-  /** ELB2・CFR3・VPC7・S1（NFR Design Q1 C）。 */
+  /** ELB2, CFR3, VPC7, S1. */
   accessLogs:
     'アクセスログ・フローログは作らない: dev で利用者が数人、保管の費用と管理の対象が増え、' +
     'v1.0.0 の要件にない。本番の Stage を足すときに見直す',
-  /** COG2（NFR Design Q2 A）。 */
+  /** COG2. */
   cognitoMfa:
     'MFA は v1.0.0 の要件にない。外部 IdP を使う構成では IdP の側で MFA をかける',
-  /** COG8（cdk-nag 2 の COG3 にあたる。NFR Design Q2 A）。 */
+  /** COG8 (COG3 in cdk-nag 2). */
   cognitoPlusPlan:
     'Cognito の Plus プラン（高度なセキュリティ）は使わないと決めた（U8 NFR Requirements Q1 A、費用）',
-  /** SMG4: Data スタックの 2 つの鍵（NFR3.14）。 */
+  /** SMG4: the two keys in the Data stack. */
   manualKeyRotation:
     '自動ローテーションはしない: 鍵は手で新しい版を足してから切り替える設計で、' +
     '古い版で暗号化・署名した値を読み続けるため（security-design.md「暗号化と鍵」）',
-  /** SMG4: App スタックの CognitoClientSecret（NFR3.14）。 */
+  /** SMG4: CognitoClientSecret in the App stack. */
   cognitoClientSecret:
     '値は Cognito のアプリクライアントが決め、Secrets Manager の側で回せない。' +
     '回すときはアプリクライアントを作り直す',
-  /** CFR1（warning、Infrastructure Design Q4 A）。 */
+  /** CFR1 (warning). */
   geoRestriction:
     '国で絞る要件がない。入口はアプリのログイン（Cognito）と WAF で守る',
-  /** CFR2（warning）: enableWaf を false にした構成だけで出る（既定は有効、2026-11-02）。 */
+  /** CFR2 (warning): raised only when enableWaf is false (enabled by default). */
   wafOptional:
     'WAF は parameters.ts の enableWaf で利用者が選ぶ（費用）。既定は有効で、無効にした構成では' +
     'ログイン系の総当たりは Cognito の試行回数の上限とアプリの回路遮断で守る',
-  /** CFR4。 */
+  /** CFR4. */
   cloudFrontDefaultCertificate:
     '既定の *.cloudfront.net の証明書では最小の TLS を選べない。独自ドメインは v1.0.0 の' +
     '対象外。minimumProtocolVersion は TLS 1.2（TLS_V1_2_2021）にしてある',
-  /** ECS2。 */
+  /** ECS2. */
   ecsEnvironment:
     'コンテナの環境変数は秘密でない設定（テーブル名・リージョン・モデル ID など）だけで、' +
     '秘密は Secrets Manager から ECS のシークレットとして渡す',
-  /** ECS4（Infrastructure Design Q3 B）。 */
+  /** ECS4. */
   containerInsights:
     'Container Insights は有効にしない: dev で費用が増え、ECS の既定のメトリクスで足りる。' +
     '本番の Stage を足すときに見直す',
-  /** IAM4: CDK の内部の作るカスタムリソースの Lambda。 */
+  /** IAM4: Lambda of the custom resources CDK creates internally. */
   cdkCustomResourceManagedPolicy:
     'CDK の AwsCustomResource（アプリクライアントの秘密の取得）の Lambda に CDK が付ける ' +
     'AWSLambdaBasicExecutionRole。アプリのロールには AWS 管理ポリシーを付けない',
-  /** IAM5: Resource::* の例外（test/iam-wildcards.test.ts の一覧）。 */
+  /** IAM5: Resource::* exceptions (listed in test/iam-wildcards.test.ts). */
   wildcardListApis:
     'リソースを指定できない API だけを * にしている（一覧の API、ECR の認可トークン、' +
     'Mantle の CallWithBearerToken）。一覧は test/iam-wildcards.test.ts で固定する',
-  /** IAM5: アップロード用バケットのオブジェクト。 */
+  /** IAM5: objects in the upload bucket. */
   bucketObjects:
     'Data スタックのアップロード用バケットの中のオブジェクト（全体か、用途ごとの接頭辞）だけを許す。' +
     '版の削除（s3:DeleteObjectVersion）は高度な生成の上げたファイルの sources/* だけ（利用者の削除で全版を消す）',
-  /** IAM5: Bedrock の推論の ARN。 */
+  /** IAM5: Bedrock inference ARNs. */
   bedrockInference:
     '推論で呼ぶモデルはパラメータで変わるため、基盤モデル・このアカウントの推論プロファイルの ' +
     'ARN の種類までに絞る（リージョンはグローバルな推論のため *）',
-  /** IAM5: Bedrock の KB。 */
+  /** IAM5: Bedrock knowledge bases. */
   bedrockAccountResources:
     'ナレッジベースの ID は利用者が実行時に選ぶため、このアカウント・リージョンの ' +
     'knowledge-base/* に絞る',
-  /** IAM5: タスクロールのアンケートの実行（基盤設計 3.2）。 */
+  /** IAM5: survey executions for the task role. */
   surveyExecutions:
     '実行の名前はアンケートごとに実行時に決まるため、このステートマシンの実行' +
     '（execution:<名前>:*）だけに絞る。開始はステートマシンの ARN だけ',
-  /** IAM5: アンケートのステートマシンの子の実行（Distributed Map、基盤設計 3.1）。 */
+  /** IAM5: child executions of the survey state machine (Distributed Map). */
   surveyMapRuns:
     'Distributed Map の子の実行の名前は Step Functions が決めるため、このステートマシンの子の実行' +
     '（execution:<名前>/*）の DescribeExecution だけを許す（Step Functions 開発者ガイドの最小の例）',
-  /** IAM5: アンケートのステートマシンのロールの survey-runs/ の読み書き。 */
+  /** IAM5: read/write on survey-runs/ for the survey state machine role. */
   surveyRunObjects:
     'アンケートごとの入力と結果の場所は実行時に決まるため、アップロード用バケットの survey-runs/* の' +
     '読み取りと survey-runs/*/results/* の書き込みだけを許す',
-  /** IAM5: アンケートのモデル（グローバルな推論のためリージョンが *）。 */
+  /** IAM5: survey model (region is * because of global inference). */
   surveyModel:
     'アンケートのモデルだけを許す。グローバルな推論プロファイルは呼び先のリージョンを AWS が選ぶため、' +
     '推論プロファイルと基盤モデルの ARN のリージョンを * にする',
-  /** IAM5: Step Functions のログの配信（CDK が付ける、リソースを指定できない API）。 */
+  /** IAM5: Step Functions log delivery (added by CDK; APIs that cannot take a resource). */
   logDeliveryApis:
     'Step Functions のログの出力に要る logs の配信の API（CreateLogDelivery など）はリソースを指定できない。' +
     'CDK の StateMachine がログの設定から付ける文で、ほかの * の操作は足さない',
-  /** SF1: アンケートのステートマシンのログ（NFR2.3、NFR5.11）。 */
+  /** SF1: survey state machine logs. */
   surveyStateMachineLogs:
     'ログは ERROR だけを入出力なしで出す。ペルソナの属性や回答をログに残さないため、' +
     'ALL にはしない（基盤設計 2.2）',
-  /** SF2: アンケートのステートマシンの X-Ray（基盤設計 2.2）。 */
+  /** SF2: survey state machine X-Ray. */
   surveyStateMachineTracing:
     'X-Ray は使わない: 1 件の推論の流れは子の実行の状態と ResultWriter の結果で追え、' +
     'dev で費用と管理の対象を増やさない',
-  /** IAM5: AgentCore Memory の子のリソース。 */
+  /** IAM5: child resources of AgentCore Memory. */
   memoryChildren:
     'この Stage の AgentCore Memory の子（イベント・記憶のレコード）を操作するため <Memory の ARN>/* を許す',
-  /** IAM5: Bedrock Mantle の project。 */
+  /** IAM5: Bedrock Mantle project. */
   mantleProject:
     'Mantle の project はこのアカウントのものに絞る。リージョンはアプリが非対応のリージョンから ' +
     'us-east-1 へ送るため *',
-  /** IAM5: grantReadWriteData の KMS の操作。 */
+  /** IAM5: KMS actions from grantReadWriteData. */
   kmsDataKeyActions:
     'Sessions テーブルのカスタマー管理キーへの grantReadWriteData が付ける kms:GenerateDataKey*・' +
     'kms:ReEncrypt*。対象はそのキーの ARN だけ',
-  /** VPC7: 閉域の VPC（閉域対応 U2 BR4.1、functional-design-questions.md Q5-1 A）。 */
+  /** VPC7: closed-network VPC. */
   closedFlowLogsNotCreated:
     '閉域の VPC の Flow Logs は作らないと利用者が決めた（費用と管理の対象を増やさない）。外へ出る経路が' +
     'ないことは、テンプレートの検査（NAT・IGW・パブリック IP がない、NFR3）と、タスクの SG の外向きを' +
     'エンドポイントとゲートウェイ型の 443 だけに固定するテストで保証する',
-  /**
-   * W3010（aws-cdk-lib の CloudFormation Validate の warning）: 閉域の VPC のサブネットと検証用 EC2
-   * （U1 閉域、Infrastructure Design レビュー R-05）。
-   */
+  /** W3010 (CloudFormation Validate warning from aws-cdk-lib): subnets and validation EC2 in the closed-network VPC. */
   pinnedAvailabilityZones:
     '置く AZ を合成のたびに変えないよう、閉域の VPC の AZ を固定している' +
     '（closed-network.ts の CLOSED_AVAILABILITY_ZONES）',
-  /** EC28・EC29: 検証用 EC2（U1 閉域）。 */
+  /** EC28, EC29: validation EC2. */
   validationInstance:
     '検証用で既定は作らない（closedCreateTestEnvironment=true のときだけ）。データを持たず、' +
     '使い終えたら止めるか消す。詳細監視と終了保護は付けない',
-  /** IAM4: 検証用 EC2 のロール（U1 閉域、NFR1.4）。 */
+  /** IAM4: role of the validation EC2. */
   ssmManagedInstance:
     'Fleet Manager（SSM）の接続に AWS が用意する最小のポリシー AmazonSSMManagedInstanceCore だけを付け、' +
     'インラインの権限は足さない',

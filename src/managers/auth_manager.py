@@ -1,17 +1,17 @@
 """
-Login decisions (v1.0.0 U1): login, per-request session check, token refresh,
+Login decisions: login, per-request session check, token refresh,
 logout and the startup check.
 
-Business rules implemented here (``functional-design/rules.md``):
+Business rules implemented here:
 
-- BR1.3 return path validation, BR1.4 callback verification, BR1.5 new
-  session id stored as a hash only, BR1.6 roles / departments from groups;
-- BR1.7 8-hour idle and BR1.8 7-day absolute expiry, BR1.10 activity write at
-  most every 5 minutes, BR1.21 auth method must match the running AUTH_MODE;
-- BR1.11 refresh 60 seconds before expiry with permanent / transient handling
-  and a 15-minute grace, BR1.12 conditional writes where the first writer wins;
-- BR1.13 logout, BR1.14 encrypted tokens, BR1.15 local-only login and the
-  startup check, BR1.18 fail closed (503) when the Sessions table is down.
+- Return path validation, callback verification, new
+  session id stored as a hash only, roles / departments from groups;
+- 8-hour idle and 7-day absolute expiry, activity write at
+  most every 5 minutes, auth method must match the running AUTH_MODE;
+- Refresh 60 seconds before expiry with permanent / transient handling
+  and a 15-minute grace, conditional writes where the first writer wins;
+- Logout, encrypted tokens, local-only login and the
+  startup check, fail closed (503) when the Sessions table is down.
 
 Every method is synchronous because it talks to DynamoDB / Cognito; the
 middleware and routers run them in a worker thread. Service exceptions are
@@ -73,16 +73,16 @@ REFRESH_LEEWAY = timedelta(seconds=60)
 REFRESH_FAILURE_GRACE = timedelta(minutes=15)
 LOGIN_TRANSACTION_TTL = timedelta(minutes=10)
 
-#: Login methods: ``oidc`` and ``local`` (U1), ``admin_api`` (U8, closed network).
+#: Login methods: ``oidc``, ``local`` and ``admin_api`` (closed network).
 SUPPORTED_MODES = frozenset(
     {AuthMethod.OIDC.value, AuthMethod.ADMIN_API.value, AuthMethod.LOCAL.value}
 )
 SIGNED_OUT_PATH = "/login?reason=signed_out"
-#: Where an ``admin_api`` login goes when Cognito asks for a new password (BR2.1).
+#: Where an ``admin_api`` login goes when Cognito asks for a new password.
 NEW_PASSWORD_PATH = "/auth/new-password"
-#: Longest sign-in e-mail address accepted before calling Cognito (BR1.2).
+#: Longest sign-in e-mail address accepted before calling Cognito.
 MAX_EMAIL_LENGTH = 254
-#: The ``reason`` values of ``auth.login_failed`` under ``admin_api`` (NFR8.28).
+#: The ``reason`` values of ``auth.login_failed`` under ``admin_api``.
 LOGIN_FAILURE_REASONS = frozenset(
     {
         "bad_credentials",
@@ -107,7 +107,7 @@ _OIDC_REQUIRED_SETTINGS = (
     "LOGIN_COOKIE_SIGNING_KEY",
     "SESSIONS_TABLE_NAME",
 )
-#: BR4.1: like ``oidc`` but without the Managed Login domain (plus the policy).
+#: Like ``oidc`` but without the Managed Login domain (plus the policy).
 _ADMIN_API_REQUIRED_SETTINGS = tuple(
     name for name in _OIDC_REQUIRED_SETTINGS if name != "COGNITO_DOMAIN"
 )
@@ -120,9 +120,9 @@ class AuthConfigError(CodedError):
 
 
 class LoginFailedError(CodedError):
-    """The Cognito callback could not be accepted (BR1.4).
+    """The Cognito callback could not be accepted.
 
-    The Router shows the login-failed page (M5); the reason is only logged.
+    The Router shows the login-failed page; the reason is only logged.
     """
 
     code = ErrorCode.AUTH_REQUIRED
@@ -157,8 +157,8 @@ class AuthSettings:
     mode: str
     app_base_url: str
     local_user: LocalUser
-    #: ``admin_api`` only: the User Pool and app client the ID token must name
-    #: (BR3.1), and the password rules of the pool (BR4.3).
+    #: ``admin_api`` only: the User Pool and app client the ID token must name,
+    #: and the password rules of the pool.
     user_pool_id: str = ""
     client_id: str = ""
     password_policy: PasswordPolicy | None = None
@@ -227,10 +227,10 @@ class LoginResult:
 
 @dataclass(frozen=True)
 class NewPasswordStart:
-    """Cognito asked for a first password change (``admin_api``, BR2.1).
+    """Cognito asked for a first password change (``admin_api``).
 
     ``challenge_id`` is the raw random id for the signed ``login_tx`` cookie;
-    only its hash is stored. ``location`` is the M3 URL.
+    only its hash is stored. ``location`` is the password-change page URL.
     """
 
     challenge_id: str
@@ -275,7 +275,7 @@ def _challenge_expired(message: str) -> AdminLoginError:
 
 
 def _no_required_attributes(parameters: Mapping[str, str]) -> bool:
-    """Whether ``requiredAttributes`` is an empty JSON array (BR2.1)."""
+    """Whether ``requiredAttributes`` is an empty JSON array."""
     try:
         required = json.loads(parameters.get("requiredAttributes", "[]"))
     except ValueError:
@@ -284,7 +284,7 @@ def _no_required_attributes(parameters: Mapping[str, str]) -> bool:
 
 
 class _RefreshFailed(Exception):
-    """A token refresh failed; ``transient`` selects the U1 handling (BR1.11)."""
+    """A token refresh failed; ``transient`` selects the handling."""
 
     def __init__(self, transient: bool) -> None:
         super().__init__("token refresh failed")
@@ -302,7 +302,7 @@ def _token_set(tokens: CognitoTokens, claims: dict[str, Any]) -> TokenSet:
 
 
 def _jwt_payload(token: str) -> dict[str, Any] | None:
-    """The JSON payload of a JWT without checking its signature (BR3.1, Q2 A)."""
+    """The JSON payload of a JWT without checking its signature."""
     parts = token.split(".")
     if len(parts) != 3 or not parts[1]:
         return None
@@ -361,20 +361,19 @@ class AuthManager:
 
     @property
     def secure_cookies(self) -> bool:
-        """Whether cookies get ``Secure`` (always outside ``local``; Q1)."""
+        """Whether cookies get ``Secure`` (always outside ``local``)."""
         return self._settings.mode != AuthMethod.LOCAL.value
 
     # --- startup ---------------------------------------------------------------
 
     @staticmethod
     def check_startup(cfg: Config) -> None:
-        """Refuse to start with an unusable login configuration (BR1.15, NFR4.7).
+        """Refuse to start with an unusable login configuration.
 
         Raises:
             AuthConfigError: AUTH_MODE unset / unknown, ``local`` inside ECS,
                 or a missing / malformed ``oidc`` / ``admin_api`` setting
-                (``admin_api`` also needs the five password policy settings,
-                BR4.1).
+                (``admin_api`` also needs the five password policy settings).
         """
         mode = cfg.AUTH_MODE
         if mode not in SUPPORTED_MODES:
@@ -410,7 +409,7 @@ class AuthManager:
 
     @staticmethod
     def sanitize_next(value: str | None) -> str:
-        """Accept only an in-app relative path as the return target (BR1.3)."""
+        """Accept only an in-app relative path as the return target."""
         if not value or not value.startswith("/") or value.startswith("//"):
             return "/"
         if "\\" in value or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
@@ -446,7 +445,7 @@ class AuthManager:
         error: str | None,
         previous_session_id: str | None,
     ) -> LoginResult:
-        """Verify the Cognito callback and create a new session (BR1.4〜BR1.6).
+        """Verify the Cognito callback and create a new session.
 
         Raises:
             LoginFailedError: The callback cannot be accepted (nothing is stored).
@@ -524,11 +523,11 @@ class AuthManager:
         log_event("auth.login_succeeded", sub=session.user_sub, auth_method=self.mode)
         return session_id
 
-    # --- admin_api login (U8, closed network) -------------------------------------
+    # --- admin_api login (closed network) -------------------------------------
 
     @property
     def password_policy(self) -> PasswordPolicy:
-        """The password rules of the pool (``admin_api`` only, BR4.3).
+        """The password rules of the pool (``admin_api`` only).
 
         Raises:
             AuthConfigError: Not running under ``admin_api`` or no policy.
@@ -551,14 +550,14 @@ class AuthManager:
         next_url: str | None,
         previous_session_id: str | None,
     ) -> LoginResult | NewPasswordStart:
-        """Sign in with e-mail and password through Cognito (WF1, BR1.2〜BR1.6).
+        """Sign in with e-mail and password through Cognito.
 
         The password is only passed on to Cognito; it is never stored, logged
-        or put into an exception (BR4.5).
+        or put into an exception.
 
         Returns:
             :class:`LoginResult` with a new session, or :class:`NewPasswordStart`
-            when Cognito asks for a first password change (BR2.1).
+            when Cognito asks for a first password change.
 
         Raises:
             AdminLoginError: ``LOGIN_FAILED`` / ``LOGIN_RATE_LIMITED`` /
@@ -581,7 +580,7 @@ class AuthManager:
         return self._finish_login(answer, target, previous_session_id)
 
     def check_challenge(self, challenge_id: str | None) -> PasswordPolicy:
-        """Confirm that M3 may be shown for this challenge (WF2 1, BR2.4).
+        """Confirm that the password-change page may be shown for this challenge.
 
         Returns:
             The password policy for the rule list.
@@ -602,7 +601,7 @@ class AuthManager:
         confirmation: str,
         previous_session_id: str | None,
     ) -> LoginResult:
-        """Set the first password and sign in (WF2, BR2.4〜BR2.7).
+        """Set the first password and sign in.
 
         Order: read the challenge, check the rules and the confirmation
         (without touching the challenge), take the challenge out exactly once,
@@ -633,13 +632,13 @@ class AuthManager:
                 answer, claimed.next, previous_session_id, first_login=True
             )
         except AdminLoginError:
-            # The password was changed; the user signs in again from M2.
+            # The password was changed; the user signs in again from the login page.
             raise _challenge_expired("ID token refused after the new password")
 
     def _start_new_password(
         self, challenge: CognitoChallenge, target: str
     ) -> NewPasswordStart:
-        """Keep the Cognito session for M3 (BR2.1〜BR2.3) or refuse it (BR1.6)."""
+        """Keep the Cognito session for the password-change page or refuse it."""
         username = challenge.parameters.get("USER_ID_FOR_SRP", "")
         if (
             challenge.name != _NEW_PASSWORD_REQUIRED
@@ -671,7 +670,7 @@ class AuthManager:
         *,
         first_login: bool = False,
     ) -> LoginResult:
-        """Check the ID token and create the session (BR1.3, BR3.1)."""
+        """Check the ID token and create the session."""
         claims = self._verified_claims(tokens.id_token)
         if claims is None:
             raise self._login_refused("token_invalid")
@@ -690,10 +689,10 @@ class AuthManager:
         )
 
     def _verified_claims(self, id_token: str) -> dict[str, Any] | None:
-        """The ID token claims when iss / aud / exp / token_use / sub match (BR3.1).
+        """The ID token claims when iss / aud / exp / token_use / sub match.
 
         The signature is not checked: the token comes from an AWS API call over
-        TLS signed with IAM, not through the browser (Q2 A).
+        TLS signed with IAM, not through the browser.
         """
         claims = _jwt_payload(id_token)
         if claims is None:
@@ -715,7 +714,7 @@ class AuthManager:
         return claims
 
     def _load_challenge(self, challenge_id: str | None) -> tuple[LoginChallenge, str]:
-        """The valid challenge and its decrypted Cognito session (BR2.4)."""
+        """The valid challenge and its decrypted Cognito session."""
         if not challenge_id:
             raise _challenge_expired("no challenge id")
         key = challenge_key(challenge_id)
@@ -736,7 +735,7 @@ class AuthManager:
             raise _challenge_expired("challenge could not be decrypted") from None
 
     def _check_new_password(self, new_password: str, confirmation: str) -> None:
-        """BR2.5: the rules first, then the confirmation; Cognito is not called."""
+        """The rules first, then the confirmation; Cognito is not called."""
         missed = self.password_policy.violations(new_password)
         if missed:
             raise AdminLoginError(
@@ -754,7 +753,7 @@ class AuthManager:
             )
 
     def _claim(self, key: str) -> LoginChallenge:
-        """Take the challenge out once (BR2.7); losing the race is expiry."""
+        """Take the challenge out once; losing the race is expiry."""
         try:
             claimed = self._store.claim_challenge(key)
         except SessionStoreError as e:
@@ -766,7 +765,7 @@ class AuthManager:
     def _new_password_refused(
         self, error: CognitoAuthError, claimed: LoginChallenge
     ) -> AdminLoginError:
-        """Map Cognito's answer to M3 (BR2.6); retryable answers restore it."""
+        """Map Cognito's answer to the password-change page; retryable answers restore it."""
         code = error.code
         if code in (ErrorCode.LOGIN_CHALLENGE_EXPIRED, ErrorCode.LOGIN_FAILED):
             return _challenge_expired("Cognito refused the challenge session")
@@ -781,11 +780,11 @@ class AuthManager:
         return AdminLoginError("new password not set", code=code)
 
     def _restore(self, claimed: LoginChallenge) -> None:
-        """Write the claimed challenge back unchanged (BR2.7, NFR9.45)."""
+        """Write the claimed challenge back unchanged."""
         try:
             self._store.restore_challenge(claimed)
         except SessionStoreError:
-            # The user starts again from M2; the password was not changed.
+            # The user starts again from the login page; the password was not changed.
             logger.warning("could not write the challenge back", exc_info=True)
 
     def _drop_challenge(self, key: str) -> None:
@@ -816,11 +815,11 @@ class AuthManager:
     # --- per-request check -------------------------------------------------------
 
     def check_request(self, session_id: str | None, *, passive: bool) -> Principal:
-        """Resolve the Principal for one request (WF2).
+        """Resolve the Principal for one request.
 
         Args:
             session_id: The raw ``session_id`` cookie value, if any.
-            passive: SSE streams and polling do not count as activity (BR1.9).
+            passive: SSE streams and polling do not count as activity.
 
         Raises:
             AuthRequiredError: Not signed in (``AUTH_REQUIRED``) or expired
@@ -859,7 +858,7 @@ class AuthManager:
     # --- logout ------------------------------------------------------------------
 
     def logout(self, session_id: str | None) -> str:
-        """End the session here and at Cognito; return where to redirect (BR1.13).
+        """End the session here and at Cognito; return where to redirect.
 
         Raises:
             LookupUnavailableError: The session row could not be deleted, so the
@@ -868,7 +867,7 @@ class AuthManager:
         if session_id:
             self._end_session(_hash_session_id(session_id))
         if self._oidc is None:
-            # local and admin_api go to the app's own login page (BR3.3).
+            # local and admin_api go to the app's own login page.
             return SIGNED_OUT_PATH
         return self._oidc.logout_url(f"{self._settings.app_base_url}/login")
 
@@ -1082,7 +1081,7 @@ class AuthManager:
     def _roles_and_groups(
         self, claims: Mapping[str, Any]
     ) -> tuple[frozenset[Role], frozenset[str]]:
-        """Split Cognito groups into roles and departments (BR1.6)."""
+        """Split Cognito groups into roles and departments."""
         groups = claims.get("cognito:groups")
         roles: set[Role] = set()
         departments: set[str] = set()
@@ -1104,7 +1103,7 @@ class AuthManager:
     ) -> "_NewSession":
         """New session from verified tokens; the browser's old one is dropped.
 
-        Shared by ``oidc`` and ``admin_api`` (BR1.3, U1 BR1.5 / BR1.6 / BR1.14).
+        Shared by ``oidc`` and ``admin_api``.
         """
         session_id = secrets.token_urlsafe(32)
         session = self._session_from_tokens(
@@ -1147,7 +1146,7 @@ class AuthManager:
         return None
 
     def _remove_previous(self, previous_session_id: str | None) -> None:
-        """Drop the session the browser had before this login (R-08 (4))."""
+        """Drop the session the browser had before this login."""
         if previous_session_id:
             self._delete_quietly(_hash_session_id(previous_session_id))
 

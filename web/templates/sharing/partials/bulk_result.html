@@ -1,10 +1,9 @@
 {#
-  一括の保存で一部が失敗したときの結果（M7、BR2.4、BR7.3）。共有ダイアログの
-  .share-dialog-message に入る。読めない対象は名前を出さず件数だけ出す。
-  閉じると app.js の ShareDialog が一覧を読み直し、data-failed-ids の行だけを選び直す。
+  Result when part of a bulk save failed. Goes into .share-dialog-message of the share dialog. Unreadable targets are not named; only their count is shown.
+  On close, ShareDialog in app.js reloads the list and re-selects only the rows in data-failed-ids.
 
-  引数:
-    result ... src/managers/sharing_manager.py の ShareSaveResult
+  Arguments:
+    result ... ShareSaveResult from src/managers/sharing_manager.py
 #}
 <div data-share-result data-failed-ids="{{ result.failed_ids | join(',') }}" role="status"
      data-testid="share-bulk-result" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-900">

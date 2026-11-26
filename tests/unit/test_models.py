@@ -63,7 +63,7 @@ class TestPersona:
         assert restored_persona.created_at == persona.created_at
 
     def test_create_new_with_demographics(self):
-        """gender/country/city/tags を指定して生成できる"""
+        """Can be created with gender/country/city/tags."""
         persona = Persona.create_new(
             **self.sample_persona_data,
             gender="male",
@@ -77,7 +77,7 @@ class TestPersona:
         assert persona.tags == ["VIP", "リピーター"]
 
     def test_create_new_demographics_defaults(self):
-        """新フィールド未指定時はNone/空リストになる"""
+        """New fields default to None / empty list when omitted."""
         persona = Persona.create_new(**self.sample_persona_data)
         assert persona.gender is None
         assert persona.country is None
@@ -85,17 +85,17 @@ class TestPersona:
         assert persona.tags == []
 
     def test_update_demographics(self):
-        """update で新フィールドを更新でき、未指定フィールドは保持される"""
+        """update can change the new fields and keeps those not given."""
         persona = Persona.create_new(
             **self.sample_persona_data, gender="female", country="US"
         )
         updated = persona.update(country="JP", tags=["新規"])
-        assert updated.gender == "female"  # 保持
-        assert updated.country == "JP"  # 更新
+        assert updated.gender == "female"  # kept
+        assert updated.country == "JP"  # updated
         assert updated.tags == ["新規"]
 
     def test_update_none_keeps_demographics(self):
-        """update に None を渡すと既存のdemographic値を保持する"""
+        """Passing None to update keeps the existing demographic values."""
         persona = Persona.create_new(
             **self.sample_persona_data, gender="male", country="JP", city="東京都"
         )
@@ -105,7 +105,7 @@ class TestPersona:
         assert updated.city == "東京都"
 
     def test_update_empty_string_clears_demographics(self):
-        """update に空文字を渡すと gender/country/city をクリアできる"""
+        """Passing an empty string to update clears gender/country/city."""
         persona = Persona.create_new(
             **self.sample_persona_data, gender="male", country="JP", city="東京都"
         )
@@ -115,13 +115,13 @@ class TestPersona:
         assert updated.city is None
 
     def test_update_clears_tags_with_empty_list(self):
-        """update に空リストを渡すと tags をクリアできる"""
+        """Passing an empty list to update clears tags."""
         persona = Persona.create_new(**self.sample_persona_data, tags=["旧タグ"])
         updated = persona.update(tags=[])
         assert updated.tags == []
 
     def test_to_dict_omits_empty_demographics(self):
-        """None/空のデモグラフィックフィールドはto_dictで省略される"""
+        """None/empty demographic fields are omitted from to_dict."""
         persona = Persona.create_new(**self.sample_persona_data)
         data = persona.to_dict()
         assert "gender" not in data
@@ -130,7 +130,7 @@ class TestPersona:
         assert "tags" not in data
 
     def test_to_dict_includes_set_demographics(self):
-        """値を持つデモグラフィックフィールドはto_dictに含まれる"""
+        """Demographic fields with values are included in to_dict."""
         persona = Persona.create_new(
             **self.sample_persona_data,
             gender="other",
@@ -145,7 +145,7 @@ class TestPersona:
         assert data["tags"] == ["t1"]
 
     def test_from_dict_backward_compatibility(self):
-        """新フィールドを持たない既存データから復元できる（後方互換）"""
+        """Can be restored from existing data without the new fields (backward compatible)."""
         legacy = {
             "id": "legacy-id",
             "name": "旧ペルソナ",
@@ -165,7 +165,7 @@ class TestPersona:
         assert persona.tags == []
 
     def test_demographics_roundtrip(self):
-        """デモグラフィックフィールドの to_dict→from_dict 往復"""
+        """Demographic fields round-trip through to_dict and from_dict."""
         persona = Persona.create_new(
             **self.sample_persona_data,
             gender="male",
@@ -181,10 +181,10 @@ class TestPersona:
 
 
 class TestDemographicsSanitize:
-    """gender のサニタイズ関数のテスト（AI生成値の正規化）。
+    """Tests for the gender sanitize function (normalizing AI-generated values).
 
-    country のサニタイズ・検証は pycountry ベースの country_service に移管したため
-    tests/integration/test_country_service.py を参照。
+    Country sanitizing and validation moved to the pycountry-based country_service;
+    see tests/integration/test_country_service.py.
     """
 
     def test_sanitize_gender_valid(self):
@@ -195,7 +195,7 @@ class TestDemographicsSanitize:
         assert sanitize_gender("other") == "other"
 
     def test_sanitize_gender_invalid_returns_none(self):
-        """規格外の性別値は None に正規化される（例外を投げない）"""
+        """An out-of-range gender value is normalized to None (no exception)."""
         from src.models.demographics import sanitize_gender
 
         assert sanitize_gender("M") is None
@@ -479,7 +479,7 @@ class TestMessageInterviewExtensions:
         assert discussion.documents is None
 
     def test_discussion_keeps_only_the_report_count(self):
-        """U6: レポートは DiscussionReports に置き、本体は件数だけを持つ（ADR-002）。"""
+        """The report lives in DiscussionReports and the body keeps only the count."""
         discussion = Discussion.create_new(
             topic="レポートテスト", participants=["persona1"]
         )
@@ -509,7 +509,7 @@ class TestMessageInterviewExtensions:
 
 
 class TestDatasetScope:
-    """U7: データセットの利用範囲（shared_group_ids、BR5.1、BR5.6）。"""
+    """Scope of use of a dataset (shared_group_ids)."""
 
     def _dataset(self):
         from src.models.dataset import Dataset, DatasetColumn
@@ -543,7 +543,7 @@ class TestDatasetScope:
 
 
 class TestNemotronDatasetStatus:
-    """U3 BR2.2: the Nemotron state the persona data screen shows."""
+    """The Nemotron state the persona data screen shows."""
 
     def test_download_is_allowed_only_from_hugging_face(self):
         from src.models.nemotron_dataset import NemotronDatasetStatus, NemotronSource
@@ -584,7 +584,7 @@ class TestNemotronDatasetStatus:
 
 
 class TestClosedFeatureErrorCodes:
-    """U3 functional-spec §6: the kinds of the three new codes."""
+    """The kinds of the three new codes."""
 
     def test_refusals_are_forbidden_and_the_missing_file_is_config(self):
         from src.models.errors import ErrorCode, ErrorKind

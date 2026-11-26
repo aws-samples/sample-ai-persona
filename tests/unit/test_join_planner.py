@@ -1,8 +1,8 @@
-"""join_planner: the axis table and the join key of several tables (U6 BR37.3, BR37.6).
+"""join_planner: the axis table and the join key of several tables.
 
 A pure decision of the Manager's package: the overlap counts come from the
 fixed ``key_overlap`` through a callable (``None`` when the check ran out of
-time, NFR1.29).
+time).
 """
 
 from __future__ import annotations

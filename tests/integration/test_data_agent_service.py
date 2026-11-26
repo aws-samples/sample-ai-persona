@@ -1,4 +1,4 @@
-"""DataAgentService の統合テスト"""
+"""Integration tests for DataAgentService."""
 
 import json
 import queue
@@ -17,7 +17,7 @@ from src.services.data_agent_service import (
 
 @pytest.mark.integration
 class TestDataAgentResult:
-    """DataAgentResult データクラスのテスト"""
+    """Tests for the DataAgentResult dataclass."""
 
     def test_create_with_text_only(self):
         result = DataAgentResult(text="分析結果テキスト")
@@ -34,7 +34,7 @@ class TestDataAgentResult:
 
 @pytest.mark.integration
 class TestDataAgentServiceQuery:
-    """DataAgentService.query() のテスト"""
+    """Tests for DataAgentService.query()."""
 
     def _make_stream_lines(self, events: list[dict]) -> list[bytes]:
         lines = []
@@ -150,7 +150,7 @@ class TestDataAgentServiceQuery:
 
 @pytest.mark.integration
 class TestCreateDataAgentTool:
-    """create_data_agent_tool のテスト"""
+    """Tests for create_data_agent_tool."""
 
     @patch("src.services.data_agent_service.boto3")
     def test_csv_url_sent_to_event_queue(self, mock_boto3):

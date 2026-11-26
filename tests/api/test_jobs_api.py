@@ -1,7 +1,7 @@
-"""``GET /api/jobs/{job_id}`` の認可（US4.4 AC4.4.3、BR2.12、NFR1.5、NFR9.22）。
+"""Authorization of ``GET /api/jobs/{job_id}``.
 
-本物の JobManager に Service のモックを注入し、member A が投入したジョブを member B が
-開くと 404（存在しない ID と同じ本文）、A 本人には結果を返すことを確かめる。
+Injects a Service mock into the real JobManager and checks that member B opening a
+job submitted by member A gets 404 (same body as a nonexistent ID), while A gets the result.
 """
 
 from datetime import datetime

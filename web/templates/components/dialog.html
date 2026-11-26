@@ -1,21 +1,19 @@
 {#
-  共通ダイアログ（C3、約束 C6）。開閉・背景の inert・Tab の循環・Escape・フォーカスの
-  移動と戻し・中身の読み込み失敗の表示は web/static/js/app.js の Dialog が受け持つ。
-  開閉の状態は hidden 属性で表し、Alpine の x-show は使わない。
+  Common dialog. Opening and closing, inert background, Tab cycling, Escape, moving and restoring focus, and showing a content load failure are all handled by Dialog in web/static/js/app.js.
+  Open state is expressed with the hidden attribute; Alpine's x-show is not used.
 
-  ダイアログは描かれた場所（多くは main の中）から動かさない。中身が頼る親の
-  Alpine の状態や htmx の相対指定（find）が切れないようにするため。
+  The dialog is not moved from where it is rendered (usually inside main), so the parent Alpine state and htmx relative selectors (find) that its content relies on keep working.
 
-  引数（約束 C6 の署名に、既定値付きの引数を後ろに足したもの）:
-    id                ... ダイアログの id。見出しは id-title
-    title             ... 見出し（h2）
-    describedby       ... 注意文の要素の id（任意）
-    content_url       ... 開いたときに htmx で中身を読み込む URL（任意）
-    close_on_backdrop ... 背景のクリックで閉じるか。入力のあるダイアログは閉じない
-    autoopen          ... htmx で差し込まれたら開く（データセット編集など）
-    remove_on_close   ... 閉じたら要素ごと消す
-    close_on_success  ... 中の htmx の要求が成功したら閉じる（失敗なら開いたまま）
-    panel_class       ... 面の幅（既存のモーダルの見た目を保つため）
+  Arguments (optional ones with defaults come last):
+    id                ... dialog id; the heading is id-title
+    title             ... heading (h2)
+    describedby       ... id of the warning text element (optional)
+    content_url       ... URL whose content htmx loads on open (optional)
+    close_on_backdrop ... close on backdrop click; dialogs with input do not close
+    autoopen          ... open when inserted by htmx (for example dataset editing)
+    remove_on_close   ... remove the element when closed
+    close_on_success  ... close when an htmx request inside succeeds (stays open on failure)
+    panel_class       ... panel width (keeps the look of existing modals)
 #}
 {% macro dialog(id, title, describedby=None, content_url=None, close_on_backdrop=False, autoopen=False, remove_on_close=False, close_on_success=False, panel_class="max-w-md") -%}
 <div id="{{ id }}" data-dialog data-testid="{{ id }}" hidden
@@ -52,10 +50,7 @@
 </div>
 {%- endmacro %}
 
-{#
-  ダイアログを開くボタン。押すと app.js の Dialog が target のダイアログを開き、
-  閉じたらこのボタンへフォーカスを戻す。
-#}
+{# Button that opens a dialog. Dialog in app.js opens the target dialog on press and returns focus to this button when it closes. #}
 {% macro dialog_open_button(target, label, classes="") -%}
 <button type="button" aria-haspopup="dialog" data-dialog-open="{{ target }}"
         data-testid="{{ target }}-open-button" class="{{ classes }}">{{ label }}</button>

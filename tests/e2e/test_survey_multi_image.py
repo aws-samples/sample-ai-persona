@@ -1,8 +1,9 @@
-"""§6 マスアンケート: 複数画像（最大3枚）のテンプレートを作り、実行して結果まで確かめる。
+"""§6 mass survey: create a template with several images (up to 3), run it and check the results.
 
-テンプレートの画像の複数アップロード（枠・通知・仮の名前）、保存、名前の重複の拒否、
-アンケートの実行（Step Functions）、結果画面の画像表示。実行には ``SURVEY_STATE_MACHINE_ARN`` の
-設定が要る（手元の .env）。ペルソナ数は下限の 10 人で、実 Bedrock を呼ぶ。
+Covers multi-image upload for a template (slots, notices, placeholder names), saving,
+rejection of duplicate names, running the survey (Step Functions) and the image display on
+the results page. Running needs ``SURVEY_STATE_MACHINE_ARN`` (in the local .env). The
+persona count is the minimum of 10, and it calls real Bedrock.
 """
 
 import time

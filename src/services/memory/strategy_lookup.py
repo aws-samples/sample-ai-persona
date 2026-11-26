@@ -1,15 +1,15 @@
 """
-Look up AgentCore Memory strategy IDs at startup (v1.0.0).
+Look up AgentCore Memory strategy IDs at startup.
 
-In v1.0.0 the Data stack creates the Memory, so nobody copies strategy IDs into
-``parameters.ts`` any more (``infrastructure-specification.md``, AgentCore Memory
+The Data stack creates the Memory, so nobody copies strategy IDs into
+``parameters.ts``. At startup the app calls ``GetMemory`` once and fills
 row). At startup the app calls ``GetMemory`` once and fills
 ``SUMMARY_MEMORY_STRATEGY_ID`` / ``SEMANTIC_MEMORY_STRATEGY_ID`` on the config,
 which the memory strategies and the session manager factory already read.
 
 IDs given as environment variables win and skip the call. When the lookup
-fails, long-term memory is turned off and startup continues, the same outcome
-as the previous "missing ID means no memory" behaviour.
+fails, long-term memory is turned off and startup continues, the same as
+when an ID is missing (a missing ID means no memory).
 """
 
 import logging

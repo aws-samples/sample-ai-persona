@@ -6,24 +6,24 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 export interface CloudFrontDistributionProps {
-  /** 内部 ALB（VPC オリジン）。 */
+  /** Internal ALB (VPC origin). */
   loadBalancer: elbv2.IApplicationLoadBalancer;
-  /** WAF WebACL の ARN（Edge スタック、us-east-1）。 */
+  /** ARN of the WAF WebACL (Edge stack, us-east-1). */
   webAclArn?: string;
 }
 
 /**
- * CloudFront（v1.0.0、App スタック）。
+ * CloudFront (v1.0.0, App stack).
  *
- * - Lambda@Edge は使わない（ログインはアプリが行う。ADR-010）
- * - 既定の振る舞いはキャッシュしない（CachingDisabled、BR1.20）。/static/* だけ
- *   キャッシュする。鍵にはクエリの v（アプリが付ける中身のハッシュ、web/static_assets.py）
- *   を含め、デプロイで中身が変わったら新しい URL として取り直させる。管理ポリシーの
- *   CachingOptimized はクエリを鍵に含めず、デプロイ後も古い JS・CSS を最大 1 日返していた
- * - オリジンリクエストポリシーは AWS 管理の AllViewerExceptHostHeader（全 Cookie・
- *   全クエリ・Host 以外の全ヘッダー。CSRF の検査に要る Origin・HX-Request・
- *   X-Requested-With を含む）
- * - 内部 ALB へは VPC オリジンで HTTP（ポート 80）、読み取りタイムアウト 120 秒
+ * - No Lambda@Edge (the app handles login)
+ * - The default behavior is not cached (CachingDisabled); only /static/* is
+ *   cached. The cache key includes the query v (a content hash added by the app, web/static_assets.py)
+ *   so changed content after a deploy is fetched as a new URL. The managed
+ *   CachingOptimized policy ignores the query and kept serving old JS/CSS for up to a day after deploys.
+ * - The origin request policy is the AWS managed AllViewerExceptHostHeader (all cookies,
+ *   all query strings and all headers except Host, including Origin, HX-Request and
+ *   X-Requested-With, which CSRF checks need)
+ * - Reaches the internal ALB over HTTP (port 80) via a VPC origin, with a 120 s read timeout
  */
 export class CloudFrontDistribution extends Construct {
   public readonly distribution: cloudfront.Distribution;
@@ -73,12 +73,12 @@ export class CloudFrontDistribution extends Construct {
     });
     this.domainName = this.distribution.distributionDomainName;
 
-    // cdk-nag の抑止（U9、NFR7.15）。理由は nag-reasons.ts
+    // cdk-nag suppressions; reasons are in nag-reasons.ts
     acknowledgeAll(this.distribution, ['CFR1'], NAG_REASONS.geoRestriction);
     acknowledgeAll(this.distribution, ['CFR3'], NAG_REASONS.accessLogs);
     acknowledgeAll(this.distribution, ['CFR4'], NAG_REASONS.cloudFrontDefaultCertificate);
     if (!props.webAclArn) {
-      // enableWaf: false にした構成だけ WebACL がない（既定は有効、2026-11-02）
+      // Only a configuration with enableWaf: false has no WebACL (enabled by default)
       acknowledgeAll(this.distribution, ['CFR2'], NAG_REASONS.wafOptional);
     }
   }

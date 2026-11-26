@@ -1,9 +1,10 @@
-"""JobManager の単体テスト（約束 C14、BR2.12）。
+"""Unit tests for JobManager.
 
-投入時に投入者（owner_sub）を記録し、処理の関数に投入者の principal を渡す。結果は
-本人にだけ返し、他人・投入者なし・存在しないは同じ JOB_NOT_FOUND（NFR1.5）。Jobs に
-届かなければ 503 で結果を返さない（NFR9.22）。照合の結果はキャッシュしない。
-JobStore（書き込み）と AuthzLookupService（読み取り）はモックを注入する。
+Submission records the submitter (owner_sub) and passes the submitter's principal to the
+processing function. Results go only to that user; another user, a job without a submitter
+and a missing job all give the same JOB_NOT_FOUND. If Jobs is unreachable it returns 503
+and no result. Authorization results are not cached.
+JobStore (writes) and AuthzLookupService (reads) are injected as mocks.
 """
 
 import json
@@ -145,11 +146,11 @@ class TestGet:
 
 
 class TestDenialLog:
-    """投入者の照合で断ったら、U2 の ``authz.denied`` を 1 行書く（NFR8.6、BR2.13）。
+    """A denied submitter check writes one ``authz.denied`` line.
 
-    Build and Test の Loop-back 2。理由は応答が NOT_FOUND のため ``not_found``。
-    ジョブは ``ResourceType`` に無いので ``resource_type`` は書かない（log_event は
-    None の項目を書かない）。存在しないジョブも、他人のものと同じ 1 行にする。
+    The reason is ``not_found`` because the response is NOT_FOUND. Jobs are not a
+    ``ResourceType``, so ``resource_type`` is omitted (log_event omits None fields).
+    A missing job writes the same single line as another user's job.
     """
 
     @pytest.mark.parametrize(
@@ -169,7 +170,7 @@ class TestDenialLog:
         assert line["reason"] == "not_found"
         assert line["sub"] == OTHER.sub
         assert line.get("resource_type") is None
-        # ジョブの ID はログに出さない（NFR8.6）
+        # the job ID is not logged
         assert all("job-secret-id" not in json.dumps(r) for r in logs.records())
 
     def test_the_owner_logs_no_denial(self, capsys):
@@ -182,7 +183,7 @@ class TestDenialLog:
         assert logs.events("authz.denied") == []
 
     def test_unreachable_jobs_table_logs_no_denial(self, capsys):
-        """503 は拒否ではないので ``authz.denied`` を書かない。"""
+        """A 503 is not a denial, so no ``authz.denied`` is written."""
         jm, _, mock_lookup, _ = _make_manager()
         mock_lookup.get_job.side_effect = AuthzLookupError(
             "jobs table down", reason="unreachable"
@@ -197,10 +198,10 @@ class TestDenialLog:
 
 class TestAnotherTask:
     def test_a_job_is_readable_from_another_manager_instance(self):
-        """投入した台と別の台（別の JobManager）からも本人は結果を取れる（NFR9.16）。
+        """The submitter can fetch the result from a different host (another JobManager).
 
-        JobManager は台のメモリに結果を持たず、Jobs テーブルだけを読む。共有の
-        テーブルを辞書で置き換えて確かめる。
+        JobManager keeps no results in host memory and only reads the Jobs table; the test
+        replaces the shared table with a dict.
         """
         table: dict[str, Job] = {}
         done = threading.Event()
@@ -257,7 +258,7 @@ class TestRun:
 
         mock_db.update_status.assert_called_once()
         mock_db.update_failed.assert_called_once()
-        # U6 BR8.3: 例外文ではなくエラーコードを保存する（コードのない例外は UNKNOWN）
+        # store the error code, not the exception text (an exception without a code is UNKNOWN)
         assert mock_db.update_failed.call_args[0][1] == ErrorCode.UNKNOWN.value
 
     def test_failed_job_saves_the_coded_errors_code(self):

@@ -1,7 +1,7 @@
-"""v0 のユーザーを v1 のプールへ作り直す計画のテスト（移行スクリプト）。
+"""Tests for the plan that recreates v0 users in the v1 pool (migration script).
 
-v1 に同じメールアドレスのユーザー（最初に作った admin など）がいれば、作成もグループの
-変更もせずにスキップする。比べるときは前後の空白を除き、大文字と小文字を区別しない。
+If v1 already has a user with the same email (such as the first admin), the user is
+skipped: no creation and no group change. Comparison trims whitespace and ignores case.
 """
 
 from scripts.v0_migration.users import V0User, normalize_email, plan_users

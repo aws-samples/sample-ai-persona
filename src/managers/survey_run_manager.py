@@ -1,33 +1,33 @@
-"""SurveyRunManager: the survey runner's round (functional-spec.md WF2〜WF4).
+"""SurveyRunManager: the survey runner's round.
 
 The Web task calls :meth:`SurveyRunManager.advance` every 15 seconds and right
 after a survey is accepted or deleted. One round:
 
-1. **Lease** (BR2.3): take or extend the deployment's single lease; without it
+1. **Lease**: take or extend the deployment's single lease; without it
    the round does nothing. While the round works, :class:`LeaseKeeper` extends
    the lease every 20 seconds from another thread; once it cannot, no further
    write is made. The lease is not given back at the end of a round (the next
    round takes it again); :meth:`release_lease` gives it back on a clean stop.
-2. **Monitor** (WF3): the running survey's execution. Still running: the
-   round ends (one survey at a time, BR2.1). Finished: the results become the
-   CSV (5% rule, BR4) or an error code, and the round goes on (BR2.4).
-3. **Start** (WF4): the oldest queued survey (``(queued_at, id)``, BR2.2). The
-   sampled personas are written once (BR1.5); the execution is named after
-   the survey (BR3.1).
+2. **Monitor**: the running survey's execution. Still running: the
+   round ends (one survey at a time). Finished: the results become the
+   CSV (5% rule) or an error code, and the round goes on.
+3. **Start**: the oldest queued survey (``(queued_at, id)``). The
+   sampled personas are written once; the execution is named after
+   the survey.
 
-Every failed external call is handled by its class (reliability 3.1):
-not found → error now; transient → retried within a count or time limit;
-permissions / configuration → the survey waits (queued: up to 30 minutes from
+Every failed external call is handled by its class:
+not found -> error now; transient -> retried within a count or time limit;
+permissions / configuration -> the survey waits (queued: up to 30 minutes from
 ``start_blocked_since``; finishing: up to 30 minutes after the execution ended;
 running: the time limit). Every status change is conditional on the expected
-status (NFR4.4). When one does not hold, the record is read again strongly
+status. When one does not hold, the record is read again strongly
 consistently: only a deleted survey has its CSV, run location or execution
 removed; what another task wrote first is left alone. A running survey from
 the (eventually consistent) index is also read again before it is watched.
-Exceptions never leave :meth:`advance` (NFR4.15).
+Exceptions never leave :meth:`advance`.
 
-Logs carry IDs, execution ARNs, counts and codes only — never persona
-attributes, request bodies or answers (NFR5.12, NFR7.9).
+Logs carry IDs, execution ARNs, counts and codes only, never persona
+attributes, request bodies or answers.
 """
 
 import base64
@@ -66,19 +66,19 @@ from .shared.structured_log import log_event
 
 logger = logging.getLogger(__name__)
 
-#: Seconds a lease lasts after each take or extension (BR2.3).
+#: Seconds a lease lasts after each take or extension.
 LEASE_TTL_SECONDS = 60
-#: How often the keeper extends the lease while a round works (BR2.3).
+#: How often the keeper extends the lease while a round works.
 LEASE_RENEW_SECONDS = 20
-#: Extra time past the execution time limit before the app gives up (BR3.3).
+#: Extra time past the execution time limit before the app gives up.
 TIMEOUT_GRACE_SECONDS = 300
-#: How long a permissions / configuration failure may block a survey (NFR4.9a, R-12).
+#: How long a permissions / configuration failure may block a survey.
 BLOCKED_LIMIT = timedelta(minutes=30)
-#: Transient failures before the start or the finish gives up (BR3.2, BR3.7).
+#: Transient failures before the start or the finish gives up.
 MAX_ATTEMPTS = 3
-#: A round longer than this is logged as a warning (NFR7.8).
+#: A round longer than this is logged as a warning.
 SLOW_ROUND_SECONDS = 60
-#: Highest failure ratio of a completed survey: 5 in 100 (BR4.1).
+#: Highest failure ratio of a completed survey: 5 in 100.
 _FAILED_PER_HUNDRED = 5
 #: Columns of the result CSV before the questions (unchanged).
 _CSV_ATTRIBUTES = (
@@ -90,7 +90,7 @@ _CSV_ATTRIBUTES = (
     "prefecture",
     "marital_status",
 )
-#: Codes that stop a start at once although their kind is TRANSIENT (BR2.2 (b)).
+#: Codes that stop a start at once although their kind is TRANSIENT.
 _LASTING_CODES = frozenset({ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE})
 _LASTING_KINDS = frozenset(
     {ErrorKind.VALIDATION, ErrorKind.CAPACITY, ErrorKind.NOT_FOUND, ErrorKind.CONFIG}
@@ -152,7 +152,7 @@ class LeaseKeeper:
 
     Args:
         renew: Extends the lease; ``False`` (or an exception) means it was lost.
-        interval_seconds: Time between extensions (20 seconds, BR2.3).
+        interval_seconds: Time between extensions (20 seconds).
         wait: Waits up to the given seconds and returns ``True`` when stopped
             (tests pass a fake; the default waits on an event).
     """
@@ -205,7 +205,7 @@ class LeaseKeeper:
 
 
 def is_lasting_failure(error: BaseException) -> bool:
-    """A coded failure of the survey itself, not to be retried (WF4 6)."""
+    """A coded failure of the survey itself, not to be retried."""
     code = getattr(error, "code", None)
     if not isinstance(code, ErrorCode):
         return False
@@ -215,12 +215,12 @@ def is_lasting_failure(error: BaseException) -> bool:
 def parse_answers(
     text: Optional[str], questions: Sequence[Any]
 ) -> Optional[dict[str, str]]:
-    """The CSV values of a response, or ``None`` when it is unusable (BR5.5).
+    """The CSV values of a response, or ``None`` when it is unusable.
 
     A response that is not JSON, lacks a question, or holds a value outside
     the schema makes the whole persona unusable; no question is kept alone.
     Multiple answers lose duplicates and are cut at ``max_selections``
-    (BR5.3) and are joined with ``|`` as before.
+    and are joined with ``|`` as before.
     """
     if not text:
         return None
@@ -328,12 +328,12 @@ class SurveyRunManager:
         self._keeper: Optional[Keeper] = None
         self._holding = False
 
-    # =========================================================================
-    # 1 回（WF2）
-    # =========================================================================
+    # ==========================================================================
+    # One round
+    # ==========================================================================
 
     def advance(self) -> None:
-        """Do one round of work. Never raises (NFR4.13, NFR4.15)."""
+        """Do one round of work. Never raises."""
         began = self._clock()
         try:
             if not self._take_lease():
@@ -364,7 +364,7 @@ class SurveyRunManager:
                 )
 
     def release_lease(self) -> bool:
-        """Give the lease back on a clean stop (only when it is ours, NFR4.10)."""
+        """Give the lease back on a clean stop (only when it is ours)."""
         try:
             released = bool(self._lease.release(self.holder))
         except Exception as e:
@@ -396,7 +396,7 @@ class SurveyRunManager:
         )
 
     def _check_lease(self) -> None:
-        """Stop before a write once the lease is lost (BR2.3)."""
+        """Stop before a write once the lease is lost."""
         if self._keeper is not None and self._keeper.lost:
             raise _LeaseLost()
 
@@ -421,9 +421,9 @@ class SurveyRunManager:
             if self._start(survey) is not _Outcome.SKIPPED:
                 return
 
-    # =========================================================================
-    # 監視（WF3）。戻り値は「実行の席が空いたか」
-    # =========================================================================
+    # ==========================================================================
+    # Monitor. The return value is whether the execution slot became free
+    # ==========================================================================
 
     def _watch(self, survey: Survey) -> bool:
         # ``survey`` was re-read this round (strongly consistent, see _work)
@@ -492,9 +492,9 @@ class SurveyRunManager:
                 error_type=type(e).__name__,
             )
 
-    # =========================================================================
-    # 完了のまとめ（WF3 の 4、BR3.7、BR4）
-    # =========================================================================
+    # ==========================================================================
+    # Completion summary
+    # ==========================================================================
 
     def _finish(self, survey: Survey, info: Any) -> bool:
         try:
@@ -567,7 +567,7 @@ class SurveyRunManager:
 
     @staticmethod
     def _acceptable(outcome: SurveyRunOutcome) -> bool:
-        """BR4.1: failed ÷ total ≤ 5% (no rounding), and not everyone failed."""
+        """Failed / total <= 5% (no rounding), and not everyone failed."""
         failed = outcome.failed_count
         return (
             failed < outcome.total
@@ -598,7 +598,7 @@ class SurveyRunManager:
             remove=("run_queue",),
         )
         if not completed:
-            # Deleted meanwhile: nothing is written back (BR2.2 (c)). Another
+            # Deleted meanwhile: nothing is written back. Another
             # task finished it first: the CSV and the run location are its own.
             if self._lost_to_deletion(survey.id, "complete"):
                 self._delete_quietly(survey.id, path)
@@ -620,7 +620,7 @@ class SurveyRunManager:
     def _results_csv(
         personas: pl.DataFrame, questions: list[Any], outcome: SurveyRunOutcome
     ) -> bytes:
-        """The result CSV (columns unchanged; unusable personas have blanks, BR4.3)."""
+        """The result CSV (columns unchanged; unusable personas have blanks)."""
         headers = ["persona_id", *_CSV_ATTRIBUTES]
         for q in questions:
             headers.extend([f"{q.id}_text", f"{q.id}_answer"])
@@ -662,8 +662,8 @@ class SurveyRunManager:
     ) -> bool:
         """Count a transient failure; ``True`` while the survey keeps waiting.
 
-        The third failure turns the survey into ``SURVEY_EXECUTION_FAILED``
-        (BR3.2, BR3.7). ``False`` also when the status changed meanwhile.
+        The third failure turns the survey into ``SURVEY_EXECUTION_FAILED``.
+        ``False`` also when the status changed meanwhile.
         """
         self._check_lease()
         attempts = self._surveys.add_attempt(survey.id, counter, expected=survey.status)
@@ -675,14 +675,14 @@ class SurveyRunManager:
         self._waiting(survey, stage, FailureClass.TRANSIENT, error)
         return True
 
-    # =========================================================================
-    # 開始（WF4）
-    # =========================================================================
+    # ==========================================================================
+    # Start
+    # ==========================================================================
 
     def _start(self, queued: Survey) -> _Outcome:
         survey = self._surveys.get(queued.id, consistent=True)
         if survey is not None and survey.status == SurveyStatus.RUNNING:
-            # The index still shows it queued; it holds the run slot (NFR3.7)
+            # The index still shows it queued; it holds the run slot
             return _Outcome.STARTED
         if survey is None or survey.status != SurveyStatus.QUEUED:
             return _Outcome.SKIPPED
@@ -701,7 +701,7 @@ class SurveyRunManager:
         return self._record_start(survey, info)
 
     def _prepare(self, survey: Survey) -> None:
-        """Personas (once, BR1.5), then the Distributed Map input (BR5, BR6)."""
+        """Personas (once), then the Distributed Map input."""
         ref = PersonaDataRef.parse(survey.datasource)
         extra_columns = self._extra_columns(survey.id, ref)
         snapshot = self._snapshot(survey)
@@ -714,7 +714,7 @@ class SurveyRunManager:
             extra_columns=extra_columns,
         )
         self._check_lease()
-        # Built lazily: the input is never held in memory as a whole (NFR1.6).
+        # Built lazily: the input is never held in memory as a whole.
         # Closed at once on any error, so no body is sent after it
         with closing(self._items(survey.id, personas, request)) as items:
             self._runner.write_input(survey.id, self._lines(items))
@@ -724,7 +724,7 @@ class SurveyRunManager:
 
         ``write_input`` stores the input only after reading every line, and the
         last bodies may take a while to finish: a task that lost the lease
-        meanwhile must not overwrite the input of the one that holds it (BR2.3).
+        meanwhile must not overwrite the input of the one that holds it.
         """
         for item in items:
             yield item.to_json_line()
@@ -742,7 +742,7 @@ class SurveyRunManager:
         sampled = self._batch.filter_and_sample_personas(
             survey.filters or {}, survey.persona_count, datasource=ref.value
         )
-        # The data may change between accepting and starting (BR1.4)
+        # The data may change between accepting and starting
         SurveyPersonaSource.require_enough(len(sampled), survey.filters, SurveyRunError)
         personas = _kept_columns(sampled, extra_columns)
         self._check_lease()
@@ -754,7 +754,7 @@ class SurveyRunManager:
     ) -> Generator[SurveyRunItem, None, None]:
         """One item per persona, in sampling order, built as they are read.
 
-        Bodies that go to S3 (images, or too large for the item, BR6.3) are
+        Bodies that go to S3 (images, or too large for the item) are
         stored in parallel while the input is written.
         """
         items = self._runner.write_bodies(
@@ -768,7 +768,7 @@ class SurveyRunManager:
     ) -> Iterator[tuple[str, str, bool]]:
         """``(record_id, body_json, to_s3)`` per persona, each encoded once.
 
-        The lease is checked before each persona (BR2.3), so no new body is
+        The lease is checked before each persona, so no new body is
         sent after it is lost (the PUTs already running are waited for).
         """
         content = build_survey_user_content(
@@ -860,7 +860,7 @@ class SurveyRunManager:
         self._fail(survey, ErrorCode.SURVEY_EXECUTION_FAILED)
 
     def _start_blocked(self, survey: Survey, error: Exception) -> _Outcome:
-        """NFR4.9・NFR4.9a: wait without counting; give up after 30 minutes."""
+        """Wait without counting; give up after 30 minutes."""
         since = survey.start_blocked_since
         now = self._clock()
         if since is not None and now > _aware(since) + BLOCKED_LIMIT:
@@ -881,7 +881,7 @@ class SurveyRunManager:
     def _extra_columns(
         self, survey_id: str, ref: PersonaDataRef
     ) -> Optional[list[dict[str, str]]]:
-        """The custom data's columns from its record, by ID (BR2.2 (a))."""
+        """The custom data's columns from its record, by ID."""
         if ref.custom_id is None:
             return None
         store = self._custom_store or service_factory.get_custom_persona_data_store()
@@ -899,7 +899,7 @@ class SurveyRunManager:
         return columns
 
     def _snapshot(self, survey: Survey) -> TemplateSnapshot:
-        """The template copy; a survey before v1.0.0 reads its template."""
+        """The template copy; a survey without a snapshot reads its template."""
         if survey.template_snapshot is not None:
             return survey.template_snapshot
         store = self._templates or service_factory.get_survey_template_store()
@@ -913,7 +913,7 @@ class SurveyRunManager:
     def _image_blocks(
         self, survey_id: str, snapshot: TemplateSnapshot
     ) -> Iterable[dict[str, Any]]:
-        """The snapshot's images, compressed; any failure stops the start (BR2.2 (b))."""
+        """The snapshot's images, compressed; any failure stops the start."""
         blocks: list[dict[str, Any]] = []
         for image in snapshot.images:
             try:
@@ -937,9 +937,9 @@ class SurveyRunManager:
             )
         return blocks
 
-    # =========================================================================
-    # 状態の書き込みとログ
-    # =========================================================================
+    # ==========================================================================
+    # Status writes and logs
+    # ==========================================================================
 
     def _fail(
         self,
@@ -947,7 +947,7 @@ class SurveyRunManager:
         code: ErrorCode,
         context: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        """``queued`` / ``running`` → ``error`` with the code (BR10.1 cleanup)."""
+        """``queued`` / ``running`` -> ``error`` with the code (also cleans up)."""
         self._check_lease()
         fields: dict[str, Any] = {
             "status": SurveyStatus.ERROR.value,
@@ -984,7 +984,7 @@ class SurveyRunManager:
         """Read the record strongly consistently after a transition did not hold.
 
         ``None`` means it was deleted; otherwise another task changed it first
-        (NFR4.4) and what it wrote must be left alone.
+        and what it wrote must be left alone.
         """
         current = self._surveys.get(survey_id, consistent=True)
         log_event(
@@ -999,7 +999,7 @@ class SurveyRunManager:
     def _waiting(
         self, survey: Survey, stage: str, failure: FailureClass, error: Exception
     ) -> None:
-        """A failure that keeps the survey as it is (NFR7.7: access is ERROR)."""
+        """A failure that keeps the survey as it is (access is ERROR)."""
         log_event(
             "survey.runner_waiting",
             level="ERROR" if failure is FailureClass.ACCESS else "WARNING",
@@ -1014,7 +1014,7 @@ class SurveyRunManager:
         try:
             self._runner.delete_run(survey_id)
         except Exception as e:
-            # The lifecycle rule removes it after 7 days anyway (BR10.1)
+            # The lifecycle rule removes it after 7 days anyway
             log_event(
                 "survey.cleanup_failed",
                 level="WARNING",
@@ -1064,7 +1064,7 @@ def _dependency_missing(survey_id: str, missing: str) -> None:
 
 
 def _aware(moment: datetime) -> datetime:
-    """Records before v1.0.0 hold naive local times; treat them as UTC."""
+    """Older records hold naive local times; treat them as UTC."""
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 

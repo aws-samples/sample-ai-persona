@@ -1,9 +1,8 @@
-"""
-PasswordPolicy value object (v1.0.0 U8, ``closed-network-groundwork/entities.md``).
+"""PasswordPolicy value object.
 
 The password rules of the closed-network User Pool, received through five
-environment variables (BR4.3) and checked by the app before Cognito is called
-(BR2.5, NFR9.41). Besides the pool's own rules, Cognito always refuses a
+environment variables and checked by the app before Cognito is called.
+Besides the pool's own rules, Cognito always refuses a
 password longer than 256 characters or one that starts or ends with a space,
 so those are checked too.
 
@@ -23,7 +22,7 @@ _FLAG_FIELDS: dict[str, str] = {
     "require_digits": "PASSWORD_REQUIRE_DIGITS",
     "require_symbols": "PASSWORD_REQUIRE_SYMBOLS",
 }
-#: The five environment variables, in the order they are documented (BR4.3).
+#: The five environment variables, in the order they are documented.
 PASSWORD_POLICY_SETTINGS: tuple[str, ...] = (
     _MIN_LENGTH_SETTING,
     *_FLAG_FIELDS.values(),
@@ -44,7 +43,7 @@ class PasswordRule(StrEnum):
     """Stable keys of the password rules, in display order.
 
     The key is what ``PASSWORD_POLICY_NOT_MET`` carries in its context and what
-    the M3 rule list is built from.
+    the password-change rule list is built from.
     """
 
     MIN_LENGTH = "min_length"

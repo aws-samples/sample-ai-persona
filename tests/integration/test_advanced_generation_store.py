@@ -1,10 +1,10 @@
-"""AdvancedGenerationStore (``AdvancedGenerations``, contract C5) with moto.
+"""AdvancedGenerationStore (``AdvancedGenerations``) with moto.
 
-BR7.5 / BR6.4 (lock, generation and in-use marks in one transaction),
-BR7.1 / NFR5.18 (transitions conditioned on the current state), BR7.2 /
-NFR5.2 (events numbered in order and re-read with ``BETWEEN``), NFR5.1
-(result parts and their size limits), BR7.3 (heartbeat) and W5-8 (finishing
-releases the lock and the marks and writes finished_at / expires_at).
+Covers the lock, generation and in-use marks written in one transaction,
+transitions conditioned on the current state, events numbered in order and
+re-read with ``BETWEEN``, result parts and their size limits, the heartbeat,
+and finishing releasing the lock and the marks and writing finished_at /
+expires_at.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -202,7 +202,7 @@ class TestCreateWithLock:
             )
         assert _count_items(client) == 0
 
-    # --- U2: 使った日と期限の延長（BR13.3、NFR5.28） ---
+    # --- Last-used day and expiry extension ---
 
     def test_the_start_writes_the_last_use_and_the_new_expiry(self, store, client):
         source_id = _put_source(client)
@@ -300,7 +300,7 @@ class TestTransitions:
         )
 
     def test_unless_requested_loses_to_a_pending_cancel(self, store, client):
-        # U5 BR31.2 (review fix): ``done`` is never written over a cancel
+        # ``done`` is never written over a cancel
         gen = _start(store, client)
         _to(store, gen, GenerationStatus.PLANNING, GenerationStatus.RUNNING)
         store.put_control_request(
@@ -477,7 +477,7 @@ class TestFinish:
         assert store.get_lock("sub-a") is None
         mark = _source_item(client, gen.source_file_ids[0])
         assert "in_use_by" not in mark and "in_use_until" not in mark
-        # U2 BR13.3: the end only removes the mark; the last use is the start.
+        # The end only removes the mark; the last use is the start.
         assert mark["last_used_at"]["S"] == NOW.isoformat(timespec="microseconds")
         finished = store.get(gen.generation_id)
         assert finished is not None
@@ -504,7 +504,7 @@ class TestFinish:
         assert lock is not None and lock.generation_id == second.generation_id
 
     def test_release_holds_leaves_the_end_as_it_is(self, store, client):
-        # U5 review fix: a lock left by an ended generation is freed at a start
+        # A lock left by an ended generation is freed at a start
         gen = _start(store, client)
         store.transition(
             gen.generation_id, GenerationStatus.PREPARING, GenerationStatus.FAILED
@@ -538,7 +538,7 @@ class TestFinish:
         assert mark["in_use_by"]["S"] == second.generation_id
 
 
-# --- U5: control requests, the reader's end and the plan wait ---------------------
+# --- Control requests, the reader's end and the plan wait ---
 
 RUNNING_STATES = [s for s in GenerationStatus if not s.is_terminal]
 

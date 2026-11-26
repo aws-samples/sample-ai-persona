@@ -1,4 +1,4 @@
-"""移すリソースの種別の選択（--include / --exclude）のテスト（移行スクリプト）。"""
+"""Tests for selecting resource kinds to move (--include / --exclude) (migration script)."""
 
 import pytest
 

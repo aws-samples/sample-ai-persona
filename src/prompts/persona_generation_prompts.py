@@ -1,4 +1,4 @@
-"""ペルソナ生成ユースケースのプロンプトテンプレート定数"""
+"""Prompt template constants for persona generation."""
 
 DATA_TYPE_PROMPTS: dict[str, str] = {
     "interview": "以下はN1インタビュー・顧客ヒアリングのデータです。発言内容から読み取れる価値観、課題、行動パターンを分析してペルソナを生成してください。",
@@ -21,8 +21,8 @@ DATA_TYPE_PROMPTS: dict[str, str] = {
     ),
 }
 
-# 通常の生成と高度な生成（src/managers/advanced_generation/prompts.py）で共有する、
-# ペルソナの書き方の指示。片方だけ直すと 2 つの生成で人物像の細かさがずれる
+# Persona-writing instructions shared by normal generation and advanced generation
+# (src/managers/advanced_generation/prompts.py). Fixing only one would make the level of detail diverge.
 PERSONA_PURPOSE_AND_PRINCIPLES = """# 重要: ペルソナの利用目的
 このペルソナはAIがその人物になりきり、以下の場面で使われます：
 - ユーザーとの1対1インタビュー（「最近どんな買い物をしましたか？」等に具体的に回答）

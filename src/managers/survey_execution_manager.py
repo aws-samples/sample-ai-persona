@@ -1,30 +1,29 @@
 """
-SurveyExecutionManager
-アンケート実行制御を担当するマネージャークラス。
+SurveyExecutionManager: manager class responsible for survey execution control.
 
-v1.0.0 U7 (``functional-design/rules.md``):
+Rules:
 
-- BR2.1: starting a survey checks, in order, ``ai:execute``, that surveys
-  can run here (a state machine is configured, BR9.1), the template's
+- Starting a survey checks, in order, ``ai:execute``, that surveys
+  can run here (a state machine is configured), the template's
   ``ensure_readable`` and the persona data (Nemotron downloaded, or custom
-  data the user may use); then the count (10 or more, BR1.1〜BR1.3) and the
+  data the user may use); then the count (10 or more) and the
   size (350KB). Nothing is written unless every check passes.
-- BR1.1 / BR2.7: the runner owns the survey; it starts unshared and carries a
+- The runner owns the survey; it starts unshared and carries a
   snapshot of the template (name, questions, image references) and the
   custom data's name.
-- FR3.1: an accepted survey is saved ``queued``; ``SurveyRunManager`` (the
+- An accepted survey is saved ``queued``; ``SurveyRunManager`` (the
   survey runner) starts it on Step Functions when it is first in line.
-- BR8.1: a ``running`` / ``pending`` survey from before the switch (no
+- A ``running`` / ``pending`` survey from the earlier batch-inference design (no
   execution, no queue entry) is turned into ``SURVEY_EXECUTION_INTERRUPTED``
   when a list or the detail reads it.
-- BR1.2 / BR1.3: lists are tabbed; detail, download and images need read.
-- BR2.8: result images are only the snapshot's, signed after the read check.
-- BR1.8 / BR7: delete removes the body and its share items, stops a running
+- Lists are tabbed; detail, download and images need read.
+- Result images are only the snapshot's, signed after the read check.
+- Delete removes the body and its share items, stops a running
   execution (a failure is logged), removes the run location, then the CSV
   (three tries, then ``survey.cleanup_failed``) and the cached CSV.
 
 Logs: ``survey.run_stop_failed`` and ``survey.cleanup_failed`` (IDs and codes
-only, NFR3.13).
+only).
 """
 
 import logging
@@ -72,35 +71,34 @@ logger = logging.getLogger(__name__)
 
 _SURVEY = ResourceType.SURVEY
 _TEMPLATE = ResourceType.SURVEY_TEMPLATE
-#: Largest survey body written, snapshot and report included (NFR2.25).
+#: Largest survey body written, snapshot and report included.
 MAX_SURVEY_BYTES = 350 * 1024
-#: Owner label of a survey without owner (before v1.0.0).
+#: Owner label of a survey without owner.
 OWNER_UNKNOWN = "所有者不明"
 #: Most rows a search returns.
 SEARCH_RESULT_LIMIT = 100
-#: Lifetimes of the presigned URLs of a result CSV and a snapshot image
-#: (unchanged from before closed network U4).
+#: Lifetimes of the presigned URLs of a result CSV and a snapshot image.
 RESULT_CSV_URL_EXPIRATION_SECONDS = 300
 RESULT_IMAGE_URL_EXPIRATION_SECONDS = 3600
 #: Types a snapshot image may be served as. The type in the snapshot came from
-#: the template form, so anything else is sent as opaque bytes (U4 review).
+#: the template form, so anything else is sent as opaque bytes.
 _RESULT_IMAGE_CONTENT_TYPES = frozenset({"image/png", "image/jpeg"})
 
 
 class SurveyExecutionManagerError(CodedError):
-    """SurveyExecutionManager層の基底例外"""
+    """Base exception of the SurveyExecutionManager layer"""
 
     pass
 
 
 class SurveyExecutionValidationError(SurveyExecutionManagerError):
-    """バリデーションエラー"""
+    """Validation error"""
 
     pass
 
 
 class SurveyExecutionError(SurveyExecutionManagerError):
-    """アンケート実行エラー"""
+    """Survey execution error"""
 
     pass
 
@@ -113,21 +111,21 @@ class ResultCache(Protocol):
 
 @dataclass(frozen=True)
 class SurveyStart:
-    """A survey that passed every start check (BR2.1).
+    """A survey that passed every start check.
 
     Attributes:
         survey: The saved survey (``queued``). The caller wakes the survey
-            runner, which starts it when it is first in line (WF1).
+            runner, which starts it when it is first in line.
     """
 
     survey: Survey
 
 
 class SurveyExecutionManager:
-    """アンケート実行制御"""
+    """Survey execution control"""
 
-    #: アンケートの最小人数（FR4.1、FR4.3）。希望数だけでなく、作成時と開始時に
-    #: 「実際に集まる人数」もこの値で確かめる（BR1.2、BR1.4）。
+    #: Minimum number of personas in a survey. Besides the requested count, the
+    #: number of personas actually gathered is also checked against it at creation and start.
     MIN_SURVEY_PERSONAS = MIN_SURVEY_PERSONAS
 
     def __init__(
@@ -159,12 +157,11 @@ class SurveyExecutionManager:
             custom_persona_data_store: Custom persona data records.
             result_cache: The per-task cache of result CSVs (evicted on delete).
             sleep: Wait between cleanup attempts (tests).
-            asset_delivery: Serves result CSVs and images (closed network U4;
-                built from ``s3_service`` and ``Config.ASSET_DELIVERY`` when
-                omitted).
+            asset_delivery: Serves result CSVs and images (built from
+                ``s3_service`` and ``Config.ASSET_DELIVERY`` when omitted).
             runner: ``SurveyRunnerService`` (stops an execution on delete;
                 from ``service_factory`` when omitted and configured).
-            runner_configured: Whether surveys can run here (BR9.1).
+            runner_configured: Whether surveys can run here.
         """
         self._surveys = survey_store or service_factory.get_survey_store()
         self._templates = (
@@ -220,7 +217,7 @@ class SurveyExecutionManager:
 
     @property
     def result_cache(self) -> ResultCache:
-        """The per-process result CSV cache (shared with the analysis, BR1.8)."""
+        """The per-process result CSV cache (shared with the analysis)."""
         if self._cache is None:
             self._cache = shared_result_cache()
         return self._cache
@@ -231,9 +228,9 @@ class SurveyExecutionManager:
             self._custom_store = service_factory.get_custom_persona_data_store()
         return self._custom_store
 
-    # =========================================================================
-    # 開始（BR2.1、BR1.1、BR2.7）
-    # =========================================================================
+    # ==========================================================================
+    # Start
+    # ==========================================================================
 
     def create_survey(
         self,
@@ -245,7 +242,7 @@ class SurveyExecutionManager:
         filters: Optional[Dict[str, Any]] = None,
         datasource: Optional[str] = None,
     ) -> SurveyStart:
-        """Check every start condition, then save a ``queued`` survey (BR2.1, WF1).
+        """Check every start condition, then save a ``queued`` survey.
 
         Returns:
             The saved survey; the caller wakes the survey runner.
@@ -307,7 +304,7 @@ class SurveyExecutionManager:
     def _usable_datasource(
         self, principal: Principal, datasource: Optional[str]
     ) -> tuple[PersonaDataRef, Optional[str]]:
-        """The persona data reference and the custom data's name (BR4.2)."""
+        """The persona data reference and the custom data's name."""
         try:
             ref = PersonaDataRef.parse(datasource)
         except ValueError as e:
@@ -332,9 +329,9 @@ class SurveyExecutionManager:
         except SurveyTemplateStoreError as e:
             raise LookupUnavailableError("template body unreadable") from e
 
-    # =========================================================================
-    # 読み書き
-    # =========================================================================
+    # ==========================================================================
+    # Read and write
+    # ==========================================================================
 
     def _read_survey(self, survey_id: str) -> Optional[Survey]:
         try:
@@ -343,18 +340,18 @@ class SurveyExecutionManager:
             raise LookupUnavailableError("survey body unreadable") from e
 
     def _ensure_parquet_uri(self, datasource: str) -> None:
-        """nemotron使用時、batch_serviceにS3 URIをセットする。
+        """Set the S3 URI on the batch service when Nemotron is used.
 
-        The key is ``Config.NEMOTRON_DATASET_KEY`` (closed network U3 BR2.1);
+        The key is ``Config.NEMOTRON_DATASET_KEY``;
         its presence is checked through ``S3Service.exists``. A missing file
         never triggers a download: it stops with ``NEMOTRON_DATASET_NOT_PLACED``
         when the file is placed beforehand (``s3``), else
-        ``SURVEY_DATASET_NOT_DOWNLOADED`` (BR2.4).
+        ``SURVEY_DATASET_NOT_DOWNLOADED``.
         """
         self._persona_source.ensure_dataset(datasource, SurveyExecutionError)
 
     def _settle_legacy(self, survey: Survey) -> Survey:
-        """A running / pending survey from batch inference becomes an error (BR8.1).
+        """A running / pending survey from batch inference becomes an error.
 
         The write is conditional on the status read; even when it fails the
         survey is shown as interrupted.
@@ -382,9 +379,9 @@ class SurveyExecutionManager:
             error_context=None,
         )
 
-    # =========================================================================
-    # 一覧（BR1.2）
-    # =========================================================================
+    # ==========================================================================
+    # List
+    # ==========================================================================
 
     def list_surveys(
         self,
@@ -393,7 +390,7 @@ class SurveyExecutionManager:
         cursor: Optional[str],
         search: Optional[str] = None,
     ) -> TabbedList[Survey]:
-        """One page of a tab, or a search inside the tab (BR1.2).
+        """One page of a tab, or a search inside the tab.
 
         Raises:
             CodedError: ``LOOKUP_UNAVAILABLE`` when the index or the bodies
@@ -519,9 +516,9 @@ class SurveyExecutionManager:
             search_truncated=search_truncated,
         )
 
-    # =========================================================================
-    # 読む（BR1.3、BR2.6〜BR2.10）
-    # =========================================================================
+    # ==========================================================================
+    # Read
+    # ==========================================================================
 
     def _readable_survey(self, principal: Principal, survey_id: str) -> Survey:
         target = self._resource_lookup.get(_SURVEY, survey_id)
@@ -534,7 +531,7 @@ class SurveyExecutionManager:
         return survey
 
     def get_survey_detail(self, principal: Principal, survey_id: str) -> SurveyDetail:
-        """The survey with what the reader may do and see (BR2.7, BR2.10, BR2.11).
+        """The survey with what the reader may do and see.
 
         Raises:
             CodedError: ``SURVEY_NOT_FOUND``.
@@ -566,7 +563,7 @@ class SurveyExecutionManager:
     def deliver_result_csv(
         self, principal: Principal, survey_id: str
     ) -> DeliveryResult:
-        """Serve the result CSV after the read check (BR2.6, U4 BR3.2).
+        """Serve the result CSV after the read check.
 
         Raises:
             CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_RESULT_NOT_READY``
@@ -597,7 +594,7 @@ class SurveyExecutionManager:
     def deliver_result_image(
         self, principal: Principal, survey_id: str, image_id: str
     ) -> DeliveryResult:
-        """Serve a snapshot image after the read check (BR2.8, U4 BR3.3).
+        """Serve a snapshot image after the read check.
 
         Raises:
             CodedError: ``SURVEY_NOT_FOUND`` (unreadable survey),
@@ -633,7 +630,7 @@ class SurveyExecutionManager:
         """Whether a snapshot path is a survey image upload in this bucket.
 
         The snapshot copies the template's paths, which came from the form, so
-        only ``uploads/{owner}/survey_image/{file}`` is served (U4 review).
+        only ``uploads/{owner}/survey_image/{file}`` is served.
         """
         key = self.s3_service.key_of(file_path or "")
         parts = (key or "").split("/")
@@ -644,18 +641,18 @@ class SurveyExecutionManager:
             and all(parts)
         )
 
-    # =========================================================================
-    # 削除（BR1.8）
-    # =========================================================================
+    # ==========================================================================
+    # Delete
+    # ==========================================================================
 
     def delete_survey(self, principal: Principal, survey_id: str) -> None:
-        """Delete the body and its shares, then the CSV and the cache (BR1.8).
+        """Delete the body and its shares, then the CSV and the cache.
 
-        A running survey's execution is stopped (BR7.1; a failure is logged
+        A running survey's execution is stopped (a failure is logged
         and the delete goes on, the time limit ends the execution). A queued
-        survey leaves the queue with its body (BR7.2); an execution started
+        survey leaves the queue with its body; an execution started
         for it but not yet recorded is stopped too. The run location
-        is removed for both (BR10.1); the caller wakes the survey runner.
+        is removed for both; the caller wakes the survey runner.
 
         Raises:
             CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_OPERATION_FAILED``.
@@ -716,13 +713,13 @@ class SurveyExecutionManager:
             sleep=self._sleep,
         )
 
-    # =========================================================================
-    # フィルタ正規化（Router層から移動）
-    # =========================================================================
+    # ==========================================================================
+    # Filter normalization (moved from the Router layer)
+    # ==========================================================================
 
     @staticmethod
     def normalize_filters(raw: dict) -> Optional[dict]:
-        """フィルタJSONから空値を除去して返す。空なら None。"""
+        """Strip empty values from the filter JSON and return it. None if empty."""
         cleaned: Dict[str, Any] = {}
         for k, v in raw.items():
             if isinstance(v, dict):
@@ -732,7 +729,7 @@ class SurveyExecutionManager:
                         try:
                             range_cleaned[kk] = int(float(vv))
                         except (ValueError, TypeError):
-                            continue  # 数値変換できない値はフィルタから除外
+                            continue  # Exclude values that cannot be converted to numbers from the filter
                 if range_cleaned:
                     cleaned[k] = range_cleaned
             elif isinstance(v, list):
@@ -742,13 +739,13 @@ class SurveyExecutionManager:
                 cleaned[k] = v
         return cleaned or None
 
-    # =========================================================================
-    # バリデーション
-    # =========================================================================
+    # ==========================================================================
+    # Validation
+    # ==========================================================================
 
     @staticmethod
     def _validate_persona_count(count: int, has_images: bool = False) -> None:
-        """ペルソナ数のバリデーション（下限 10、BR1.1〜BR1.3）。"""
+        """Validate the persona count (minimum 10)."""
         minimum = MIN_SURVEY_PERSONAS
         if not isinstance(count, int) or count < minimum:
             raise SurveyExecutionValidationError(
@@ -773,36 +770,37 @@ class SurveyExecutionManager:
     def _validate_available_personas(
         self, filters: Optional[Dict[str, Any]], datasource: Optional[str]
     ) -> None:
-        """フィルタ適用後に実際に集められるペルソナ数を検証する。
+        """Validate the number of personas that can actually be gathered after filtering.
 
-        ``persona_count`` は「希望数」でしかなく、サンプリングSQLの ``LIMIT`` は
-        上限にすぎない。条件に合致する行が少なければそれだけしか集まらないため、
-        ここで実件数を確かめ、アンケートの最小人数を下回るなら作らない（BR1.2）。
+        ``persona_count`` is only the requested number, and the sampling SQL's
+        ``LIMIT`` is only an upper bound. If few rows match the conditions, only
+        that many are gathered, so the actual count is checked here and the
+        survey is not created when it falls below the minimum.
         """
         source = datasource or "nemotron"
         self._ensure_parquet_uri(source)
         try:
             available = self.batch_service.get_filtered_count(filters, source)
         except SurveyExecutionManagerError:
-            # _ensure_parquet_uri 由来のコード付き例外はそのまま通す。
+            # Pass through coded exceptions from _ensure_parquet_uri as they are.
             raise
         except Exception as e:
-            # Service層の例外・生の例外（DuckDB/S3障害）をここで自ドメインへ変換
-            # する。素通りさせると Router の except を抜けて未処理500になり、
-            # 例外文に載った S3 パスがそのまま応答に出る。
+            # Convert Service-layer exceptions and raw exceptions (DuckDB/S3 failures) into
+            # this domain here. Letting them through would escape the Router's except and
+            # become an unhandled 500, with the S3 path in the exception text shown in the response.
             logger.error("Failed to count available personas (%s)", type(e).__name__)
             raise SurveyExecutionError(
                 f"available persona count failed ({type(e).__name__})",
                 code=ErrorCode.SURVEY_OPERATION_FAILED,
             ) from e
 
-        # フィルタありなら「条件を緩める」、なしならデータセットが小さいと案内する
+        # With a filter, advise loosening the conditions; without one, say the dataset is small
         SurveyPersonaSource.require_enough(
             available, filters, SurveyExecutionValidationError
         )
 
     @staticmethod
     def generate_default_survey_name(template_name: str) -> str:
-        """デフォルトのアンケート名を生成する（テンプレート名 + 日付）。"""
+        """Generate the default survey name (template name + date)."""
         date_str = datetime.now().strftime("%Y%m%d")
         return f"{template_name} {date_str}"

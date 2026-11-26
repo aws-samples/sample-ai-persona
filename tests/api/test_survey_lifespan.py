@@ -1,11 +1,11 @@
-"""進行役のループ（web/routers/_survey_runner.py）と lifespan の API テスト。
+"""API tests for the runner loop (web/routers/_survey_runner.py) and the lifespan.
 
-- BR9.1: ステートマシンが設定されているときだけループを起こす
-- NFR1.5: 各回はスレッドで動き、イベントループを止めない
-- 同じプロセスでは回を直列にする（functional-spec.md WF2）
-- NFR4.10・R-08: 停止の順序。止まる印を立てたら、ループの回も受付・削除のあとの回も
-  新しく始めない。走っている回を最長 30 秒待ち、終わっていれば担当者の記録を手放す。
-  終わらなければ手放さずに止まる（期限切れに任せる）
+- The loop starts only when the state machine is configured
+- Each round runs in a thread and does not block the event loop
+- Rounds are serialized within one process
+- Shutdown order: once the stop flag is set, no new round starts from the loop, intake
+  or deletion. Running rounds are awaited up to 30 seconds; if finished, the holder
+  record is released. If not, it is not released and shutdown proceeds (left to expire)
 """
 
 import asyncio
@@ -52,7 +52,7 @@ class Rounds:
 
 class TestWake:
     def test_wake_returns_at_once_and_runs_a_round_in_a_thread(self):
-        """NFR1.4: 受付は進行役の回を待たない。"""
+        """Intake does not wait for a runner round."""
         hold = threading.Event()
         rounds = Rounds(hold)
         loop = SurveyRunnerLoop(rounds, Mock(return_value=True))
@@ -80,7 +80,7 @@ class TestWake:
         assert rounds.max_running == 1
 
     def test_wakes_during_a_long_round_wait_in_one_thread(self):
-        """長い回の間の起動の通知は、待つスレッド 1 本にまとまる。"""
+        """Start notifications during a long round collapse into one waiting thread."""
         hold = threading.Event()
         rounds = Rounds(hold)
         loop = SurveyRunnerLoop(rounds, Mock(return_value=True))
@@ -100,7 +100,7 @@ class TestWake:
         assert _wait_until(lambda: wake_threads() == 0)
 
     def test_a_failing_round_does_not_break_the_next(self):
-        """NFR4.15: 回の中の例外でループは止まらない。"""
+        """An exception inside a round does not stop the loop."""
         advance = Mock(side_effect=[RuntimeError("boom"), None])
         loop = SurveyRunnerLoop(advance, Mock(return_value=True))
 
@@ -114,7 +114,7 @@ class TestWake:
 
 class TestRunForever:
     def test_rounds_repeat_at_the_interval_off_the_event_loop(self):
-        """NFR1.5: 各回はスレッドで動く（イベントループのスレッドで回さない）。"""
+        """Each round runs in a thread (not on the event loop thread)."""
         threads: list[threading.Thread] = []
 
         def advance() -> None:
@@ -166,7 +166,7 @@ class TestStop:
         release.assert_called_once()
 
     def test_the_loop_runs_again_after_a_stop(self):
-        """同じプロセスで lifespan をもう一度始めても（テストの TestClient など）、回が動く。"""
+        """Rounds still run when the lifespan is started again in the same process (e.g. a test TestClient)."""
         rounds = Rounds()
         loop = SurveyRunnerLoop(rounds, Mock(return_value=True), interval_seconds=60)
 
@@ -189,7 +189,7 @@ class TestStop:
         assert woken == [True, True]
 
     def test_round_longer_than_the_wait_keeps_the_lease(self):
-        """走っている回があるうちに記録を消すと、ほかのタスクが同じ仕事を始めるため。"""
+        """Deleting the record while a round is running would let another task start the same work."""
         hold = threading.Event()
         rounds = Rounds(hold)
         release = Mock(return_value=True)
@@ -209,7 +209,7 @@ class TestStop:
 
 
 class TestLifespan:
-    """BR9.1: 設定があるときだけループを起こし、止めるときは stop を待つ。"""
+    """The loop starts only when configured, and stop is awaited on shutdown."""
 
     def test_configured_runner_loop_starts_and_stops_with_the_app(self, test_app):
         from fastapi.testclient import TestClient

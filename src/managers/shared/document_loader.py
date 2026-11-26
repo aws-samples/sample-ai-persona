@@ -1,8 +1,7 @@
-"""
-ドキュメント読み込み・ContentBlock準備ユーティリティ
+"""Shared utilities for loading documents and preparing ContentBlocks.
 
-AgentDiscussionManager, InterviewManager から共通利用される
-ドキュメント処理ロジックを集約する。
+Collects the document handling used by AgentDiscussionManager and
+InterviewManager.
 """
 
 import re
@@ -35,12 +34,12 @@ SUPPORTED_MIME_TYPES: List[str] = SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYP
 
 
 def is_supported_mime_type(mime_type: str) -> bool:
-    """MIMEタイプがサポートされているか判定する。"""
+    """Return whether the MIME type is supported."""
     return mime_type in SUPPORTED_MIME_TYPES
 
 
 def is_image_type(mime_type: str) -> bool:
-    """画像MIMEタイプか判定する。"""
+    """Return whether the MIME type is an image."""
     return mime_type in SUPPORTED_IMAGE_TYPES
 
 
@@ -48,19 +47,19 @@ def load_documents_metadata(
     document_ids: List[str],
     read_file: Callable[[str], UploadedFile],
 ) -> List[Dict[str, Any]]:
-    """
-    ドキュメントIDリストからメタデータを取得する。
+    """Fetch metadata for a list of document IDs.
 
-    U5: ``read_file`` は利用者がまだ紐付けられる資料だけを返す関数（``FileAttachments``
-    の ``attachable_file``）。使えない資料は飛ばさず、``read_file`` の例外をそのまま
-    出す（R-02: 議論を走らせる前に止める。保存時の紐付けと同じ条件）。
+    ``read_file`` returns only files the user may still attach (``FileAttachments``
+    ``attachable_file``). Unusable files are not skipped: the exception from
+    ``read_file`` propagates, so the run stops before a discussion starts (same
+    condition as when attaching at save time).
 
     Args:
-        document_ids: ドキュメントIDのリスト
+        document_ids: List of document IDs.
         read_file: file ID -> the user's attachable ``UploadedFile`` (raises otherwise)
 
     Returns:
-        メタデータ辞書のリスト。各辞書は id, filename, file_path, file_size, mime_type, uploaded_at を含む。
+        List of metadata dicts, each with id, filename, file_path, file_size, mime_type, uploaded_at.
 
     Raises:
         Exception: Whatever ``read_file`` raises for an unusable document.
@@ -87,15 +86,14 @@ def prepare_document_contents(
     documents_metadata: List[Dict[str, Any]],
     s3_service: Optional["S3Service"] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    ドキュメントメタデータからStrands Agent SDK用のContentBlockリストを準備する。
+    """Prepare a ContentBlock list for the Strands Agent SDK from document metadata.
 
     Args:
-        documents_metadata: load_documents_metadata() の返り値
-        s3_service: S3サービス（S3パスのファイル読み込みに必要）
+        documents_metadata: Return value of load_documents_metadata().
+        s3_service: S3 service (needed to read files at S3 paths).
 
     Returns:
-        Strands Agent SDK用のContentBlockリスト
+        ContentBlock list for the Strands Agent SDK.
     """
     content_list: List[Dict[str, Any]] = []
 
@@ -121,14 +119,13 @@ def prepare_document_contents(
 
 
 def build_document_context(documents_metadata: List[Dict[str, Any]]) -> Optional[str]:
-    """
-    ドキュメントメタデータから議論用のコンテキスト文字列を構築する。
+    """Build the discussion context string from document metadata.
 
     Args:
-        documents_metadata: load_documents_metadata() の返り値
+        documents_metadata: Return value of load_documents_metadata().
 
     Returns:
-        コンテキスト文字列。ドキュメントがない場合はNone。
+        Context string, or None when there are no documents.
     """
     if not documents_metadata:
         return None
@@ -148,7 +145,7 @@ def build_document_context(documents_metadata: List[Dict[str, Any]]) -> Optional
 def _read_file_bytes(
     file_path: str, s3_service: Optional["S3Service"]
 ) -> Optional[bytes]:
-    """ファイルパスからバイト列を読み込む。"""
+    """Read bytes from a file path."""
     if file_path.startswith("s3://"):
         if not s3_service:
             logger.warning(f"S3サービスが利用できません: {file_path}")
@@ -166,7 +163,7 @@ def _read_file_bytes(
 def build_content_block(
     file_bytes: bytes, mime_type: str, filename: str
 ) -> Optional[Dict[str, Any]]:
-    """MIMEタイプに応じたContentBlockを構築する。"""
+    """Build a ContentBlock according to the MIME type."""
     if mime_type.startswith("image/"):
         image_format = mime_type.split("/")[-1]
         if image_format not in ("png", "jpeg", "gif", "webp"):
@@ -220,6 +217,6 @@ def build_content_block(
 
 
 def _safe_document_name(filename: str) -> str:
-    """ファイル名から安全なドキュメント名を生成する。"""
+    """Generate a safe document name from a file name."""
     base = filename.rsplit(".", 1)[0] if "." in filename else filename
     return re.sub(r"[^a-zA-Z0-9_]", "_", base)[:100]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Find the S3 objects a survey or custom persona data delete left behind (U7, NFR1.84, NFR1.85).
+Find the S3 objects a survey or custom persona data delete left behind.
 
 Deleting a survey removes its body and shares first, then its result CSV,
 retrying three times. Deleting custom persona data removes its record (and
@@ -210,7 +210,7 @@ def _report(plan: CleanupPlan) -> list[str]:
         *[f"  {RESULTS_PREFIX}{sid}/\t{n}" for sid, n in plan.results.items()],
         f"登録情報のないカスタムデータ: {len(plan.custom_files)} 件",
         *[f"  {key}" for key in plan.custom_files],
-        # 保存の途中かもしれないため、今回は対象にしない
+        # May be mid-save, so skip it this run.
         f"書かれてから 1 時間たっていないもの: {len(plan.recent)} 件（今回は対象外）",
         *[f"  {key}" for key in plan.recent],
         f"ID の名前でないもの: {plan.skipped} 件（対象外）",

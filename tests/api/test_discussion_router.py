@@ -1,10 +1,7 @@
-"""
-議論ルーター（discussion.py）のテスト
+"""Tests for the discussion router (discussion.py).
 
-U6: Router は利用者を Manager に渡すだけで判定しない。判定は本物の Manager・
-Component（tests/api/u6_world.py）で確かめる。BR2.1〜BR2.5、BR4.1、BR4.2、
-BR5.1、BR7.5、BR9.1、NFR1.43〜NFR1.47、NFR1.53、NFR1.56、NFR4.13、AC2.1.2、
-AC2.1.3、AC4.1.1〜AC4.1.3、AC4.1.5、AC4.4.1、AC4.4.2、AC5.1.1〜AC5.1.3。
+The router only hands the user to the Manager and decides nothing. Decisions are
+checked against the real Managers and Components (tests/api/u6_world.py).
 """
 
 import json
@@ -23,7 +20,7 @@ from tests.dialog_helpers import dialog_markup
 
 #: A full-page request (the client sends ``HX-Request`` by default).
 PAGE = {"HX-Request": ""}
-#: The page's own ``fetch`` (``web/static/js/post-event-source.js``, NFR4.13).
+#: The page's own ``fetch`` (``web/static/js/post-event-source.js``).
 FETCH = {"X-Requested-With": "XMLHttpRequest"}
 #: Clears the client's default ``HX-Request``: a form posted from another site.
 NO_CUSTOM_HEADER = {"HX-Request": ""}
@@ -31,7 +28,7 @@ NO_CUSTOM_HEADER = {"HX-Request": ""}
 
 @pytest.fixture
 def aw(client):
-    """ME signed in, with the real U6 Managers behind the routers."""
+    """ME signed in, with the real Managers behind the routers."""
     ME.login(client)
     world = ApiWorld()
     with ExitStack() as stack:
@@ -48,12 +45,12 @@ def _sse(response) -> list[dict]:
 
 
 # =============================================================================
-# 設定画面・資料のアップロード（今のまま）
+# Setup screen and document upload
 # =============================================================================
 
 
 class TestDiscussionSetupPage:
-    """議論設定ページのテスト"""
+    """Discussion setup page tests."""
 
     def test_setup_page_loads(self, client):
         response = client.get("/discussion/setup")
@@ -64,7 +61,7 @@ class TestDiscussionSetupPage:
     def test_setup_page_passes_selectable_models_to_template(
         self, mock_list_selectable_models, client, monkeypatch
     ):
-        """list_selectable_models(ENABLE_ADDITIONAL_PERSONA_MODELS, INFERENCE_SCOPE) の結果を渡す（#107 R8、U5 BR5.1）"""
+        """Passes the result of list_selectable_models(ENABLE_ADDITIONAL_PERSONA_MODELS, INFERENCE_SCOPE) (#107)."""
         from src.models.model_registry import SUPPORTED_MODELS
         from web.routers import discussion
 
@@ -93,11 +90,11 @@ class TestDiscussionSetupPage:
 
 
 class TestDiscussionSetupModelsByScope:
-    """閉域対応 U5（BR5.1）: 一覧と既定の選択を推論の範囲に合わせる。"""
+    """The list and the default selection follow the inference scope."""
 
     @staticmethod
     def _options(html: str) -> list[str]:
-        # ファシリテータのモデルの select（ペルソナごとの select と同じ一覧）
+        # The facilitator model select (same list as the per-persona selects)
         select = re.search(r'name="facilitator_model".*?</select>', html, re.S)
         assert select
         return re.findall(r'<option value="([^"]+)">', select.group(0))
@@ -172,7 +169,7 @@ def _metadata(file_id: str, filename: str, mime_type: str):
 
 
 class TestDiscussionDocumentUploadEndpoint:
-    """議論用ドキュメントのアップロード（U5 のまま）"""
+    """Upload of discussion documents."""
 
     @patch("web.routers.discussion.get_file_manager")
     def test_upload_passes_the_signed_in_user(self, mock_get_manager, client):
@@ -223,7 +220,7 @@ class TestDiscussionDocumentUploadEndpoint:
     def test_upload_document_does_not_expose_internal_detail(
         self, mock_get_manager, client
     ):
-        """内部例外の詳細がレスポンスに出ないことを確認（#112）"""
+        """Internal exception details do not appear in the response (#112)."""
         from src.managers.file_manager import FileUploadError
 
         mock_get_manager.return_value.upload_discussion_document.side_effect = (
@@ -244,7 +241,7 @@ class TestDiscussionDocumentUploadEndpoint:
 
 
 # =============================================================================
-# 一覧（BR2.1〜BR2.3、NFR1.43、AC4.1.1）
+# List
 # =============================================================================
 
 
@@ -295,7 +292,7 @@ class TestResultsList:
         assert "価格の見直しについて" not in interviews
 
     def test_mode_filter_with_an_empty_page_still_offers_more(self, aw, client):
-        """種類で絞って 1 回の読み取りで見つからなくても、「もっと見る」で古い結果へ進める。"""
+        """When filtering by kind finds nothing in one read, "load more" still reaches older results."""
         import re
 
         from src.managers import discussion_manager as dm
@@ -320,7 +317,7 @@ class TestResultsList:
         assert "古いインタビュー" in rest
 
     def test_mode_filter_that_finds_nothing_to_the_end_removes_more(self, aw, client):
-        """最後まで読んでも該当がなければ、「もっと見る」を消して終わりを示す。"""
+        """If nothing matches after reading to the end, "load more" is removed to show the end."""
         import re
 
         from src.managers import discussion_manager as dm
@@ -344,7 +341,7 @@ class TestResultsList:
         assert "もっと見る" not in last
 
     def test_mode_filter_counts_the_matches_not_the_tab(self, aw, client):
-        """種類で絞ったら、件数の表示はタブ全体ではなく該当の数にする。"""
+        """When filtering by kind, the count shows the matching number, not the whole tab."""
         aw.discussion(topic="インタビューの記録", mode="interview")
         aw.discussion(topic="議論の記録1")
         aw.discussion(topic="議論の記録2")
@@ -389,7 +386,7 @@ class TestResultsList:
 
 
 # =============================================================================
-# 詳細・部分表示・資料・エクスポート（BR2.4、BR5.1、BR7.3、BR9.1、NFR1.44）
+# Detail, partial views, documents and export
 # =============================================================================
 
 
@@ -411,7 +408,7 @@ class TestDetail:
         assert "data-share-url" not in html
         assert "regenerate-insights-dialog-open-button" not in html
         assert "var reportManageable = false;" in html
-        # 読める人はエクスポートできる
+        # Anyone who can read can export
         assert f"/discussion/{discussion.id}/export" in html
 
     def test_unrelated_user_gets_not_found_everywhere(self, aw, client):
@@ -486,7 +483,7 @@ class TestDetail:
     def test_documents_link_to_the_app_route_in_both_modes(
         self, aw, client, monkeypatch, mode
     ):
-        """閉域対応 U4 BR4.2: img の src と a の href はアプリのルート（S3 の URL を出さない）"""
+        """img src and a href are app routes (no S3 URL is exposed)."""
         from src.config import config
         from src.models.discussion import DocumentRef
 
@@ -543,10 +540,10 @@ def _same_shape(response, resource_id: str) -> tuple:
 
 
 class TestMissingLooksLikeUnreadable:
-    """存在しない ID と読めない ID で応答がまったく同じ（NFR1.56、BR2.7、約束 C5）。
+    """A nonexistent ID and an unreadable ID get exactly the same response.
 
-    状態コードだけでなく、トースト（``HX-Trigger``）・種類・本文を、ID の文字を
-    同じ値に置き換えてから比べる。Build and Test の Loop-back 1 で足した。
+    Not only the status code: the toast (``HX-Trigger``), kind and body are
+    compared after replacing the ID characters with the same value.
     """
 
     @pytest.mark.parametrize(
@@ -587,7 +584,7 @@ class TestMissingLooksLikeUnreadable:
 
 
 class TestDocumentRoute:
-    """閉域対応 U4 BR3.5、BR4.1、BR4.4: GET /discussion/{id}/documents/{doc_id}"""
+    """GET /discussion/{id}/documents/{doc_id}."""
 
     def _with_pdf(self, aw, discussion):
         from src.models.discussion import DocumentRef
@@ -683,7 +680,7 @@ class TestExport:
 
 
 # =============================================================================
-# 開始（BR2.8、BR7.5、NFR1.46、M12）
+# Start
 # =============================================================================
 
 
@@ -765,7 +762,7 @@ class TestStart:
 
 
 class TestStream:
-    """The live discussion starts only from a CSRF-checked POST (NFR4.13)."""
+    """The live discussion starts only from a CSRF-checked POST."""
 
     def _form(self, **extra):
         form = {
@@ -776,14 +773,14 @@ class TestStream:
         return form
 
     def test_get_does_not_start_a_discussion(self, aw, client):
-        # <img src> や リンクの遷移（GET）からは始められない
-        # GET の入口はない（``/{discussion_id}`` に当たって 404 になる）
+        # Cannot be started from <img src> or a link navigation (GET)
+        # There is no GET entry point (it hits ``/{discussion_id}`` and returns 404)
         response = client.get("/discussion/stream", params=self._form())
         assert response.status_code in (404, 405)
         aw.ai.facilitate_discussion_streaming.assert_not_called()
 
     def test_post_without_the_custom_header_is_refused(self, aw, client):
-        # 他サイトのフォーム送信はカスタムヘッダーを付けられない
+        # A form submitted from another site cannot add a custom header
         response = client.post(
             "/discussion/stream", data=self._form(), headers=NO_CUSTOM_HEADER
         )
@@ -831,7 +828,7 @@ class TestStream:
 
 
 # =============================================================================
-# 管理できる人だけの操作（BR2.5、BR4.2、NFR1.45）
+# Operations only for those who can manage
 # =============================================================================
 
 
@@ -899,7 +896,7 @@ class TestManageOnly:
     def test_a_failed_report_change_is_a_toast(
         self, aw, client, monkeypatch, operation
     ):
-        """再試行で直る失敗は、画面を書き換えずにトーストで知らせる（error-catalog.md）。"""
+        """A failure fixed by retrying is reported by a toast without rewriting the screen (error-catalog.md)."""
         discussion = aw.discussion()
         report = aw.world.records.save_report(
             ME.principal(), discussion.id, "summary", "内容", None
@@ -923,7 +920,7 @@ class TestManageOnly:
     def test_a_correctable_report_error_reaches_the_screen(
         self, aw, client, monkeypatch, operation
     ):
-        """直せる失敗の 400 の本文は mark_renderable の印付き（htmx が差し替える）。"""
+        """The 400 body of a fixable failure is marked with mark_renderable (htmx swaps it in)."""
         discussion = aw.discussion()
         report = aw.world.records.save_report(
             ME.principal(), discussion.id, "summary", "内容", None
@@ -968,14 +965,14 @@ class TestManageOnly:
             f"/discussion/{discussion.id}/report/save",
             data={"template_type": "summary", "content": "4件目"},
         )
-        # 入力したレポートは消さず、プレビューのまま保存できなかったことを示す
+        # The typed report is kept; the preview shows that it was not saved
         assert response.status_code == 200
         assert "4件目" in response.text
         assert "data-report-save-error" in response.text
         assert aw.world.store.bodies[discussion.id]["report_count"] == 3
 
     def test_invalid_template_on_a_missing_discussion_is_not_rendered(self, aw, client):
-        # 存在しない議論では、不正なテンプレート種別でも入力をプレビューに描画しない
+        # For a missing discussion, an invalid template type must not render the input in the preview
         response = client.post(
             "/discussion/no-such-discussion/report/save",
             data={"template_type": "__nope__", "content": "PREVIEW-MARKER"},
@@ -985,7 +982,7 @@ class TestManageOnly:
 
 
 # =============================================================================
-# レポートの参照・生成（BR4.1、BR4.3）
+# Viewing and generating reports
 # =============================================================================
 
 
@@ -1014,7 +1011,7 @@ class TestReports:
     def test_generate_starts_only_from_a_checked_post(self, aw, client):
         discussion = aw.discussion()
         url = f"/discussion/{discussion.id}/report/generate"
-        # GET の入口はない（``/{id}/report/{report_id}`` に当たって 404 になる）
+        # There is no GET entry point (it hits ``/{id}/report/{report_id}`` and returns 404)
         assert client.get(url).status_code in (404, 405)
         refused = client.post(url, headers=NO_CUSTOM_HEADER)
         assert refused.status_code == 403
@@ -1071,7 +1068,7 @@ class TestReports:
 
 
 # =============================================================================
-# 閉域対応 U3: データに基づくレポート（BR3.2 の 5、BR3.7）
+# Data-based reports
 # =============================================================================
 
 

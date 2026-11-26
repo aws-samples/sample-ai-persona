@@ -1,9 +1,9 @@
-"""SurveyBatchService の DuckDB 並行アクセス安全性テスト（Issue #118）。
+"""Concurrency safety tests for SurveyBatchService's DuckDB access (Issue #118).
 
-このサービスはシングルトンで、Router が ThreadPoolExecutor 上から並行に
-クエリを投げる。キャッシュした単一の DuckDBPyConnection を複数スレッドで同時に
-execute すると、結果の混線や `IndexError`（空結果）、プロセスクラッシュが起きる。
-`_query_duckdb` がスレッドごとに `cursor()` を発行して実行を分離することを検証する。
+The service is a singleton, and the Router queries it concurrently from a
+ThreadPoolExecutor. Running execute on one cached DuckDBPyConnection from several
+threads at once mixes up results, gives `IndexError` (empty result) or crashes the
+process. Verifies that `_query_duckdb` issues a `cursor()` per thread to isolate execution.
 """
 
 import threading
@@ -16,7 +16,7 @@ from src.services.survey_batch_service import SurveyBatchService
 
 @pytest.fixture
 def service_with_local_parquet(tmp_path):
-    """ローカルParquetをVIEWに登録済みの SurveyBatchService を返す（S3不要）。"""
+    """Return a SurveyBatchService with a local Parquet registered as a VIEW (no S3 needed)."""
     parquet = tmp_path / "personas.parquet"
     pl.DataFrame({"age": range(200_000), "persona": ["p"] * 200_000}).write_parquet(
         parquet
@@ -24,8 +24,8 @@ def service_with_local_parquet(tmp_path):
 
     svc = SurveyBatchService(bucket_name="b", region_name="ap-northeast-1")
 
-    # _get_duckdb_conn は S3 認証を張るため、テストではローカルParquetを
-    # VIEW 登録した接続を直接キャッシュに差し込む（並行実行の検証が目的）。
+    # _get_duckdb_conn sets up S3 auth, so the tests put a connection with a local Parquet
+    # registered as a VIEW straight into the cache (the goal is to check concurrent execution).
     import duckdb
 
     conn = duckdb.connect(":memory:")
@@ -38,10 +38,10 @@ def service_with_local_parquet(tmp_path):
 
 @pytest.mark.unit
 def test_concurrent_queries_do_not_corrupt_results(service_with_local_parquet):
-    """8スレッドが同一接続へ同時にクエリしても、混線・空結果・例外が起きない。
+    """Eight threads querying one connection at once see no mixing, empty results or exceptions.
 
-    修正前（接続を直接 execute）はこの構成で `IndexError` や結果の取り違えが
-    再現する。cursor() 分離により各スレッドが独立して正しい件数を得る。
+    Before the fix (executing on the connection directly) this setup reproduced `IndexError`
+    and swapped results. With cursor() isolation each thread gets the correct count.
     """
     svc = service_with_local_parquet
     errors: list[str] = []
@@ -56,7 +56,7 @@ def test_concurrent_queries_do_not_corrupt_results(service_with_local_parquet):
                     datasource="nemotron",
                 )
                 results.append((threshold, int(df["cnt"][0])))
-        except Exception as e:  # noqa: BLE001 - 失敗を集約して可視化する
+        except Exception as e:  # noqa: BLE001 - collect failures so they surface
             errors.append(f"{type(e).__name__}: {e}")
 
     thresholds = [i * 1000 for i in range(8)]
@@ -67,7 +67,7 @@ def test_concurrent_queries_do_not_corrupt_results(service_with_local_parquet):
         t.join()
 
     assert errors == [], f"並行実行で例外が発生した: {errors[:3]}"
-    # 各スレッドの期待値は 200000 - threshold。混線していれば一致しない。
+    # each thread expects 200000 - threshold; a mismatch means results got mixed up
     mismatched = [(t, c) for t, c in results if c != 200_000 - t]
     assert mismatched == [], f"結果が混線した: {mismatched[:5]}"
     assert len(results) == 8 * 30
@@ -75,18 +75,18 @@ def test_concurrent_queries_do_not_corrupt_results(service_with_local_parquet):
 
 @pytest.mark.unit
 def test_cursor_inherits_view_and_is_independent(service_with_local_parquet):
-    """発行したカーソルが VIEW を継承し、接続本体と独立していること。"""
+    """The issued cursor inherits the VIEW and is independent of the connection itself."""
     svc = service_with_local_parquet
     cursor = svc._acquire_cursor("nemotron")
-    # VIEW が見える（接続の状態を継承している）
+    # the VIEW is visible (the cursor inherits the connection state)
     total = cursor.execute("SELECT count(*) FROM personas").fetchone()[0]
     assert total == 200_000
-    # 別カーソルは独立
+    # a separate cursor is independent
     other = svc._acquire_cursor("nemotron")
     assert other is not cursor
 
 
-# --- U7: カスタムペルソナデータは ID のキーで読む（BR4.3、NFR1.82） ---
+# --- Custom persona data is read by ID key ---
 
 
 def _connect_spy(monkeypatch):

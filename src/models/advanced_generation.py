@@ -1,9 +1,9 @@
-"""One advanced generation (beta) and its items (contract C5, entities.md).
+"""One advanced generation (beta) and its items.
 
 The ``AdvancedGenerations`` table holds, under one partition per generation,
 the generation itself, its progress events and the parts of a large result;
 a separate partition per owner holds the lock that allows one running
-generation per user (BR7.5). This module defines the plain values; the keys
+generation per user. This module defines the plain values; the keys
 and conditional writes live in ``AdvancedGenerationStore``.
 """
 
@@ -18,23 +18,23 @@ from typing import Any, Mapping, Sequence
 from ._advanced_common import drop_none, epoch, iso, parse_dt, parse_optional_dt
 from .analysis import AnalysisPlan, AnalysisRun, DocumentMode
 
-#: Version of the stored items (contract C5).
+#: Version of the stored items.
 SCHEMA_VERSION = 1
-#: Personas per generation (BR5.5).
+#: Personas per generation.
 PERSONA_COUNT_MIN = 1
 PERSONA_COUNT_MAX = 10
-#: Longest instruction (entities.md AdvancedGeneration.purpose).
+#: Longest instruction.
 PURPOSE_MAX_CHARS = 2000
-#: Source files per generation (U1 uses one, BR5.8; the shape allows ten).
+#: Source files per generation (the shape allows ten).
 SOURCE_FILES_MAX = 10
-#: Longest event summary (no row data or text goes in, NFR3).
+#: Longest event summary (no row data or text goes in).
 EVENT_SUMMARY_MAX_CHARS = 500
 
 
 class GenerationStatus(StrEnum):
-    """States of a generation (functional-spec.md §3, U5 functional-spec.md §1).
+    """States of a generation.
 
-    U5: ``awaiting_plan_approval`` sits between ``planning`` and ``running``
+    ``awaiting_plan_approval`` sits between ``planning`` and ``running``
     when the user asked to confirm the plan; every running state and the wait
     may move to ``cancelled``.
     """
@@ -61,19 +61,19 @@ _TERMINAL = frozenset(
 
 
 class EventType(StrEnum):
-    """Kinds of stored progress events (contract C3 / C5)."""
+    """Kinds of stored progress events."""
 
     STAGE = "stage"
     PROGRESS = "progress"
     PLAN = "plan"
     RESULT = "result"
     ERROR = "error"
-    #: U5 BR31.2: the generation was cancelled (no payload)
+    #: The generation was cancelled (no payload)
     CANCELLED = "cancelled"
 
 
 class ControlAction(StrEnum):
-    """What a control request asks of a running generation (ADR-009)."""
+    """What a control request asks of a running generation."""
 
     CANCEL = "cancel"
     APPROVE = "approve"
@@ -86,7 +86,7 @@ READING_KINDS = ("people", "history")
 
 @dataclass(frozen=True)
 class TableReading:
-    """How one prepared table is read (U6 addendum; shown on the plan card).
+    """How one prepared table is read (shown on the plan card).
 
     The system proposes it from the column profile and the user may correct
     it before the analysis starts; what was confirmed is trusted afterwards.
@@ -165,7 +165,7 @@ class TableReading:
 
 @dataclass(frozen=True)
 class ControlRequest:
-    """One pending request on a generation (``control_request``, entities.md).
+    """One pending request on a generation (``control_request``).
 
     Attributes:
         action: One of :class:`ControlAction`.
@@ -215,31 +215,31 @@ class ControlRequest:
 
 
 def _default_options() -> dict[str, Any]:
-    # U6 BR35.2: ``use_detailed_analysis`` is decided at the start and kept
+    # ``use_detailed_analysis`` is decided at the start and kept
     return {"confirm_plan": False, "use_detailed_analysis": False}
 
 
 class ResultPartName(StrEnum):
-    """Lists of a large result written as separate items (contract C5)."""
+    """Lists of a large result written as separate items."""
 
     PREPARE_REPORTS = "prepare_reports"
     SEGMENTS = "segments"
     EVIDENCE = "evidence"
-    #: U4: one DocumentReport per document (C8)
+    #: One DocumentReport per document
     DOCUMENT_REPORTS = "document_reports"
 
 
 @dataclass(frozen=True)
 class AdvancedGeneration:
-    """One advanced generation (the ``GENERATION`` item of contract C5).
+    """One advanced generation (the ``GENERATION`` item).
 
     Attributes:
         generation_id: UUID.
         owner_sub: The user who started it; every read checks it.
         status: One of :class:`GenerationStatus`.
-        source_file_ids: The owner's ready tables (one in U1).
+        source_file_ids: The owner's ready tables.
         purpose: The instruction (may be empty).
-        persona_count: Personas to make (1〜10).
+        persona_count: Personas to make (1 to 10).
         created_at: Start time.
         expires_at: TTL in epoch seconds (48 hours from creation, rewritten to
             24 hours from finishing).
@@ -254,23 +254,22 @@ class AdvancedGeneration:
             exception text.
         finished_at: When it ended.
         document_mode: ``full_text`` or ``extraction`` when documents are used
-            (U4 BR25.2, decided right after the preparation).
+            (decided right after the preparation).
         evidence_stats: ``{extracted, discarded_unverified}`` of the document
-            evidence (U4 BR27.1).
-        options: ``{confirm_plan, use_detailed_analysis}`` chosen at the start
-            (U5 BR29.1, U6 BR35.2).
-        control_request: The pending cancel / approve / replan (U5 BR29.3,
-            BR31.1); removed once the run takes it.
+            evidence.
+        options: ``{confirm_plan, use_detailed_analysis}`` chosen at the start.
+        control_request: The pending cancel / approve / replan; removed once
+            the run takes it.
         awaiting_since: When the current plan card was shown (only while
-            ``awaiting_plan_approval``, U5 BR29.5).
+            ``awaiting_plan_approval``).
         waited_seconds: Seconds spent waiting for plan approvals; they move
-            the 60-minute deadline back (U5 BR29.6).
-        replan_count: How many times the plan was made again (U5 BR29.4).
+            the 60-minute deadline back.
+        replan_count: How many times the plan was made again.
         original_purpose: The first instruction, kept at the first replan.
-        session_id: The sandbox session, so a reader can stop it (U5 BR32.4).
+        session_id: The sandbox session, so a reader can stop it.
             Never shown on the screen.
         data_reading: How each table is read, as proposed and then as the user
-            confirmed it (U6 addendum).
+            confirmed it.
     """
 
     generation_id: str
@@ -361,12 +360,12 @@ class AdvancedGeneration:
 
     @property
     def confirm_plan(self) -> bool:
-        """Whether the run stops for the user's plan approval (U5 BR29.1)."""
+        """Whether the run stops for the user's plan approval."""
         return bool(self.options.get("confirm_plan"))
 
     @property
     def use_detailed_analysis(self) -> bool:
-        """Whether AI-written code may run, decided at the start (U6 BR35.2)."""
+        """Whether AI-written code may run, decided at the start."""
         return bool(self.options.get("use_detailed_analysis"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -505,7 +504,7 @@ class AdvancedGeneration:
 
 @dataclass(frozen=True)
 class GenerationEvent:
-    """One stored progress event (contract C5 event_item; the SSE ``id``).
+    """One stored progress event (the SSE ``id``).
 
     Attributes:
         generation_id: The generation.
@@ -570,7 +569,7 @@ class GenerationEvent:
 
 @dataclass(frozen=True)
 class OwnerLock:
-    """One running generation per user (contract C5 owner_lock_item, BR7.5).
+    """One running generation per user (the owner lock item).
 
     Attributes:
         owner_sub: The user.
@@ -603,12 +602,12 @@ class OwnerLock:
 
 @dataclass(frozen=True)
 class ResultPart:
-    """One slice of a large result list (contract C5 part_item).
+    """One slice of a large result list.
 
     Attributes:
         name: One of :class:`ResultPartName`.
         index: 0, 1, 2 ... within the name.
-        items: ``to_dict()`` values of the C8 models.
+        items: ``to_dict()`` values of the analysis models.
     """
 
     name: ResultPartName

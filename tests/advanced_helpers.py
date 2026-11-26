@@ -1,6 +1,6 @@
-"""Shared moto set-up of the advanced generation (beta) Manager tests (U1).
+"""Shared moto set-up of the advanced generation (beta) Manager tests.
 
-The tables are made with the same keys and GSI as the CDK (contracts C4, C5).
+The tables are made with the same keys and GSI as the CDK.
 """
 
 from __future__ import annotations

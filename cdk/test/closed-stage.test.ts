@@ -22,23 +22,23 @@ import {
 import { exportedRef, exportTargets, flattenReference, pathOf } from './template-paths';
 
 /**
- * 閉域構成の構成部品（U1 閉域、BR3〜BR6、NFR1・NFR3・NFR4）の検査。
+ * Checks of the closed-network components.
  *
- * 構成部品は 1 つのスタックに単独で置いて確かめる。Stage としての組み立て（Data・App の
- * 結線、SG の結線、環境変数）は下の「閉域の Stage」の節で確かめる。
+ * Each component is placed alone in a single stack. The assembly as a Stage (Data and App
+ * wiring, SG wiring, environment variables) is checked in the "closed Stage" section below.
  */
 
 jest.setTimeout(120_000);
 
-/** 閉域のタスクにだけ足す U3 の環境変数（BR5.1）。 */
+/** Environment variables added only to the closed task. */
 const CLOSED_FEATURE_KEYS = ['NEMOTRON_SOURCE', 'NEMOTRON_DATASET_KEY', 'DATA_AGENT_ALLOWED', 'ASSET_DELIVERY'];
 
-/** Bedrock 系のインターフェイス型エンドポイントを提供する AZ（infrastructure-design レビュー R-05）。 */
+/** AZs that offer the Bedrock-related interface endpoints. */
 const BEDROCK_ENDPOINT_AZS = ['ap-northeast-1a', 'ap-northeast-1c', 'ap-northeast-1d'];
 
 /**
- * U1 のインターフェイス型エンドポイント 10 種（NFR3.7）。アンケートを Step Functions に移したため、
- * bedrock（コントロールプレーン）を外して states を足した（FR8.4、FR9.1、NFR6.1）。
+ * The 10 interface endpoints. The survey moved to Step Functions, so
+ * bedrock (control plane) was dropped and states was added.
  */
 const INTERFACE_ENDPOINTS = [
   'bedrock-agent-runtime',
@@ -52,7 +52,7 @@ const INTERFACE_ENDPOINTS = [
   'secretsmanager',
   'states',
 ];
-/** 検証用 EC2 を作るときだけのエンドポイント（BR6.1）。 */
+/** Endpoints created only when the verification EC2 is created. */
 const VALIDATION_ENDPOINTS = ['ec2messages', 'ssm', 'ssmmessages'];
 
 function newStack(region: string = REGION): cdk.Stack {
@@ -75,7 +75,7 @@ function endpointNames(template: Template, type: 'Interface' | 'Gateway'): strin
   return Object.values(template.findResources('AWS::EC2::VPCEndpoint'))
     .filter((e) => e.Properties.VpcEndpointType === type)
     .map((e) => {
-      // ゲートウェイ型の名前は Fn::Join と Ref AWS::Region で出る
+      // Gateway-type names are rendered with Fn::Join and Ref AWS::Region
       const name = e.Properties.ServiceName;
       const text =
         typeof name === 'string'
@@ -365,7 +365,7 @@ describe('ValidationEnvironment（BR6.2、NFR1.4、NFR3.5）', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 閉域の Stage（BR2.1、BR3.3〜BR3.6、BR4.4、BR5.3〜BR5.5、NFR1.1、NFR3.2・NFR3.6、NFR4.4・NFR4.5）
+// Closed Stage
 // ---------------------------------------------------------------------------
 
 const CLOSED = 'AIPersonaDevClosed';
@@ -473,7 +473,7 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
       PASSWORD_REQUIRE_DIGITS: String(PASSWORD_POLICY.requireDigits),
       PASSWORD_REQUIRE_SYMBOLS: String(PASSWORD_POLICY.requireSymbols),
     });
-    // ログインに要るほかの値は公開と同じく渡す（アプリの _ADMIN_API_REQUIRED_SETTINGS）
+    // Other values needed for login are passed as in the public Stage (the app's _ADMIN_API_REQUIRED_SETTINGS)
     for (const name of ['COGNITO_USER_POOL_ID', 'COGNITO_CLIENT_ID', 'SESSIONS_TABLE_NAME']) {
       expect(env).toHaveProperty(name);
     }
@@ -486,9 +486,9 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
     const closedEnv = environmentOf(appStack);
     const authKeys = ['AUTH_MODE', 'COGNITO_DOMAIN'];
     const passwordKeys = Object.keys(closedEnv).filter((k) => k.startsWith('PASSWORD_'));
-    // U3 の閉域だけの値（NEMOTRON_SOURCE など）は下の別のテストで確かめる
+    // Closed-only values (NEMOTRON_SOURCE etc.) are checked in a separate test below
     const closedOnly = [...passwordKeys, ...CLOSED_FEATURE_KEYS];
-    // 公開だけの値: Managed Login のドメインと、高度な生成の Code Interpreter（閉域では作らない、BR1.4）
+    // Public-only values: the Managed Login domain and the advanced-generation Code Interpreter (not created in the closed Stage)
     const publicOnly = ['COGNITO_DOMAIN', 'CODE_INTERPRETER_ID'];
     expect(Object.keys(closedEnv).filter((k) => !closedOnly.includes(k)).sort()).toEqual(
       Object.keys(publicEnv).filter((k) => !publicOnly.includes(k)).sort(),
@@ -520,7 +520,7 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
     expect(environmentOf(synthPublic().templates.App)).not.toHaveProperty('ASSET_DELIVERY');
   });
 
-  // 高度な生成（ベータ、U1、FR2.5、BR1.4）: 閉域では出さない
+  // Advanced generation (beta): not exposed in the closed Stage
   test('高度な生成: ENABLE_ADVANCED_GENERATION=false で、CODE_INTERPRETER_ID を渡さない。公開は true', () => {
     const env = environmentOf(appStack);
     expect(env.ENABLE_ADVANCED_GENERATION).toBe('false');
@@ -622,7 +622,7 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
     const taskSg = service.Properties.NetworkConfiguration.AwsvpcConfiguration.SecurityGroups[0]['Fn::GetAtt'][0];
 
     const endpoints = Object.keys(resources).filter((id) => resources[id].Type === 'AWS::EC2::VPCEndpoint');
-    // タスクの SG が片側にある SG どうしのルール（エンドポイントへの 443、ゲートウェイ型への 443）
+    // Rules between SGs where the task SG is on one side (443 to endpoints, 443 to gateway-type)
     const taskRules = Object.keys(resources).filter((id) => {
       const r = resources[id];
       if (r.Type !== 'AWS::EC2::SecurityGroupIngress' && r.Type !== 'AWS::EC2::SecurityGroupEgress') return false;
@@ -678,7 +678,7 @@ describe('閉域の Stage（検証用 EC2 なし・許可 CIDR 2 つ）', () => 
   });
 });
 
-/** `bedrock:InvokeModel` を持つ文の、ロールの論理 ID の接頭辞 → Resource の一覧。 */
+/** List of role logical-ID prefix to Resource for statements that have `bedrock:InvokeModel`. */
 function invokeModelResources(template: Template): Record<string, string[]> {
   const result: Record<string, string[]> = {};
   for (const policy of Object.values(template.findResources('AWS::IAM::Policy'))) {
@@ -792,8 +792,7 @@ describe('閉域の Nemotron のキー（コンテキスト closedNemotronDatase
 });
 
 // ---------------------------------------------------------------------------
-// 閉域のネットワークの仕上げ（閉域対応 U2: BR1.1、BR1.4、BR1.6、BR1.7、BR1.9、BR2.2〜BR2.4、
-// BR3.1、BR3.4、BR3.5、BR4.1）
+// Closed-network finishing touches
 // ---------------------------------------------------------------------------
 
 /** Every VPC endpoint of a template, keyed by the short service name. */
@@ -841,18 +840,18 @@ function endpointServicesOf(action: string): string[] | undefined {
     case 'bedrock':
       if (name.startsWith('InvokeModel')) return ['bedrock-runtime'];
       if (name === 'Retrieve') return ['bedrock-agent-runtime'];
-      // GetFoundationModel・GetInferenceProfile は InvokeModel と同じ文に残るコントロールプレーンの
-      // 操作で、アプリのコードは呼ばない。bedrock のエンドポイントは外した（FR8.4、基盤設計 Q1 の A）
+      // GetFoundationModel and GetInferenceProfile stay in the same statement as InvokeModel; they are
+      // control-plane operations the app code never calls. The bedrock endpoint was removed
       return CONTROL_PLANE_ACTIONS_NOT_CALLED.includes(action) ? [] : undefined;
     case 'states':
-      // アンケートの実行の開始・確認・停止（FR9.1、NFR6.1）
+      // Start, check and stop of survey executions
       return ['states'];
     default:
       return undefined;
   }
 }
 
-/** Services the 12 endpoints do not cover (BR1.4: excluded from the coverage check). */
+/** Services the 12 endpoints do not cover (excluded from the coverage check). */
 const NOT_THROUGH_ENDPOINTS = ['kms'];
 /** Bedrock control plane actions on the task role that the app never calls (no endpoint). */
 const CONTROL_PLANE_ACTIONS_NOT_CALLED = ['bedrock:GetFoundationModel', 'bedrock:GetInferenceProfile'];
@@ -869,7 +868,7 @@ function roleStatements(template: Template): { role: string; statement: Template
   });
 }
 
-/** `<role> <action> <resource>` of every grant that no corresponding endpoint policy allows (BR1.4). */
+/** `<role> <action> <resource>` of every grant that no corresponding endpoint policy allows. */
 function uncoveredGrants(template: Template): string[] {
   const endpoints = endpointsByService(template);
   const missing: string[] = [];
@@ -1035,7 +1034,7 @@ describe('インターフェイス型エンドポイントの AZ の数（閉域
     }
     expect(placement.serviceSubnets).toEqual(both);
     expect(placement.albSubnets).toEqual(both);
-    // 検証用 EC2 は今も先頭のサブネット（2 から 1 にしても置き換わらない）
+    // The verification EC2 stays in the first subnet (it is not replaced when going from 2 to 1)
     expect(placement.instanceSubnet).toEqual(subnets[firstAz]);
   });
 

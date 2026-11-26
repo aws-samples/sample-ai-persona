@@ -1,6 +1,6 @@
-"""Manual E2E of the advanced generation (beta) thin slice (U1, US5.1, US10.2, NFR9.4).
+"""Manual E2E of the advanced generation (beta) thin slice.
 
-What only real AWS can show (team.md Testing Posture): the multipart upload
+What only real AWS can show: the multipart upload
 with presigned part URLs and the bucket CORS (ETag), the head inspection, the
 Code Interpreter session (no execution role, presigned download) and the
 models, then saving a candidate and its analysis record.
@@ -32,9 +32,9 @@ from tests.e2e.conftest import DATA_DIR, CreatedRecords
 
 SAMPLE_CSV = DATA_DIR / "advanced_sample.csv"
 PERSONA_COUNT = 2
-# Upload, completion and the head inspection (BR3.1: within a few seconds).
+# Upload, completion and the head inspection (within a few seconds).
 INSPECT_TIMEOUT_MS = 3 * 60 * 1000
-# The generation's own limit is 60 minutes (NFR5.14); wait a little longer.
+# The generation's own limit is 60 minutes ; wait a little longer.
 GENERATION_TIMEOUT_MS = 65 * 60 * 1000
 # Longer than Code Interpreter's default session timeout (900 seconds).
 SESSION_CHECK_WAIT_SECONDS = 16 * 60
@@ -61,7 +61,7 @@ def _open_advanced_page(page: Page) -> None:
 
 def _upload_sample(page: Page) -> Locator:
     page.get_by_test_id("advanced-file-input").set_input_files(SAMPLE_CSV)
-    # U2: earlier uploads of the same name stay listed ("(2)", "(3)"); the new
+    # Earlier uploads of the same name stay listed ("(2)", "(3)"); the new
     # row is put first
     row = (
         page.get_by_test_id("advanced-upload-row")
@@ -106,13 +106,13 @@ def test_upload_generate_save_and_badge(
     result = page.get_by_test_id("advanced-result")
     candidates = result.get_by_test_id("advanced-candidate")
     expect(candidates).to_have_count(PERSONA_COUNT)
-    # Shares come from the tool output and are written as text (BR8.4)
+    # Shares come from the tool output and are written as text
     expect(result.get_by_test_id("advanced-share-badge").first).to_contain_text(
         "全体の"
     )
     expect(result.get_by_test_id("advanced-segment-row").first).to_be_visible()
 
-    # The analysis record opens before saving (US10.2)
+    # The analysis record opens before saving
     result.get_by_role("button", name="分析の詳細").click()
     expect(page.get_by_test_id("advanced-record")).to_be_visible()
     page.keyboard.press("Escape")
@@ -141,9 +141,8 @@ def test_code_interpreter_session_outlives_15_minutes() -> None:
     """The session opened with the app's lifetime is still usable after 16 minutes.
 
     Code Interpreter's default session timeout is 900 seconds; the app asks for
-    ``ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS`` (7800 since U5: 60 minutes
-    of work and 60 of plan waits) so the generation keeps its session (NFR5.10,
-    NFR5.50). Also shows that a session opens on
+    ``ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS`` (7800: 60 minutes
+    of work and 60 of plan waits) so the generation keeps its session. Also shows that a session opens on
     the Code Interpreter without an execution role.
     """
     code_interpreter_id = os.environ.get("E2E_CODE_INTERPRETER_ID", "").strip()
@@ -174,9 +173,9 @@ def test_code_interpreter_session_outlives_15_minutes() -> None:
         sandbox.stop_session(session)
 
 
-# --- U2: 使い回し・削除・二重の確定（cicd-pipeline.md §3） -----------------------
-# Real S3 only: the copy onto the same key before the preparation (BR13.4), the
-# deletion of every version (BR14.1) and the completion of one upload twice.
+# --- Reuse, deletion and double completion ---------------------------------
+# Real S3 only: the copy onto the same key before the preparation, the
+# deletion of every version and the completion of one upload twice.
 
 
 def _source_id(row: Locator) -> str:
@@ -200,7 +199,7 @@ def _delete_row(page: Page, source_file_id: str) -> None:
 def test_a_file_is_used_again_without_uploading_it_again(
     session_context: BrowserContext, run_tag: str
 ) -> None:
-    """US4.1: the same file runs two generations; its expiry is shown and kept."""
+    """The same file runs two generations; its expiry is shown and kept."""
     page = session_context.new_page()
     _open_advanced_page(page)
     source_file_id = _source_id(_upload_sample(page))
@@ -224,7 +223,7 @@ def test_a_file_is_used_again_without_uploading_it_again(
 def test_a_file_in_use_cannot_be_deleted_and_a_free_one_is_gone(
     session_context: BrowserContext, run_tag: str
 ) -> None:
-    """US4.2: no deletion while a generation runs; afterwards the row goes away."""
+    """No deletion while a generation runs; afterwards the row goes away."""
     page = session_context.new_page()
     _open_advanced_page(page)
     source_file_id = _source_id(_upload_sample(page))
@@ -262,7 +261,7 @@ def test_a_file_in_use_cannot_be_deleted_and_a_free_one_is_gone(
 def test_completing_twice_gives_both_tabs_the_same_result(
     session_context: BrowserContext,
 ) -> None:
-    """US2.4 (AC2.4.2): a second completion answers 200 with the same row."""
+    """A second completion answers 200 with the same row."""
     page = session_context.new_page()
     _open_advanced_page(page)
     row = _upload_sample(page)
@@ -280,7 +279,7 @@ def test_completing_twice_gives_both_tabs_the_same_result(
     page.close()
 
 
-# --- U3: 隔離と 1GB（BR19.3、BR20.1、BR20.2） ---------------------------------------
+# --- Isolation and 1GB -----------------------------------------------------
 # Real AWS only. Run with ``-k "isolation or large"``.
 
 
@@ -312,7 +311,7 @@ def test_isolation_s3_is_not_readable_from_the_session_and_nothing_carries_over(
 ):
     """No direct S3 read from inside a session; a new session starts empty.
 
-    BR19.1, BR19.3 (AC5.6.1, AC5.6.2, AC5.6.3): the session has no execution
+    The session has no execution
     role, so a direct S3 read is refused, and a file left in one generation's
     session is not in the next generation's session.
     """
@@ -353,7 +352,7 @@ def test_isolation_s3_is_not_readable_from_the_session_and_nothing_carries_over(
 def test_large_csv_generates_without_running_out_of_memory(
     session_context: BrowserContext, created: CreatedRecords, run_tag: str
 ) -> None:
-    """A Shift_JIS CSV of about 1GB goes through to a result (US5.7, BR20.1).
+    """A Shift_JIS CSV of about 1GB goes through to a result.
 
     Make the file first::
 
@@ -392,7 +391,7 @@ def test_large_csv_generates_without_running_out_of_memory(
 
 
 # ---------------------------------------------------------------------------
-# U4: documents (NFR1.15, NFR2.7, NFR7.3, NFR9.8)
+# Documents
 # ---------------------------------------------------------------------------
 
 SAMPLE_INTERVIEW = DATA_DIR / "interview_sample.txt"
@@ -447,7 +446,7 @@ def test_documents_small_pdf_and_docx_use_the_full_text(
 ) -> None:
     """A PDF (one page without text) and a docx give personas from the full text.
 
-    BR24.3, BR25.2, BR27.1, BR27.2: the blank page is left out, the documents
+    The blank page is left out, the documents
     are under 200,000 characters, and every persona rests on quoted evidence.
     """
     before = _persona_ids(session_context)
@@ -478,7 +477,7 @@ def test_documents_small_pdf_and_docx_use_the_full_text(
 def test_large_document_extracts_evidence(
     session_context: BrowserContext, created: CreatedRecords, run_tag: str
 ) -> None:
-    """About 800,000 characters go through the evidence extraction (NFR1.15).
+    """About 800,000 characters go through the evidence extraction.
 
     Make the file first::
 
@@ -524,7 +523,7 @@ def test_table_and_document_together(
 ) -> None:
     """One table and one document: segments from the table, quotes from the text.
 
-    BR23.1, BR28.1, BR28.2 (AC7.1.1, AC7.1.2): the result shows the segments,
+    The result shows the segments,
     the document used and its evidence (assigned to a segment or for the whole).
     """
     before = _persona_ids(session_context)
@@ -544,7 +543,7 @@ def test_table_and_document_together(
         SAMPLE_INTERVIEW.name
     )
     expect(result.get_by_test_id("advanced-candidate")).to_have_count(PERSONA_COUNT)
-    # The quotes are on the personas that use them, or for the whole (BR28.2)
+    # The quotes are on the personas that use them, or for the whole
     quotes = result.locator(
         "[data-testid='advanced-evidence'] q, [data-testid='advanced-overall-evidence'] q"
     )
@@ -553,11 +552,11 @@ def test_table_and_document_together(
     page.close()
 
 
-# --- U5: the plan confirmation and the cancel (NFR1.23, NFR7.4, NFR9.10) ------
+# --- The plan confirmation and the cancel ---------------------------------
 
 #: The plan of a small CSV comes within a few minutes; wait a little longer.
 PLAN_TIMEOUT_MS = 10 * 60 * 1000
-#: NFR1.23: a cancel takes effect within 10 seconds (plus a model call that
+#: A cancel takes effect within 10 seconds (plus a model call that
 #: was running, which may take minutes).
 CANCEL_TIMEOUT_MS = 6 * 60 * 1000
 
@@ -578,7 +577,7 @@ def _start_without_waiting(page: Page, run_tag: str, *, confirm_plan: bool) -> N
 def test_plan_is_confirmed_and_the_generation_completes(
     session_context: BrowserContext, created: CreatedRecords, run_tag: str
 ) -> None:
-    """US8.1 (AC8.1.1): the card shows the plan, approving runs to the end."""
+    """The card shows the plan, approving runs to the end."""
     before = _persona_ids(session_context)
     page = session_context.new_page()
     _open_advanced_page(page)
@@ -607,10 +606,9 @@ def test_plan_is_confirmed_and_the_generation_completes(
 def test_a_running_generation_is_cancelled_and_started_again(
     session_context: BrowserContext, run_tag: str
 ) -> None:
-    """US9.3 (AC9.3.1, AC9.3.2): cancel, see 中止しました, start again at once.
+    """Cancel, see 中止しました, start again at once.
 
-    The seconds from the click to 中止しました are printed for code-summary.md
-    (NFR1.23, NFR7.4).
+    The seconds from the click to 中止しました are printed.
     """
     page = session_context.new_page()
     _open_advanced_page(page)
@@ -627,7 +625,7 @@ def test_a_running_generation_is_cancelled_and_started_again(
     seconds = time.monotonic() - clicked
     print(f"\n[U5 E2E] seconds from the cancel click to 中止しました: {seconds:.1f}")
     expect(page.get_by_test_id("advanced-failure")).to_be_hidden()
-    # BR33.3: the instruction stays; the same file starts again at once
+    # The instruction stays; the same file starts again at once
     expect(page.get_by_test_id("advanced-purpose")).to_have_value(
         re.compile(re.escape(run_tag))
     )
@@ -647,7 +645,7 @@ def test_a_running_generation_is_cancelled_and_started_again(
 
 
 # ---------------------------------------------------------------------------
-# U6: the administrator's setting and the AI detailed analysis (NFR9.12)
+# The administrator's setting and the AI detailed analysis
 # ---------------------------------------------------------------------------
 #
 # The local user is an administrator. ① changes the setting and puts the
@@ -690,7 +688,7 @@ def _save_section(page: Page, form: Locator) -> Locator:
 
 
 def _real_options(form: Locator) -> Locator:
-    """Department choices that exist now (a vanished one cannot be saved, BR34.3)."""
+    """Department choices that exist now (a vanished one cannot be saved)."""
     return form.locator(
         "[data-testid='department-option']:not([data-department-vanished])"
     )
@@ -723,7 +721,7 @@ def _restore_section(page: Page, before: dict) -> None:
 def test_settings_section_saves_departments_and_the_version(
     session_context: BrowserContext,
 ) -> None:
-    """① A department is opened, the version goes up, the notice shows (US11.1)."""
+    """① A department is opened, the version goes up, the notice shows."""
     page = session_context.new_page()
     form = _open_section(page)
     before = _section_state(form)
@@ -763,7 +761,7 @@ def _upload_named(page: Page, path: Path) -> Locator:
 def test_detailed_analysis_joins_two_tables_and_records_the_code(
     session_context: BrowserContext, run_tag: str
 ) -> None:
-    """② With the detailed analysis on, two CSVs join on customer_id (US5.3, US5.4)."""
+    """② With the detailed analysis on, two CSVs join on customer_id."""
     page = session_context.new_page()
     form = _open_section(page)
     before = _section_state(form)
@@ -780,7 +778,7 @@ def test_detailed_analysis_joins_two_tables_and_records_the_code(
 
         _open_advanced_page(page)
         box = page.get_by_test_id("advanced-detailed-analysis")
-        expect(box).to_be_checked()  # AC5.4.4
+        expect(box).to_be_checked()
         _upload_named(page, CUSTOMERS_CSV)
         _upload_named(page, PURCHASES_CSV)
         started = time.monotonic()

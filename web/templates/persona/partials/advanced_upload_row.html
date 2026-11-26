@@ -3,14 +3,13 @@
 {% from "components/icons.html" import icon_check_circle, icon_x_circle %}
 {% from "persona/partials/advanced_labels.html" import encoding_label, type_label, format_label, man_chars %}
 {#
-  区画 A のファイルの 1 行（S3、S4、W3、U2 の W2-1・W2-4・W2-6）。列名・値・ファイル名はデータとして
-  自動エスケープで出す（BR3.4。safe フィルタを使わない）。状態は色だけでなく文字で出す（NFR10.2）。
-  検査中の行は advanced-upload.js が 2 秒おきに読み直し、15 分で打ち切る（NFR1.11）。
-  引数:
+  One file row of section A. Column names, values, and file names are output as data with auto-escaping (the safe filter is not used). Status is shown in text, not only by color.
+  Rows being checked are re-read by advanced-upload.js every 2 seconds and given up after 15 minutes.
+  Arguments:
     source_file ... SourceFile
-    item        ... SourceFileListItem（表示名・消える予定の日・使用中か・選べるか）
-    row_error   ... error のときの文言（エラーコードから解決済み）
-    stuck       ... 15 分以上止まった検査中か（消せる、BR14.1）
+    item        ... SourceFileListItem (display name, planned deletion day, in use, selectable)
+    row_error   ... message for an error (resolved from the error code)
+    stuck       ... whether a check has been stalled for 15 minutes or more (can be deleted)
 #}
 {% set f = source_file %}
 {% set state = f.status.value %}
@@ -24,7 +23,7 @@
     data-display-name="{{ name }}" class="border-b align-top">
     <td class="py-2 pr-3 whitespace-nowrap">
         {% if item.selectable and m %}
-        {# U4 BR23.1: 表 1 つと文書をいくつでも選べる（表 2 つはサーバーが断る） #}
+        {# One table and any number of documents can be selected (the server rejects two tables). #}
         <input type="checkbox" name="source_file_ids" value="{{ f.source_file_id }}" id="advanced-use-{{ f.source_file_id }}"
                data-testid="advanced-upload-select" data-kind="{{ f.kind.value }}" class="w-4 h-4">
         <label for="advanced-use-{{ f.source_file_id }}" class="sr-only">{{ name }}を今回の生成に使う</label>
@@ -39,7 +38,7 @@
         <span class="block text-xs text-gray-600">{{ tm.columns | length }} 列 / 約 {{ "{:,}".format(tm.estimated_rows) }} 行 / {{ encoding_label(tm.encoding.value) }}</span>
         {% if item.in_use %}<span class="block text-gray-700" data-testid="advanced-upload-in-use">生成中</span>{% endif %}
         {% elif state == "ready" and dm %}
-        {# U4 BR22.3: 形式と文字数の見込み。ページ数と文字数は前準備で確定する #}
+        {# Estimated format and character count. Page and character counts are fixed in preprocessing. #}
         <span class="flex items-center gap-1 text-green-800">{{ icon_check_circle("w-4 h-4") }} 準備OK</span>
         <span class="block text-xs text-gray-600" data-testid="advanced-document-summary">{{ format_label(dm.format.value) }} / 約 {{ man_chars(dm.estimated_chars) }} 万字の見込み</span>
         <span class="block text-xs text-gray-600">ページ数と文字数は前準備で確定します</span>

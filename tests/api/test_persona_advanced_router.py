@@ -1,8 +1,6 @@
-"""AdvancedGenerationRouter（web/routers/persona_advanced.py）の入口（U1、Step 29）。
+"""Entry points of AdvancedGenerationRouter (web/routers/persona_advanced.py).
 
-Manager は spec 付きの Mock。SSE の読み直しの間隔は 0 にして、終わりまで読む。
-対応: US1.1、US1.2、US2.1、US3.1、US5.1、US9.1、US10.1、C1、C2、C3、
-BR1.1、BR2.4、BR2.6、BR3.4、BR7.2、NFR1.7、NFR3.9、NFR3.10。
+The Manager is a spec'd Mock. The SSE re-read interval is 0, so streams are read to the end.
 """
 
 from __future__ import annotations
@@ -39,7 +37,7 @@ class Adv:
 
     def __init__(self) -> None:
         self.uploads = Mock(spec=SourceUploadManager)
-        # U2: the page lists the user's files; each row is a real list item
+        # the page lists the user's files; each row is a real list item
         self.uploads.list_uploads.return_value = []
         self.uploads.list_item.side_effect = lambda f: SourceFileListItem.of(
             f, now=s.NOW, retention_days=7
@@ -47,7 +45,7 @@ class Adv:
         self.uploads.inspection_stuck.return_value = False
         self.generations = Mock(spec=AdvancedPersonaGenerationManager)
         self.generations.is_available.return_value = True
-        # U6 BR35.4: the box shows only when the Manager offers it
+        # the box shows only when the Manager offers it
         self.generations.detailed_analysis_offered.return_value = False
         self.generations.running_generation_id.return_value = None
         self.generations.elapsed_clock.return_value = ElapsedClock(
@@ -121,7 +119,6 @@ class TestPage:
     def test_the_detailed_analysis_box_shows_checked_when_offered(
         self, client: TestClient, adv: Adv
     ) -> None:
-        # U6 BR35.4, AC5.4.4
         adv.generations.detailed_analysis_offered.return_value = True
 
         html = client.get("/persona/generation/advanced").text
@@ -174,7 +171,7 @@ class TestPage:
     def test_reopened_generation_shows_its_elapsed_time(
         self, client: TestClient, adv: Adv
     ) -> None:
-        # AC9.1.1: 開き直しても、生成の始まりからの経過時間が出る
+        # reopening still shows the time elapsed since generation started
         adv.generations.elapsed_clock.return_value = ElapsedClock(
             seconds=134, running=True
         )
@@ -460,7 +457,7 @@ class TestStartGeneration:
     def test_running_generation_reopens_its_progress_with_a_409(
         self, client: TestClient, adv: Adv
     ) -> None:
-        # U5 BR30.2, AC9.2.2: the notice and the running generation's progress
+        # the notice and the running generation's progress
         adv.generations.start_generation.side_effect = AdvancedGenerationError(
             "start refused", code=ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING
         )
@@ -499,7 +496,7 @@ class TestStartGeneration:
     def test_the_detailed_analysis_box_is_passed_on(
         self, client: TestClient, adv: Adv
     ) -> None:
-        # U6 BR35.2: the Manager decides; the Router passes the box as sent
+        # the Manager decides; the Router passes the box as sent
         adv.generations.start_generation.return_value = s.GENERATION_ID
 
         self._post(client, use_detailed_analysis="true")
@@ -510,7 +507,7 @@ class TestStartGeneration:
     def test_four_tables_are_a_400_in_the_form(
         self, client: TestClient, adv: Adv
     ) -> None:
-        # U6 BR37.1: the server refuses too (the screen disables the button)
+        # the server refuses too (the screen disables the button)
         adv.generations.start_generation.side_effect = AdvancedGenerationError(
             "too many tables",
             code=ErrorCode.UPLOAD_SOURCE_INVALID,
@@ -577,7 +574,7 @@ class TestFrame:
 
         frame = _frame("result", data, 3)
 
-        # SSE は \r\n・\r・\n のどれでも行を分ける。\r が残ると data でない行ができる
+        # SSE splits lines on \r\n, \r and \n; a leftover \r would create a non-data line
         assert "\r" not in frame
         body = frame[: -len("\n\n")]
         assert "\n\n" not in body
@@ -655,7 +652,7 @@ class TestEvents:
     def test_manual_reconnect_resumes_from_the_query_parameter(
         self, client: TestClient, adv: Adv
     ) -> None:
-        # 画面が自分でつなぎ直すとき（EventSource はヘッダーを付けられない）
+        # when the screen reconnects itself (EventSource cannot set headers)
         adv.generations.stream_events.return_value = _progress(
             GenerationStatus.FAILED,
             s.event(9, EventType.ERROR, json.dumps({"error_code": TIMEOUT})),
@@ -736,7 +733,7 @@ class TestEvents:
         context: dict,
         expected: list[str],
     ) -> None:
-        # AC5.2.2, AC5.2.3, AC5.5.1: wording comes from the code and integers
+        # wording comes from the code and integers
         failed = GenerationProgress(
             generation=s.generation(
                 GenerationStatus.FAILED,
@@ -837,7 +834,7 @@ class TestRecord:
         assert "no analysis record" not in response.text
 
 
-# --- U2: 一覧・削除・二重の確定・他人からの隔離（W2-1、W2-3、W2-6、W2-8） ----------
+# --- List, delete, double confirm and isolation from other users ----------
 
 
 def _triggers(response: Any) -> dict[str, Any]:
@@ -1008,7 +1005,7 @@ def _isolation_routes() -> list[tuple[str, str, str, str, dict[str, Any]]]:
 
 
 class TestSomeoneElsesLooksMissing:
-    """BR15.1, BR15.2: the same status, code and body for someone else's and none."""
+    """The same status, code and body for someone else's and a missing generation."""
 
     @pytest.mark.parametrize(
         ("name", "manager", "method", "url", "kwargs"), _isolation_routes()
@@ -1069,7 +1066,7 @@ class TestAnalysisRecordSources:
 
 
 class TestDocumentScreen:
-    """U4 Step 26: US2.2, US3.3, AC2.2.2, AC3.3.3, AC6.2.4, AC6.3.1, NFR4.4."""
+    """The document screen."""
 
     EVENTS = f"/persona/advanced/generations/{s.GENERATION_ID}/events"
 
@@ -1202,11 +1199,11 @@ class TestDocumentScreen:
         assert "2,400,000" in message and "2,000,000" in message
 
 
-# --- U5: the plan card, the cancel and the stream (C1, C3) --------------------
+# --- The plan card, the cancel and the stream --------------------
 
 
 class TestControlRoutes:
-    """Step 19: BR29.3, BR29.4, BR30.4, BR31.1, NFR3.26, NFR3.27."""
+    """Plan approval, cancel and related control routes."""
 
     PLAN = f"/persona/advanced/generations/{s.GENERATION_ID}/plan"
     CANCEL = f"/persona/advanced/generations/{s.GENERATION_ID}/cancel"
@@ -1343,7 +1340,7 @@ class TestControlRoutes:
 
 
 class TestControlStream:
-    """Step 19: C3 ``cancelled`` and ``plan`` (BR29.2, BR31.2, NFR3.28)."""
+    """The ``cancelled`` and ``plan`` events on the control stream."""
 
     URL = f"/persona/advanced/generations/{s.GENERATION_ID}/events"
 
@@ -1408,7 +1405,7 @@ class TestControlStream:
 
         card = next(b["data"] for b in blocks if b["event"] == "plan")
         assert 'data-testid="advanced-plan-card"' in card
-        assert s.SCRIPT_TEXT not in card  # NFR3.28: escaped
+        assert s.SCRIPT_TEXT not in card  # escaped
         assert "&lt;script&gt;" in card
         assert 'data-testid="advanced-plan-approve"' in card
         assert "30 代" in card  # the current instruction fills the input

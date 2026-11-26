@@ -1,7 +1,7 @@
-"""AccessPolicy（判定、約束 C2）の関数ごとの単体テスト。
+"""Per-function unit tests of AccessPolicy (the authorization decisions).
 
-BR2.1〜BR2.7、BR2.13、NFR1.4、NFR8.6、NFR9.13（外部を呼ばない）。全体の表は
-`test_access_policy_matrix.py` が持つ。
+No external service is called. The full table lives in
+`test_access_policy_matrix.py`.
 """
 
 import json
@@ -153,7 +153,7 @@ class TestEnsure:
             )
 
     def test_unreadable_looks_like_missing(self):
-        """読めないと存在しないで、同じコード・同じ型（NFR1.4）。"""
+        """Unreadable and nonexistent give the same code and type."""
         errors = []
         for target in (_persona(), _persona(exists=False)):
             with pytest.raises(CodedError) as info:
@@ -178,7 +178,7 @@ class TestEnsure:
 
 
 class TestEnsureOwner:
-    """持ち主だけが使えるもの（インタビューのセッション、BR3.2）の照合。"""
+    """Check for things only the owner may use (interview sessions)."""
 
     def test_owner_passes_and_logs_nothing(self, capsys):
         AccessPolicy.ensure_owner(
@@ -191,14 +191,14 @@ class TestEnsureOwner:
         [(OTHER, "user-a"), (ADMIN, "user-a"), (MEMBER, None), (MEMBER, "")],
     )
     def test_anyone_else_gets_not_found_and_one_log(self, capsys, principal, owner_sub):
-        """admin も他人のものは使えない。持ち主なし（存在しない）も同じ。"""
+        """Admin cannot use someone else's either; an ownerless (missing) one is the same."""
         with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
             AccessPolicy.ensure_owner(
                 principal, owner_sub, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
             )
         (line,) = _denied_lines(capsys)
         assert line["reason"] == "not_found"
-        assert line.get("resource_type") is None  # None の項目は書かれない
+        assert line.get("resource_type") is None  # fields that are None are not written
         assert line["sub"] == principal.sub
 
     def test_resource_type_goes_to_the_log(self, capsys):
@@ -214,7 +214,7 @@ class TestEnsureOwner:
 
 
 class TestDeniedLog:
-    """authz.denied を理由ごとに 1 行出し、ID を含めない（BR2.13、NFR8.6）。"""
+    """Emits one authz.denied line per reason, without including IDs."""
 
     def test_not_found(self, capsys):
         with pytest.raises(CodedError):

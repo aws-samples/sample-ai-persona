@@ -1,11 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 
 /**
- * テストで CDK が作る名前（論理 ID の末尾のハッシュ、Exports の出力名）を書かずに済ませる道具。
+ * Tools that avoid writing CDK-generated names (logical ID hash suffixes, Exports output names) in tests.
  *
- * リソースは construct のパス（`aws:cdk:path` のメタデータ）で、Data スタックの出力名は
- * 出力先のリソースのパスと属性（`{AIPersonaDev/Data/UploadBucket/Bucket/Resource.Arn}`）で表す。
- * パスはコードが決める construct ID だけでできているため、OSS のソースに置いてよい。
+ * Resources are identified by construct path (the `aws:cdk:path` metadata), and Data stack
+ * output names by the destination resource path plus attribute (`{AIPersonaDev/Data/UploadBucket/Bucket/Resource.Arn}`).
+ * Paths consist only of construct IDs decided in code, so they are safe to keep in OSS sources.
  */
 
 /** Context that makes synth write `aws:cdk:path` into every resource's Metadata. */

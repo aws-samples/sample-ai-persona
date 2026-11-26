@@ -1,13 +1,13 @@
 """
 CountryService
-ISO 3166-1 の国コード（alpha-2）の検証・表示名取得を担当するサービス。
+Service that validates ISO 3166-1 alpha-2 country codes and looks up display names.
 
-pycountry（ISO 3166公式データ）をラップし、全世界の国コードに対応する。
-国名は英語表記で返す（common_name があればそれを優先し、South Korea / Taiwan
-などの通称を返す。なければ ISO 正式名 name）。
+Wraps pycountry (official ISO 3166 data) and supports all country codes worldwide.
+Names are returned in English (common_name is preferred when present, giving names such as South Korea / Taiwan;
+otherwise the official ISO name).
 
-都市（city）は pycountry が対応しないため本サービスの対象外（自由文字列のまま）。
-性別（gender）は固定3値の自前 enum（src/models/demographics.py）で扱う。
+Cities are out of scope because pycountry does not cover them (they stay free-form strings).
+Gender is handled by our own fixed three-value enum (src/models/demographics.py).
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ import pycountry
 
 
 def is_valid_country(code: str | None) -> bool:
-    """ISO 3166-1 alpha-2 として実在する国コードか判定する。
+    """Return whether the code is a real ISO 3166-1 alpha-2 country code.
 
-    架空コード（XX）、alpha-3（JPN）、非ASCIIなどは False を返す。
+    Returns False for made-up codes (XX), alpha-3 (JPN), non-ASCII, etc.
     """
     if not code:
         return False
@@ -28,11 +28,11 @@ def is_valid_country(code: str | None) -> bool:
 
 
 def country_name(code: str | None) -> str:
-    """国コードを英語の表示名へ変換する。
+    """Convert a country code to an English display name.
 
-    common_name（通称）があればそれを優先し、なければ ISO 正式名 name を返す。
-    例: KR -> "South Korea", TW -> "Taiwan", JP -> "Japan"。
-    未知のコードはそのまま返し、None/空文字は空文字を返す。
+    Prefers common_name when present, otherwise the official ISO name.
+    Examples: KR -> "South Korea", TW -> "Taiwan", JP -> "Japan".
+    Unknown codes are returned as is; None/empty string returns an empty string.
     """
     if not code:
         return ""
@@ -44,11 +44,11 @@ def country_name(code: str | None) -> str:
 
 @lru_cache(maxsize=1)
 def country_choices() -> tuple[tuple[str, str], ...]:
-    """フィルタUI・編集フォーム用の (alpha-2コード, 表示名) 一覧を返す。
+    """Return (alpha-2 code, display name) pairs for filter UIs and edit forms.
 
-    表示名は country_name と同じ common_name 優先ロジック。表示名でソートする。
-    国コード一覧は不変なため lru_cache でリクエスト毎の再生成を避ける。
-    キャッシュ汚染を防ぐためイミュータブルな tuple を返す。
+    Display names use the same common_name-first logic as country_name, sorted by display name.
+    The country list never changes, so lru_cache avoids rebuilding it on every request.
+    An immutable tuple is returned to prevent cache pollution.
     """
     choices = [
         (country.alpha_2, getattr(country, "common_name", None) or country.name)
@@ -58,11 +58,11 @@ def country_choices() -> tuple[tuple[str, str], ...]:
 
 
 def sanitize_country(code: str | None) -> str | None:
-    """AI生成・入力された国コードを正規化し、実在しなければ None を返す。
+    """Normalize an AI-generated or user-entered country code; return None if it is not real.
 
-    trim + 大文字化したうえで is_valid_country を通らなければ None。
-    LLMが "Japan" / "日本" / "JPN" のような規格外を返しても、1件の不正値で
-    バッチ生成全体を失敗させないための正規化。
+    Trims and uppercases, then returns None if it fails is_valid_country.
+    Even if the LLM returns something non-standard such as "Japan" / "日本" / "JPN", this
+    keeps one bad value from failing the whole batch generation.
     """
     if not code or not code.strip():
         return None

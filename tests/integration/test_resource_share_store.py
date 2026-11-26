@@ -1,15 +1,16 @@
-"""ResourceShareStore（本体と ResourceShares の読み書き）の結合テスト。moto を使う。
+"""Integration tests for ResourceShareStore (reads and writes of the body and ResourceShares), using moto.
 
-BR1.6〜BR1.7（1 つのトランザクション、前の値を条件、空なら列を消す）、BR3.2〜BR3.5・BR3.9
-（索引の読み取り、件数、カーソルの位置）、BR4.1（削除の条件に共有先と後始末の列）、
-NFR1.12・NFR1.17・NFR1.19（失敗の分類）、NFR2.5（まとめ読みと読み残し）。
+Covers one transaction per write, the previous value as the condition, removing
+the column when empty, index reads, counts, cursor position, the delete
+condition covering the share targets and cleanup column, failure
+classification, and batch reads with leftovers.
 
-moto で起こせない TransactionConflict とスロットリングは、CancellationReasons を
-組み立てたスタブの client で確かめる（reliability-design.md §1）。
+A TransactionConflict and throttling, which moto cannot produce, are verified
+with a stub client built with CancellationReasons.
 
-NFR9.23（2 つの書き込みを交互に起こしても索引と本体が一致）は、本物の ResourceSharing と
-この Store を moto でつなぎ、1 人目の読みと書きの間に 2 人目の書き込みを差し込んで確かめる
-（TestInterleavedShareWrites。Build and Test の Loop-back 1）。
+That interleaved writes keep the index and body consistent is verified by
+connecting the real ResourceSharing to this Store on moto and inserting a second
+user's write between the first user's read and write (TestInterleavedShareWrites).
 """
 
 from typing import Any
@@ -441,7 +442,7 @@ class _InterleavingStore:
     The wrapped writer reads the body, then — just before its first
     ``write_shares`` — ``interleave`` runs the second writer to completion. The
     first write therefore meets a changed body, as two users saving at the same
-    moment would (NFR9.23). No threads and no sleep: the order is fixed.
+    moment would. No threads and no sleep: the order is fixed.
     """
 
     def __init__(self, inner: ResourceShareStore, interleave: Any) -> None:
@@ -466,7 +467,7 @@ def _indexed_groups(client: Any, pid: str) -> list[str]:
 
 
 class TestInterleavedShareWrites:
-    """NFR9.23: after two interleaved writes the index equals the body."""
+    """After two interleaved writes the index equals the body."""
 
     OWNER = Principal("sub-b", frozenset({Role.MEMBER}), frozenset({"sales", "plan"}))
 
@@ -517,11 +518,11 @@ class TestInterleavedShareWrites:
             ShareChange(add=frozenset({"plan"})),
         )
 
-        # 索引の部署ごとの行が本体の shared_group_ids と一致する（NFR9.23）
+        # Each department row of the index matches the body's shared_group_ids
         assert _indexed_groups(aws, "p1") == self._body_groups(store)
         assert self._body_groups(store) == ["plan", "sales"]
         assert result == {"sales", "plan"}
-        # 1 回目は条件の失敗、読み直して判定し直した 2 回目で書いた（BR1.9）
+        # The first attempt failed its condition; the second, re-read and re-evaluated, wrote
         assert wrapped.write_calls == 2
 
     def test_remove_and_add(self, aws, store):

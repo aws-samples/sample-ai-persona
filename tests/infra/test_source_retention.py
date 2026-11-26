@@ -1,9 +1,10 @@
-"""上げたファイルの保存の期間がアプリと CDK で同じこと（高度な生成 U2、NFR5.25、BR13.6）。
+"""The retention period of uploaded files is the same in the app and in CDK.
 
-アプリは ``src/config.py`` の ``ADVANCED_SOURCE_RETENTION_DAYS``（7 日）で期限を決め、CDK は
-``cdk/lib/constructs/upload-bucket.ts`` の ``SOURCE_RETENTION_DAYS`` + ``SOURCE_LIFECYCLE_MARGIN_DAYS``
-（7 + 2 = 9 日）で S3 の今の版を消す。片方だけ変えると、アプリが使えるとみなすファイルの
-中身が S3 から先に消える。TypeScript は実行せず、定数の行を文字列として読む。
+The app sets the expiry with ``ADVANCED_SOURCE_RETENTION_DAYS`` (7 days) in
+``src/config.py``; CDK deletes the current S3 version after ``SOURCE_RETENTION_DAYS`` +
+``SOURCE_LIFECYCLE_MARGIN_DAYS`` (7 + 2 = 9 days) in ``cdk/lib/constructs/upload-bucket.ts``.
+If only one side changes, S3 would delete the contents of files the app still treats
+as usable. TypeScript is not executed; the constant lines are read as strings.
 """
 
 import re

@@ -1,4 +1,4 @@
-"""Measuring the quality of generated personas (U6 addendum).
+"""Measuring the quality of generated personas.
 
 Two kinds of measure, so an improvement can be shown with numbers:
 

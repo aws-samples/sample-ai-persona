@@ -16,8 +16,8 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
-# "Mine" listing index (U4/U6/U7), the same shape as the CDK Data stack's OwnerIndex.
-# The GSI sets here follow cdk/lib/constructs/database.ts (U9: the type-fixed GSIs and the
+# "Mine" listing index, the same shape as the CDK Data stack's OwnerIndex.
+# The GSI sets here follow cdk/lib/constructs/database.ts (the type-fixed GSIs and the
 # old PersonaDatasetBindings / PersonaKBBindings tables are gone).
 OWNER_INDEX = {
     "IndexName": "OwnerIndex",
@@ -144,7 +144,7 @@ class DynamoDBTableCreator:
 
     def create_uploaded_files_table(self) -> bool:
         """
-        Create the UploadedFiles table (no GSI since U9).
+        Create the UploadedFiles table (no GSI).
 
         Returns:
             True if table was created, False if it already exists

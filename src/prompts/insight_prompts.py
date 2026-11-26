@@ -1,4 +1,4 @@
-"""インサイト抽出プロンプトテンプレート。"""
+"""Prompt templates for insight extraction."""
 
 from typing import List, Optional
 
@@ -11,7 +11,7 @@ def build_insight_extraction_prompt(
     categories: Optional[List[InsightCategory]],
     topic: str = "",
 ) -> str:
-    """インサイト抽出用プロンプトを構築する。"""
+    """Build the prompt for insight extraction."""
     max_round = max((msg.round_number or 0) for msg in messages)
     persona_final_statements = [
         f"**{msg.persona_name}**: {msg.content}"

@@ -1,8 +1,7 @@
-"""detailed_analysis: the run_code budget and the evidence it may leave (U6).
+"""detailed_analysis: the run_code budget and the evidence it may leave.
 
-BR36.2 (five failures take run_code off), NFR5.55 (the gate the Service only
-tells), BR36.6 (a change halts), BR36.4 / NFR3.39 (only what a successful
-run recounted reaches the synthesis).
+Five failures take run_code off; the gate the Service only tells; a change halts;
+only what a successful run recounted reaches the synthesis.
 """
 
 from __future__ import annotations
@@ -59,7 +58,7 @@ class TestRunCodeBudget:
         assert budget.successes == 1
 
     def test_a_look_around_is_a_call_but_no_failure(self) -> None:
-        """U6 addendum: run_code ending without emit_result."""
+        """run_code ending without emit_result."""
         told: list[tuple[str, int]] = []
         budget = RunCodeBudget(
             max_failures=2, on_disabled=lambda reason, n: told.append((reason, n))

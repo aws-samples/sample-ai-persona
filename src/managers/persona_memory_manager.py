@@ -1,6 +1,6 @@
-"""
-ペルソナ記憶管理Manager
-長期記憶の参照・追加・削除を担当する。
+"""Persona memory management Manager.
+
+Handles reading, adding and deleting long-term memory.
 """
 
 import logging
@@ -20,12 +20,12 @@ from .components.access_policy import AccessPolicy
 from .components.resource_lookup import ResourceLookup
 from .components.sharing_runtime import build_access_parts, shared_access_parts
 
-#: 1 つの知識の内容の上限（手入力でもファイルの変換結果でも同じ）
+#: Maximum content of one piece of knowledge (same for typed input and converted files)
 MAX_KNOWLEDGE_CONTENT_CHARS = 10000
 
 
 class PersonaMemoryManagerError(CodedError):
-    """記憶管理操作エラー"""
+    """Memory management operation error"""
 
     pass
 
@@ -40,12 +40,13 @@ def prepare_long_term_memory() -> None:
 
 
 class PersonaMemoryManager:
-    """ペルソナの記憶管理を行うManager
+    """Manager for persona memory management.
 
-    v1.0.0 U5（BR4.1、AC4.2.4）: メモリ画面の入口はどれも、ペルソナを管理できる人
-    （所有者と admin）だけが使える。共有されているだけの人と読めない人には、どちらも
-    PERSONA_NOT_FOUND（404）を返す（読み取りの 403 は存在を知らせるため）。親の
-    ペルソナは ResourceLookup で読み、判定は AccessPolicy に任せる。
+    Every entry point of the memory screen can be used only by people who can
+    manage the persona (owner and admin). People who only have it shared, and
+    people who cannot read it, both get PERSONA_NOT_FOUND (404), because a read
+    403 would reveal its existence. The parent persona is read with
+    ResourceLookup and the decision is left to AccessPolicy.
     """
 
     def __init__(
@@ -55,7 +56,7 @@ class PersonaMemoryManager:
     ):
         """
         Args:
-            memory_service: 記憶操作用（optional, service_factory経由。Noneの場合は遅延取得）
+            memory_service: For memory operations (optional, via service_factory; lazily obtained when None)
             resource_lookup: Decision reads of personas (optional; the per-task
                 instance)
         """
@@ -77,7 +78,7 @@ class PersonaMemoryManager:
         return self._lookup
 
     def ensure_memory_manageable(self, principal: Principal, persona_id: str) -> None:
-        """Let only people who manage the persona use its memory screen (BR4.1).
+        """Let only people who manage the persona use its memory screen.
 
         The knowledge-file preview calls this before converting the file.
 
@@ -120,7 +121,7 @@ class PersonaMemoryManager:
         except (AccessDeniedError, CodedError) as e:
             if isinstance(e, LookupUnavailableError):
                 raise
-            # A shared reader gets the same answer as a stranger (AC4.2.4)
+            # A shared reader gets the same answer as a stranger
             raise PersonaMemoryManagerError(
                 "persona is not manageable", code=ErrorCode.PERSONA_NOT_FOUND
             ) from e
@@ -133,20 +134,20 @@ class PersonaMemoryManager:
         topic_content: str,
     ) -> str:
         """
-        ペルソナに手動で知識（Semantic Memory）を追加する。
+        Manually add knowledge (Semantic Memory) to a persona.
 
-        短期記憶を経由せず、直接長期記憶（LTM）に保存する。
+        Saved directly to long-term memory (LTM), bypassing short-term memory.
 
         Args:
-            persona_id: ペルソナID
-            topic_name: トピック名（例: 好きな食べ物）
-            topic_content: トピック内容（例: ラーメンが好き）
+            persona_id: Persona ID
+            topic_name: Topic name (e.g. favorite food)
+            topic_content: Topic content (e.g. likes ramen)
 
         Returns:
-            保存された記憶のID
+            ID of the saved memory
 
         Raises:
-            PersonaMemoryManagerError: バリデーション失敗、ペルソナ不在、保存失敗時
+            PersonaMemoryManagerError: On validation failure, missing persona, or save failure
         """
         self._validate_persona_id(persona_id)
 
@@ -196,7 +197,7 @@ class PersonaMemoryManager:
                 metadata={"source": "manual", "topic_name": topic_name.strip()},
             )
 
-            # 題名は記憶の中身の一部なのでログに出さない（ID だけ、NFR3.11）
+            # The title is part of the memory content, so it is not logged (IDs only)
             self.logger.info(
                 f"Knowledge added for persona {persona_id} (memory_id: {memory_id})"
             )
@@ -224,20 +225,20 @@ class PersonaMemoryManager:
         per_page: int = 10,
     ) -> tuple:
         """
-        ペルソナの記憶を取得する。
+        Get a persona's memories.
 
         Args:
-            principal: 利用者（ペルソナを管理できる人だけ、BR4.1）
-            persona_id: ペルソナID
-            strategy_type: 戦略タイプ（"summary" または "semantic"）
-            page: ページ番号
-            per_page: 1ページあたりの件数
+            principal: The user (only people who can manage the persona)
+            persona_id: Persona ID
+            strategy_type: Strategy type ("summary" or "semantic")
+            page: Page number
+            per_page: Items per page
 
         Returns:
-            (memories, current_page, total_pages) のタプル
+            Tuple of (memories, current_page, total_pages)
 
         Raises:
-            PersonaMemoryManagerError: ペルソナ不在（管理できない場合も）、取得失敗時
+            PersonaMemoryManagerError: Persona missing (also when not manageable), or retrieval failed
         """
         self._ensure_manageable(principal, persona_id)
 
@@ -286,25 +287,25 @@ class PersonaMemoryManager:
         self, principal: Principal, persona_id: str, memory_id: str
     ) -> bool:
         """
-        ペルソナの特定の記憶を削除する。
+        Delete one memory of a persona.
 
         Args:
-            principal: 利用者（ペルソナを管理できる人だけ、BR4.1）
-            persona_id: ペルソナID
-            memory_id: 記憶ID
+            principal: The user (only people who can manage the persona)
+            persona_id: Persona ID
+            memory_id: Memory ID
 
         Returns:
-            削除成功ならTrue。記憶がない、または別のペルソナの記憶ならFalse
-            （どちらも同じ扱い、R-01）
+            True if deleted. False if the memory does not exist or belongs to
+            another persona (both are treated the same)
 
         Raises:
-            PersonaMemoryManagerError: 管理できない（PERSONA_NOT_FOUND）、機能無効、削除失敗時
+            PersonaMemoryManagerError: Not manageable (PERSONA_NOT_FOUND), feature disabled, or deletion failed
         """
         self._ensure_manageable(principal, persona_id)
         memory_service = self._get_memory_service()
 
         try:
-            # R-01: the record must belong to this persona, not just the persona
+            # The record must belong to this persona, not just the persona
             # to the user (a record ID of another persona is never deleted)
             success = memory_service.delete_owned_memory(
                 actor_id=persona_id, memory_id=memory_id
@@ -334,18 +335,18 @@ class PersonaMemoryManager:
         self, principal: Principal, persona_id: str, strategy_type: str = "summary"
     ) -> int:
         """
-        ペルソナの指定戦略タイプの全記憶を削除する。
+        Delete all memories of the given strategy type for a persona.
 
         Args:
-            principal: 利用者（ペルソナを管理できる人だけ、BR4.1）
-            persona_id: ペルソナID
-            strategy_type: 戦略タイプ（"summary" または "semantic"）
+            principal: The user (only people who can manage the persona)
+            persona_id: Persona ID
+            strategy_type: Strategy type ("summary" or "semantic")
 
         Returns:
-            削除件数
+            Number of memories deleted
 
         Raises:
-            PersonaMemoryManagerError: 管理できない（PERSONA_NOT_FOUND）、機能無効、削除失敗時
+            PersonaMemoryManagerError: Not manageable (PERSONA_NOT_FOUND), feature disabled, or deletion failed
         """
         self._ensure_manageable(principal, persona_id)
         memory_service = self._get_memory_service()
@@ -395,8 +396,8 @@ class PersonaMemoryManager:
         self, principal: Principal, persona_id: str, strategy_type: str = "summary"
     ) -> list:
         """
-        エラー時に安全に記憶リストを取得するヘルパー。
-        取得失敗時（管理できない場合を含む）は空リストを返す（例外を投げない）。
+        Helper that fetches a memory list safely on error.
+        Returns an empty list when retrieval fails (including when not manageable) instead of raising.
         """
         try:
             self._ensure_manageable(principal, persona_id)
@@ -414,11 +415,11 @@ class PersonaMemoryManager:
             self.logger.warning(f"Failed to retrieve memories for error recovery: {e}")
         return []
 
-    # --- 内部メソッド ---
+    # --- Internal methods ---
 
     def _get_memory_service(self) -> MemoryService:
-        """MemoryServiceを取得。未設定の場合はservice_factory経由で遅延取得。
-        取得不可の場合は PersonaMemoryManagerError を投げる。
+        """Get the MemoryService. Lazily obtained via service_factory when not set.
+        Raises PersonaMemoryManagerError when unavailable.
         """
         if not self._memory_service_resolved:
             self._memory_service = service_factory.get_memory_service()
@@ -433,25 +434,25 @@ class PersonaMemoryManager:
         return self._memory_service
 
     def _resolve_memory_service(self) -> Optional[MemoryService]:
-        """MemoryServiceを取得。無効な場合はNoneを返す（例外なし）。"""
+        """Get the MemoryService. Returns None when disabled (no exception)."""
         if not self._memory_service_resolved:
             self._memory_service = service_factory.get_memory_service()
             self._memory_service_resolved = True
         return self._memory_service
 
     def _validate_persona_id(self, persona_id: str) -> None:
-        """persona_idの空文字/None検証"""
+        """Validate that persona_id is not empty/None"""
         if not persona_id or not persona_id.strip():
             raise PersonaMemoryManagerError(
                 "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
             )
 
     def _format_topic_content(self, topic_name: str, topic_content: str) -> str:
-        """トピック形式のコンテンツを構築"""
+        """Build topic-format content"""
         return f'<topic name="{topic_name}">{topic_content}</topic>'
 
     def _parse_topic_content(self, content: str) -> Optional[dict]:
-        """<topic name="...">...</topic> 形式のコンテンツをパース"""
+        """Parse content of the form <topic name="...">...</topic>"""
         pattern = r'<topic\s+name="([^"]+)">\s*(.*?)\s*</topic>'
         match = re.search(pattern, content, re.DOTALL)
         if match:

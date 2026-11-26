@@ -1,10 +1,7 @@
 {% from "components/dialog.html" import dialog %}
 {#
-  画面に 1 つだけ置く共有ダイアログ（M7、約束 C6）。開くボタンは
-  data-dialog-open="share-dialog" と、1 件なら data-share-url（/share/{type}/{id}/dialog）。
-  一括は bulk_select_bar の操作ボタン（data-bulk-select の種類と選んだ行から app.js の
-  ShareDialog が /share/{type}/dialog?ids=... を組み立てる）。中身の読み込み先は
-  開く直前に ShareDialog が差し替える。
+  The single share dialog placed on a page. The open button carries data-dialog-open="share-dialog", plus data-share-url (/share/{type}/{id}/dialog) for one item.
+  For bulk, ShareDialog in app.js builds /share/{type}/dialog?ids=... from the type in data-bulk-select and the selected rows, using the action button of bulk_select_bar. ShareDialog swaps the content load target just before opening.
 #}
 {% call dialog("share-dialog", "共有先の設定", panel_class="max-w-lg") %}
 <div data-dialog-content data-share-content hx-get="/share/persona/dialog" hx-trigger="dialogLoad" hx-swap="innerHTML">

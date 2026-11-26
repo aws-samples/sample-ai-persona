@@ -1,12 +1,11 @@
-"""
-Session Manager Factory Unit Tests
-AgentCoreMemorySessionManagerファクトリのユニットテスト
+"""Session Manager Factory Unit Tests
+Unit tests for the AgentCoreMemorySessionManager factory
 """
 
 import pytest
 from unittest.mock import Mock, patch
 
-# bedrock_agentcoreモジュールが必要なテストをマーク
+# Mark tests that need the bedrock_agentcore module
 try:
     import bedrock_agentcore  # noqa: F401
 
@@ -21,15 +20,15 @@ pytestmark = pytest.mark.skipif(
 
 
 class TestSessionManagerFactory:
-    """セッションマネージャーファクトリのテスト"""
+    """Tests for the session manager factory"""
 
     def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
+        """Initialization run before each test method"""
         pass
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_is_memory_enabled_returns_true_when_configured(self, mock_config):
-        """メモリが正しく設定されている場合Trueを返す"""
+        """Return True when memory is configured correctly"""
         from src.services.memory.session_manager_factory import is_memory_enabled
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -41,7 +40,7 @@ class TestSessionManagerFactory:
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_is_memory_enabled_returns_false_when_disabled(self, mock_config):
-        """ENABLE_LONG_TERM_MEMORYがFalseの場合Falseを返す"""
+        """Return False when ENABLE_LONG_TERM_MEMORY is False"""
         from src.services.memory.session_manager_factory import is_memory_enabled
 
         mock_config.ENABLE_LONG_TERM_MEMORY = False
@@ -53,7 +52,7 @@ class TestSessionManagerFactory:
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_is_memory_enabled_returns_false_when_memory_id_not_set(self, mock_config):
-        """AGENTCORE_MEMORY_IDが設定されていない場合Falseを返す"""
+        """Return False when AGENTCORE_MEMORY_ID is not set"""
         from src.services.memory.session_manager_factory import is_memory_enabled
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -65,7 +64,7 @@ class TestSessionManagerFactory:
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_is_memory_enabled_returns_false_when_memory_id_empty(self, mock_config):
-        """AGENTCORE_MEMORY_IDが空文字の場合Falseを返す"""
+        """Return False when AGENTCORE_MEMORY_ID is an empty string"""
         from src.services.memory.session_manager_factory import is_memory_enabled
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -77,7 +76,7 @@ class TestSessionManagerFactory:
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_create_session_manager_returns_none_when_disabled(self, mock_config):
-        """メモリが無効の場合Noneを返す"""
+        """Return None when memory is disabled"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -95,7 +94,7 @@ class TestSessionManagerFactory:
     def test_create_session_manager_returns_none_when_memory_id_not_set(
         self, mock_config
     ):
-        """AGENTCORE_MEMORY_IDが設定されていない場合Noneを返す"""
+        """Return None when AGENTCORE_MEMORY_ID is not set"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -122,7 +121,7 @@ class TestSessionManagerFactory:
         mock_memory_config,
         mock_session_manager,
     ):
-        """メモリが有効な場合セッションマネージャーを作成する"""
+        """Create a session manager when memory is enabled"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -156,10 +155,10 @@ class TestSessionManagerFactory:
         mock_memory_config,
         mock_session_manager,
     ):
-        """デフォルトのSummary検索namespaceがセッション横断であること
+        """The default Summary search namespace spans sessions.
 
-        sessions/{sessionId} を含むと検索範囲が現在のセッションに固定され、
-        過去セッションの記憶が取得できなくなるリグレッションを防ぐ。
+        Including sessions/{sessionId} would pin the search to the current session and
+        lose memories of past sessions; this guards against that regression.
         """
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
@@ -184,7 +183,7 @@ class TestSessionManagerFactory:
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_create_session_manager_handles_import_error(self, mock_config):
-        """bedrock_agentcoreがインストールされていない場合エラーを発生させる"""
+        """Raise an error when bedrock_agentcore is not installed"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
             SessionManagerFactoryError,
@@ -193,7 +192,7 @@ class TestSessionManagerFactory:
         mock_config.ENABLE_LONG_TERM_MEMORY = True
         mock_config.AGENTCORE_MEMORY_ID = "test-memory-id"
 
-        # bedrock_agentcoreのインポートをモックしてImportErrorを発生させる
+        # Mock the bedrock_agentcore import to raise ImportError
         with patch.dict("sys.modules", {"bedrock_agentcore": None}):
             with patch("builtins.__import__", side_effect=ImportError("No module")):
                 with pytest.raises(SessionManagerFactoryError):
@@ -203,7 +202,7 @@ class TestSessionManagerFactory:
 
 
 class TestSessionManagerFactoryWithCustomConfig:
-    """カスタム設定でのセッションマネージャーファクトリのテスト"""
+    """Tests for the session manager factory with custom settings"""
 
     @patch(
         "bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager"
@@ -218,7 +217,7 @@ class TestSessionManagerFactoryWithCustomConfig:
         mock_memory_config,
         mock_session_manager,
     ):
-        """カスタムretrieval_configでセッションマネージャーを作成する"""
+        """Create a session manager with a custom retrieval_config"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -241,12 +240,12 @@ class TestSessionManagerFactoryWithCustomConfig:
         )
 
         assert result is mock_session_manager_instance
-        # RetrievalConfigが呼び出されたことを確認
+        # Check that RetrievalConfig was called
         mock_retrieval_config_class.assert_called()
 
 
 class TestSessionManagerFactoryWithSemanticStrategy:
-    """Semantic戦略を含むセッションマネージャーファクトリのテスト"""
+    """Tests for the session manager factory with the Semantic strategy"""
 
     @patch(
         "bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager"
@@ -261,7 +260,7 @@ class TestSessionManagerFactoryWithSemanticStrategy:
         mock_memory_config,
         mock_session_manager,
     ):
-        """Semantic戦略が設定されている場合、そのnamespaceも検索対象に含める"""
+        """When the Semantic strategy is set, its namespace is also searched"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -281,7 +280,7 @@ class TestSessionManagerFactoryWithSemanticStrategy:
         )
 
         assert result is mock_session_manager_instance
-        # RetrievalConfigが2回呼び出されたことを確認（Summary + Semantic）
+        # Check that RetrievalConfig was called twice (Summary + Semantic)
         assert mock_retrieval_config_class.call_count == 2
 
     @patch(
@@ -297,7 +296,7 @@ class TestSessionManagerFactoryWithSemanticStrategy:
         mock_memory_config,
         mock_session_manager,
     ):
-        """Semantic戦略が設定されていない場合、Summaryのみ検索対象にする"""
+        """When the Semantic strategy is not set, only Summary is searched"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -306,7 +305,7 @@ class TestSessionManagerFactoryWithSemanticStrategy:
         mock_config.AGENTCORE_MEMORY_ID = "test-memory-id"
         mock_config.AGENTCORE_MEMORY_REGION = "us-east-1"
         mock_config.SUMMARY_MEMORY_STRATEGY_ID = "summary-test"
-        mock_config.SEMANTIC_MEMORY_STRATEGY_ID = None  # Semantic戦略なし
+        mock_config.SEMANTIC_MEMORY_STRATEGY_ID = None  # no Semantic strategy
         mock_config.MEMORY_MAX_RESULTS = 5
 
         mock_session_manager_instance = Mock()
@@ -317,18 +316,18 @@ class TestSessionManagerFactoryWithSemanticStrategy:
         )
 
         assert result is mock_session_manager_instance
-        # RetrievalConfigが1回だけ呼び出されたことを確認（Summaryのみ）
+        # Check that RetrievalConfig was called once (Summary only)
         assert mock_retrieval_config_class.call_count == 1
 
 
 class TestSessionManagerFactoryMemoryMode:
-    """memory_modeパラメータのテスト"""
+    """Tests for the memory_mode parameter"""
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_create_session_manager_returns_none_when_memory_mode_disabled(
         self, mock_config
     ):
-        """memory_mode='disabled'の場合Noneを返す"""
+        """Return None when memory_mode='disabled'"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -355,7 +354,7 @@ class TestSessionManagerFactoryMemoryMode:
         mock_memory_config,
         mock_session_manager,
     ):
-        """memory_mode='full'の場合ベースのセッションマネージャーを返す"""
+        """Return the base session manager when memory_mode='full'"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -374,7 +373,7 @@ class TestSessionManagerFactoryMemoryMode:
             actor_id="test-actor", session_id="test-session", memory_mode="full"
         )
 
-        # ベースのセッションマネージャーが返される
+        # The base session manager is returned
         assert result is mock_session_manager_instance
 
     @patch(
@@ -390,7 +389,7 @@ class TestSessionManagerFactoryMemoryMode:
         mock_memory_config,
         mock_session_manager,
     ):
-        """memory_mode='retrieve_only'の場合RetrieveOnlySessionManagerを返す"""
+        """Return RetrieveOnlySessionManager when memory_mode='retrieve_only'"""
         from src.services.memory.session_manager_factory import (
             create_agentcore_session_manager,
         )
@@ -414,17 +413,17 @@ class TestSessionManagerFactoryMemoryMode:
             memory_mode="retrieve_only",
         )
 
-        # RetrieveOnlySessionManagerが返される
+        # RetrieveOnlySessionManager is returned
         assert isinstance(result, RetrieveOnlySessionManager)
         assert result._actor_id == "test-actor"
         assert result._session_id == "test-session"
 
 
 class TestRetrieveOnlySessionManager:
-    """RetrieveOnlySessionManagerのテスト"""
+    """Tests for RetrieveOnlySessionManager"""
 
     def test_append_message_does_not_save(self):
-        """append_messageがSTMに保存しないことを確認"""
+        """Check that append_message does not save to STM"""
         from src.services.memory.retrieve_only_session_manager import (
             RetrieveOnlySessionManager,
         )
@@ -439,14 +438,14 @@ class TestRetrieveOnlySessionManager:
         mock_message = Mock()
         mock_agent = Mock()
 
-        # append_messageを呼び出し
+        # Call append_message
         manager.append_message(mock_message, mock_agent)
 
-        # ベースマネージャーのappend_messageが呼び出されていないことを確認
+        # Check that the base manager's append_message was not called
         mock_base_manager.append_message.assert_not_called()
 
     def test_create_message_does_not_save(self):
-        """create_messageがSTMに保存しないことを確認"""
+        """Check that create_message does not save to STM"""
         from src.services.memory.retrieve_only_session_manager import (
             RetrieveOnlySessionManager,
         )
@@ -458,16 +457,16 @@ class TestRetrieveOnlySessionManager:
             session_id="test-session",
         )
 
-        # create_messageを呼び出し
+        # Call create_message
         result = manager.create_message("session-id", "agent-id", Mock())
 
-        # Noneが返される（保存しない）
+        # None is returned (nothing is saved)
         assert result is None
-        # ベースマネージャーのcreate_messageが呼び出されていないことを確認
+        # Check that the base manager's create_message was not called
         mock_base_manager.create_message.assert_not_called()
 
     def test_create_session_does_not_save(self):
-        """create_sessionがSTMに保存しないことを確認"""
+        """Check that create_session does not save to STM"""
         from src.services.memory.retrieve_only_session_manager import (
             RetrieveOnlySessionManager,
         )
@@ -481,16 +480,16 @@ class TestRetrieveOnlySessionManager:
 
         mock_session = Mock()
 
-        # create_sessionを呼び出し
+        # Call create_session
         result = manager.create_session(mock_session)
 
-        # セッションがそのまま返される
+        # The session is returned as is
         assert result is mock_session
-        # ベースマネージャーのcreate_sessionが呼び出されていないことを確認
+        # Check that the base manager's create_session was not called
         mock_base_manager.create_session.assert_not_called()
 
     def test_save_does_not_save(self):
-        """saveがSTMに保存しないことを確認"""
+        """Check that save does not save to STM"""
         from src.services.memory.retrieve_only_session_manager import (
             RetrieveOnlySessionManager,
         )
@@ -502,14 +501,14 @@ class TestRetrieveOnlySessionManager:
             session_id="test-session",
         )
 
-        # saveを呼び出し
+        # Call save
         manager.save([Mock(), Mock()])
 
-        # ベースマネージャーのsaveが呼び出されていないことを確認
+        # Check that the base manager's save was not called
         mock_base_manager.save.assert_not_called()
 
     def test_retrieve_customer_context_delegates_to_base(self):
-        """retrieve_customer_contextがベースマネージャーに委譲されることを確認"""
+        """Check that retrieve_customer_context is delegated to the base manager"""
         from src.services.memory.retrieve_only_session_manager import (
             RetrieveOnlySessionManager,
         )
@@ -523,14 +522,14 @@ class TestRetrieveOnlySessionManager:
 
         mock_event = Mock()
 
-        # retrieve_customer_contextを呼び出し
+        # Call retrieve_customer_context
         manager.retrieve_customer_context(mock_event)
 
-        # ベースマネージャーのretrieve_customer_contextが呼び出されることを確認
+        # Check that the base manager's retrieve_customer_context was called
         mock_base_manager.retrieve_customer_context.assert_called_once_with(mock_event)
 
     def test_config_property_delegates_to_base(self):
-        """configプロパティがベースマネージャーに委譲されることを確認"""
+        """Check that the config property is delegated to the base manager"""
         from src.services.memory.retrieve_only_session_manager import (
             RetrieveOnlySessionManager,
         )
@@ -544,15 +543,15 @@ class TestRetrieveOnlySessionManager:
             session_id="test-session",
         )
 
-        # configプロパティにアクセス
+        # Access the config property
         result = manager.config
 
-        # ベースマネージャーのconfigが返される
+        # The base manager's config is returned
         assert result is mock_base_manager.config
 
     def test_register_hooks_registers_retrieve_only(self):
-        """register_hooksがretrieve_customer_contextのみを登録することを確認"""
-        # strandsモジュールがない場合はスキップ
+        """Check that register_hooks registers only retrieve_customer_context"""
+        # Skip if the strands module is missing
         try:
             from strands.hooks import MessageAddedEvent  # noqa: F401
         except ImportError:
@@ -571,21 +570,21 @@ class TestRetrieveOnlySessionManager:
 
         mock_registry = Mock()
 
-        # register_hooksを呼び出し
+        # Call register_hooks
         manager.register_hooks(mock_registry)
 
-        # ベースマネージャーのregister_hooksが呼び出されていないことを確認
+        # Check that the base manager's register_hooks was not called
         mock_base_manager.register_hooks.assert_not_called()
 
-        # registryのadd_callbackが呼び出されたことを確認
+        # Check that the registry's add_callback was called
         mock_registry.add_callback.assert_called_once()
 
-        # 登録されたコールバックがretrieve_customer_contextであることを確認
+        # Check that the registered callback is retrieve_customer_context
         call_args = mock_registry.add_callback.call_args
         assert call_args[0][1] == manager.retrieve_customer_context
 
     def test_initialize_does_not_call_base_manager(self):
-        """initializeがベースマネージャーのinitializeを呼び出さないことを確認"""
+        """Check that initialize does not call the base manager's initialize"""
         from src.services.memory.retrieve_only_session_manager import (
             RetrieveOnlySessionManager,
         )
@@ -599,8 +598,8 @@ class TestRetrieveOnlySessionManager:
 
         mock_agent = Mock()
 
-        # initializeを呼び出し
+        # Call initialize
         manager.initialize(mock_agent)
 
-        # ベースマネージャーのinitializeが呼び出されていないことを確認
+        # Check that the base manager's initialize was not called
         mock_base_manager.initialize.assert_not_called()

@@ -1,17 +1,17 @@
-"""DynamoDB reads and writes of registered datasets (U5, U7).
+"""DynamoDB reads and writes of registered datasets.
 
 ``Datasets``: PK ``id``. An organization asset has no ``owner_persona_id``;
-``shared_group_ids`` is its usage scope (BR5.1), and without it only admins
-may use it. A persona-dedicated dataset has ``owner_persona_id`` (U5 BR6.1)
-and never a usage scope (BR5.6).
+``shared_group_ids`` is its usage scope, and without it only admins
+may use it. A persona-dedicated dataset has ``owner_persona_id``
+and never a usage scope.
 
 - A new registration is written only when the ``id`` does not exist yet, so
-  a stored usage scope is never overwritten (U7 BR1.5).
-- An edit writes only the given columns (NFR1.77); the scope, the owner
+  a stored usage scope is never overwritten.
+- An edit writes only the given columns; the scope, the owner
   persona and ``created_at`` are never part of it.
 - The usage scope changes only through :meth:`DatasetStore.update_scope`
-  (``ADD`` / ``DELETE``, BR5.2).
-- Listing returns organization assets only, filtered in the scan (U5 BR6.2).
+  (``ADD`` / ``DELETE``).
+- Listing returns organization assets only, filtered in the scan.
 
 Who may register, edit, delete or scope a dataset is decided by
 ``DatasetManager`` (and by ``PersonaManager`` for dedicated datasets).
@@ -77,7 +77,7 @@ class DatasetStore:
             "updated_at": dataset.updated_at.isoformat(),
             "notes": dataset.notes,
         }
-        # Persona-dedicated datasets only (U5 BR6.1); org assets have no column
+        # Persona-dedicated datasets only; org assets have no column
         if dataset.owner_persona_id:
             values["owner_persona_id"] = dataset.owner_persona_id
         item = {k: self._serializer.serialize(v) for k, v in values.items()}
@@ -113,7 +113,7 @@ class DatasetStore:
         notes: Optional[str] = None,
         columns: Optional[Sequence[DatasetColumn]] = None,
     ) -> bool:
-        """Write only the given columns of a dataset (U7 BR1.5, NFR1.77).
+        """Write only the given columns of a dataset.
 
         Returns:
             ``False`` when the dataset does not exist (nothing is created).
@@ -151,9 +151,9 @@ class DatasetStore:
     def list_org_assets(self) -> list[Dataset]:
         """Every organization-asset dataset, every scan page.
 
-        Persona-dedicated datasets are left out in the scan itself (U5 BR6.2).
+        Persona-dedicated datasets are left out in the scan itself.
         The table holds organization assets and dedicated datasets only, so
-        a scan stays small (not a per-user listing, NFR2).
+        a scan stays small (not a per-user listing).
         """
         params: dict[str, Any] = {
             "TableName": self.table_name,
@@ -177,11 +177,11 @@ class DatasetStore:
     def update_scope(
         self, dataset_id: str, *, add: frozenset[str], remove: frozenset[str]
     ) -> bool:
-        """``ADD`` then ``DELETE`` on ``shared_group_ids`` (BR5.2).
+        """``ADD`` then ``DELETE`` on ``shared_group_ids``.
 
         Two separate updates (DynamoDB refuses both actions on one attribute in
         one expression), each conditioned on the dataset existing and being an
-        organization asset (BR5.6). A side with no department is not sent;
+        organization asset. A side with no department is not sent;
         when the second update fails the first one stays (the screen reads the
         scope again). Removing every department drops the column: the dataset
         is admin only again.

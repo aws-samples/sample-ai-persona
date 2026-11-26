@@ -3,34 +3,34 @@ import { CfnWaitConditionHandle, Stack, StackProps } from 'aws-cdk-lib';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 
 /**
- * ログイン系の URL のレート制限（U9、NFR4.16、約束 C11）。パスはアプリのルート
- * （web/routers/auth.py）と tests/infra/test_waf_login_paths.py で照らす。正当な利用者が
- * 403 になるとき（出口の IP を多くの人が共有する組織など）は閾値を見直す（cdk/README.md「運用（管理者向け）」）。
+ * Rate limit for login-related URLs. Paths are checked against the app routes
+ * (web/routers/auth.py) and tests/infra/test_waf_login_paths.py. If legitimate users get
+ * 403 (for example an organization sharing one egress IP), revisit the threshold (cdk/README.md, operations for admins).
  */
 export const LOGIN_RATE_LIMITED_PATHS = ['/login', '/auth/callback', '/auth/new-password'] as const;
-/** 評価の窓（秒）ごとに IP 1 つから許す要求の数。 */
+/** Number of requests allowed per IP per evaluation window (seconds). */
 export const LOGIN_RATE_LIMIT = 100;
 export const LOGIN_RATE_WINDOW_SEC = 300;
 
 export interface EdgeStackProps extends StackProps {
   envName: string;
-  /** CloudFront 用の WAF を作るか（parameters.ts の enableWaf）。 */
+  /** Whether to create the WAF for CloudFront (enableWaf in parameters.ts). */
   enableWaf: boolean;
-  /** 許可する IP（CIDR）。指定すると、それ以外を拒否する。 */
+  /** Allowed IPs (CIDR). When set, all others are blocked. */
   allowedIpAddresses?: string[];
 }
 
-/** メトリクスとサンプルの要求を有効にした visibilityConfig（NFR8.27）。 */
+/** visibilityConfig with metrics and sampled requests enabled. */
 function visibility(metricName: string): wafv2.CfnWebACL.VisibilityConfigProperty {
   return { cloudWatchMetricsEnabled: true, metricName, sampledRequestsEnabled: true };
 }
 
 /**
- * ログイン系の URL のレート制限（priority 0、NFR4.16〜NFR4.18）。
+ * Rate limit for login-related URLs (priority 0).
  *
- * IP 許可のルールは allow で評価を打ち切るため、その前に置く（NFR4.17）。止めた要求は
- * WAF の既定の 403 を返し、アプリには届かない。メソッドは見ない（GET の画面、POST の送信、
- * Cognito からの戻りのすべてを数える）。
+ * Placed before the IP allow rule because allow ends evaluation. Blocked requests get the WAF default
+ * 403 and never reach the app. The method is ignored (GET pages, POST submits and
+ * returns from Cognito are all counted).
  */
 function loginRateLimitRule(): wafv2.CfnWebACL.RuleProperty {
   return {
@@ -49,8 +49,8 @@ function loginRateLimitRule(): wafv2.CfnWebACL.RuleProperty {
                 fieldToMatch: { uriPath: {} },
                 positionalConstraint: 'EXACTLY',
                 searchString: path,
-                // アプリ（uvicorn）はパスのエンコードを 1 回戻してからルートを選ぶ（/%6cogin は
-                // /login）。WAF も比較の前に 1 回戻し、別の表記で制限を外せないようにする
+                // The app (uvicorn) decodes the path once before routing (/%6cogin is
+                // /login). WAF also decodes once before comparing, so another spelling cannot evade the limit
                 textTransformations: [{ priority: 0, type: 'URL_DECODE' }],
               },
             })),
@@ -63,8 +63,8 @@ function loginRateLimitRule(): wafv2.CfnWebACL.RuleProperty {
 }
 
 /**
- * v0 から移したルール（U1）: IP 許可（あれば priority 1）、共通ルール（2）、全 URL の
- * レート制限（3）。
+ * Rules carried over from v0: IP allow (priority 1 if set), common rules (2), and the rate
+ * limit for all URLs (3).
  */
 function baseRules(ipSetArn?: string): wafv2.CfnWebACL.RuleProperty[] {
   const ipRules: wafv2.CfnWebACL.RuleProperty[] = ipSetArn
@@ -88,8 +88,8 @@ function baseRules(ipSetArn?: string): wafv2.CfnWebACL.RuleProperty[] {
         managedRuleGroupStatement: {
           vendorName: 'AWS',
           name: 'AWSManagedRulesCommonRuleSet',
-          // SizeRestrictions_BODY（ボディ 8KB 制限）はファイルアップロード（10MB/ファイル）と
-          // 両立しないため Count に落とす。サイズ検証はアプリ側で行う
+          // SizeRestrictions_BODY (8KB body limit) is incompatible with file uploads (10MB/file),
+          // so downgrade it to Count. Size validation is done in the app
           ruleActionOverrides: [{ name: 'SizeRestrictions_BODY', actionToUse: { count: {} } }],
         },
       },
@@ -106,12 +106,12 @@ function baseRules(ipSetArn?: string): wafv2.CfnWebACL.RuleProperty[] {
 }
 
 /**
- * Edge スタック: CloudFront 用の WAF WebACL（us-east-1、FR1.8）。
+ * Edge stack: WAF WebACL for CloudFront (us-east-1).
  *
- * v0 の WafStack の中身（IP 制限、共通ルール、全体のレート制限）を移した。U9 で
- * ログイン系の URL のレート制限を先頭に足した。WebACL は enableWaf: true（既定）のときだけ作る
- * （false では NoWafPlaceholder だけを置く。2026-10-17 に任意にし、2026-11-02 に既定を有効にした）。App スタックへは
- * WebACL の ARN を crossRegionReferences で渡す（約束 C10）。
+ * Carries over the v0 WafStack contents (IP restriction, common rules, global rate limit) and adds
+ * the rate limit for login-related URLs at the front. The WebACL is created only when enableWaf: true (default)
+ * (with false, only a NoWafPlaceholder is placed). The WebACL ARN is passed to the App stack via
+ * crossRegionReferences.
  */
 export class EdgeStack extends Stack {
   public readonly webAclArn?: string;
@@ -128,7 +128,7 @@ export class EdgeStack extends Stack {
       );
     }
     if (!enableWaf) {
-      // リソースのない CloudFormation スタックは作れないため、何もしない印を置く
+      // A CloudFormation stack cannot be empty, so place a no-op marker
       new CfnWaitConditionHandle(this, 'NoWafPlaceholder');
       return;
     }

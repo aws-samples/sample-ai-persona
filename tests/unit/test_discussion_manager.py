@@ -1,11 +1,7 @@
-"""DiscussionManager（簡易議論の実行・一覧・詳細・削除・インサイト）の単体テスト（U6）。
+"""Unit tests for DiscussionManager (run, list, detail, delete and insights of simple discussions).
 
-BR1.4、BR2.1〜BR2.6、BR2.8、BR5.1、BR7.1、NFR1.43〜NFR1.47、NFR2.15〜NFR2.17、
-AC2.1.2、AC2.1.3、AC4.1.1〜AC4.1.3、AC4.1.5、AC4.2.1、AC4.2.5、AC4.4.1、AC4.4.2、
-AC5.1.1〜AC5.1.3。
-
-DiscussionRecords・ParticipantReader・ResourceSharing・AccessPolicy は本物を使い、
-テーブルは tests/unit/discussion_world.py の偽物、AI はモック。
+DiscussionRecords, ParticipantReader, ResourceSharing and AccessPolicy are real; the tables
+are the fakes in tests/unit/discussion_world.py and the AI is mocked.
 """
 
 import json
@@ -102,7 +98,7 @@ def _run(manager, world, principal=OWNER, **kwargs):
 
 
 # =============================================================================
-# 実行（BR2.8、BR7.1、BR2.6、BR1.1）
+# Run
 # =============================================================================
 
 
@@ -241,7 +237,7 @@ class TestRunStreaming:
 
 
 # =============================================================================
-# 一覧（BR2.1〜BR2.3、NFR1.43、NFR2.15）
+# List
 # =============================================================================
 
 
@@ -292,7 +288,7 @@ class TestList:
         assert [d.id for d in listing.items] == [interview.id]
 
     def test_mode_filter_reaches_older_pages(self, manager, world):
-        """新しい 1 ページぶんがすべて別の種類でも、古いインタビューに届く。"""
+        """Older interviews are reached even when a whole new page is of another kind."""
         interview = _seed(manager, world, mode="interview")
         for _ in range(25):
             _seed(manager, world, mode="classic")
@@ -301,7 +297,7 @@ class TestList:
         assert listing.next_cursor is None
 
     def test_mode_filter_keeps_a_cursor_while_older_items_remain(self, manager, world):
-        """読み取りの上限に達したら、空でも「もっと見る」で続きを読める。"""
+        """When the read limit is hit, "show more" still continues even if the page is empty."""
         from src.managers import discussion_manager as dm
 
         interview = _seed(manager, world, mode="interview")
@@ -340,7 +336,7 @@ class TestList:
 
 
 # =============================================================================
-# 詳細・エクスポート・資料・削除・インサイト（BR2.4、BR2.5、BR5.1、NFR1.44、NFR1.45）
+# Detail, export, documents, delete, insights
 # =============================================================================
 
 
@@ -412,7 +408,7 @@ def _doc(doc_id: str, mime_type: str = "image/png") -> dict:
 
 
 class TestDeliverDocument:
-    """BR3.5: 議論を読めて、その議論の添付で、添付を読めるときだけ配る。"""
+    """Delivered only when the discussion is readable and so is the attachment of that discussion."""
 
     @pytest.fixture
     def delivery(self) -> Mock:
@@ -552,7 +548,7 @@ class TestRegenerateInsights:
             manager.check_insights_allowed(NO_ROLE, discussion.id)
 
     def test_a_legacy_discussion_is_refused_before_the_job(self, manager, world):
-        """v1.0.0 より前の議論（読むだけ）は、ジョブを積む前に断る。"""
+        """A discussion from before v1.0.0 (read-only) is refused before a job is queued."""
         world.store.bodies["old"] = {
             "id": "old",
             "topic": "古い議論",

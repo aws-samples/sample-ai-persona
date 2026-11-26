@@ -2,11 +2,11 @@
 {% from "components/icons.html" import icon_document, icon_plus, icon_arrow_left %}
 {% from "components/list_tabs.html" import list_tabs, list_tabpanel %}
 {#
-  アンケートテンプレートの一覧（M6、U7 BR1.2）。
-  引数:
-    listing        ... TabbedList（items は SurveyTemplate）。取れなければ None
-    error          ... 一覧を取れなかったときの文言
-    current_search ... 検索語（今のタブの中を検索する）
+  Survey template list.
+  Arguments:
+    listing        ... TabbedList (items are SurveyTemplate); None when unavailable
+    error          ... message when the list could not be fetched
+    current_search ... search term (searches within the current tab)
 #}
 
 {% block content %}
@@ -32,7 +32,7 @@
         </div>
     </div>
 
-    <!-- 検索（今のタブの中） -->
+    <!-- Search (within the current tab) -->
     <div class="bg-white rounded-lg shadow-md p-4 mb-6">
         <label for="template-search" class="block text-sm font-medium text-gray-700 mb-1">テンプレート名で検索</label>
         <input type="text" id="template-search" name="search" value="{{ current_search or '' }}" placeholder="テンプレート名を検索..."
@@ -42,7 +42,7 @@
                hx-include="#survey-template-list [data-survey-template-tab]">
     </div>
 
-    {#- 一覧（タブ別、M6）。タブと読み直しは /survey/templates?tab=... #}
+    {#- List (per tab). Tabs and reloads use /survey/templates?tab=... #}
     {%- set active = listing.tab.value if listing else (tab or "mine") %}
     {{ list_tabs(active, listing.counts if listing else {}, listing.show_all if listing else False, "/survey/templates", "survey-template-list") }}
     {% call list_tabpanel("survey-template-list", active, "/survey/templates") %}

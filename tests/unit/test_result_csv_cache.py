@@ -1,8 +1,8 @@
-"""ResultCsvCache（結果 CSV の台ごとのキャッシュ）の単体テスト（U7）。
+"""Unit tests for ResultCsvCache (per-survey cache of result CSVs).
 
-NFR2.22（20 件・合計 256MB・1 件 32MB・300 秒）、performance-design.md 2（最も古く
-使われたものから捨てる、1 つのロック）、BR2.5（鍵はアンケートの ID、削除で外す）。
-時計は注入し、time.sleep には頼らない。
+Limits: 20 entries, 256MB total, 32MB per entry, 300 seconds. The least recently used
+entry is evicted under a single lock. The key is the survey ID and is removed on delete.
+The clock is injected; time.sleep is not relied on.
 """
 
 import threading
@@ -128,7 +128,7 @@ def test_many_threads_never_exceed_the_limits(clock):
 
 
 def test_analysis_and_delete_share_the_one_instance():
-    """Review: 削除の Manager からも消せるよう、2 つの Manager が同じ実体を使う。"""
+    """Both Managers share the same instance so the deleting Manager can clear it too."""
     from unittest.mock import Mock
 
     from src.managers.survey_analysis_manager import SurveyAnalysisManager

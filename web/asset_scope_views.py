@@ -1,4 +1,4 @@
-"""The usage-scope dialog of organization assets (M10, U7 BR5.2), for the routers.
+"""The usage-scope dialog of organization assets, for the routers.
 
 The settings screen (datasets, knowledge bases) and the persona data screen
 (custom persona data) show the same dialog. This module only turns requests

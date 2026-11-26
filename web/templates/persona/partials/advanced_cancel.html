@@ -1,8 +1,8 @@
 {#
-  区画 C の「中止」（U5 BR31.1、BR31.4）。advanced_progress.html の中止の欄の中身と、中止の POST の応答。
-  引数:
-    generation_id ... 生成の ID
-    cancelling ... 受け付けたあと（「中止しています」で押せなくする）
+  "Cancel" of section C. Content of the cancel area in advanced_progress.html, and the response of the cancel POST.
+  Arguments:
+    generation_id ... generation ID
+    cancelling ... after the request is accepted (shows "中止しています" and disables the button)
 #}
 {% if cancelling %}
 <button type="button" data-testid="advanced-cancel-button" disabled aria-disabled="true"

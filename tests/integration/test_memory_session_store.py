@@ -1,6 +1,6 @@
-"""MemorySessionStore（AUTH_MODE=local のプロセス内の置き場）のテスト。
+"""Tests for MemorySessionStore (the in-process store for AUTH_MODE=local).
 
-SessionStoreService と同じ口で、同じ振る舞いをすること（BR1.15）。
+It must expose the same interface and behave the same as SessionStoreService.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -73,7 +73,7 @@ def test_delete_respects_the_version():
     assert store.get(session.session_id_hash) is None
 
 
-# --- U8: LoginChallenge（SessionStoreService と同じ振る舞い） ---
+# --- LoginChallenge (same behavior as SessionStoreService) ---
 
 
 def _challenge() -> LoginChallenge:

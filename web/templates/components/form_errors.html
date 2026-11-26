@@ -1,24 +1,19 @@
 {#
-  フォームのバリデーションエラー表示部品（Issue #117 ステップ4）。
+  Form validation error components.
 
-  入力を直せば解決するエラー（ErrorKind.VALIDATION / CAPACITY）は、フォームを
-  消さずに該当フィールドの横に表示する。文言は web/error_messages.py の
-  カタログが解決したものを `form_error` として受け取る。
+  Errors that the user can fix by correcting input (ErrorKind.VALIDATION / CAPACITY) are shown next to the relevant field without removing the form. The message is resolved by the catalog in web/error_messages.py and received as `form_error`.
 
-  提供するマクロ:
-  - form_error_summary(form_error, error_field) ... フォーム冒頭のサマリー
-  - field_border(error_field, field_name) ........ 入力欄の枠線クラス
-  - field_error(error_field, field_name, form_error) ... 各フィールド直下のエラー
+  Macros provided:
+  - form_error_summary(form_error, error_field) ... summary at the top of the form
+  - field_border(error_field, field_name) ........ border classes for an input
+  - field_error(error_field, field_name, form_error) ... error shown right below each field
 
-  `error_field` はエラー対象のフィールドキー（例: "name"）。Manager が
-  context["field"] に載せた場合のみ入る。特定できない場合はサマリーだけを出す
-  （どのフィールドか分からないまま赤枠を付けると誤誘導になるため）。
+  `error_field` is the field key the error refers to (for example "name"). It is set only when the Manager puts it in context["field"]. When the field cannot be identified, only the summary is shown (a red border on an unknown field would mislead).
 
-  注意: この注釈内に Jinja のタグ記法を書くと、コメントであっても解析されて
-  未定義エラーになる。使用例はテンプレート側の呼び出し箇所を参照すること。
+  Note: writing Jinja tag syntax inside this comment makes it parse even though it is a comment and raises an undefined error. See the call sites in templates for usage.
 #}
 
-{# フォーム冒頭のサマリー。フィールドが特定できない場合はここだけに出る #}
+{# Summary at the top of the form. When the field cannot be identified, the error appears only here. #}
 {% macro form_error_summary(form_error, error_field) %}
 {%- if form_error and not error_field %}
 <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6" role="alert">
@@ -27,7 +22,7 @@
 {%- endif %}
 {% endmacro %}
 
-{# 入力欄に付ける枠線クラス。エラー時のみ赤くする #}
+{# Border classes for an input; red only on error. #}
 {% macro field_border(error_field, field_name) %}
 {%- if error_field and error_field == field_name -%}
 border-red-400 focus:ring-red-500 focus:border-red-500
@@ -36,7 +31,7 @@ border-gray-300 focus:ring-blue-500 focus:border-blue-500
 {%- endif -%}
 {% endmacro %}
 
-{# 該当フィールド直下に出すインラインエラー #}
+{# Inline error shown right below the field. #}
 {% macro field_error(error_field, field_name, form_error) %}
 {%- if error_field and error_field == field_name and form_error %}
 <p class="mt-1 text-sm text-red-700" role="alert">{{ form_error }}</p>

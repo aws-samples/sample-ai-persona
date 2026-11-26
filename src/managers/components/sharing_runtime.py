@@ -1,19 +1,19 @@
-"""One set of sharing parts per task (U4).
+"""One set of sharing parts per task.
 
 ``ResourceSharing`` keeps the ``all`` count for 60 seconds, ``DepartmentDirectory``
 and ``OwnerDirectory`` keep their copies for five minutes. Those caches are per
-task (``performance-design.md`` §3), so every Manager that shares resources
-(``SharingManager``, ``PersonaManager``; U6 / U7 add theirs) must use the same
+task, so every Manager that shares resources
+(``SharingManager``, ``PersonaManager``) must use the same
 instances. This module holds them.
 
 The parts are built from injected sources: the Managers pass a ``build``
 callable that reads the services from ``service_factory``; this module never
 reaches for the factory itself (``.claude/rules/architecture.md``, Component).
 
-U5 adds a second set, :class:`AccessParts`: the one ``ResourceLookup`` (with
-the persona, dataset and knowledge-base readers registered, contract C3) and
+A second set, :class:`AccessParts`, holds the one ``ResourceLookup`` (with
+the persona, dataset and knowledge-base readers registered) and
 the one ``FileAttachments`` that ``FileManager`` and the parents' Managers
-share. U6 / U7 register their parent readers in :func:`build_access_parts`.
+share. Parent readers are registered in :func:`build_access_parts`.
 """
 
 import threading
@@ -41,7 +41,7 @@ class SharingParts:
     Attributes:
         sharing: Sharing decisions and tab queries.
         owners: The owner-name copy (display only).
-        departments: The department copy (U7: the usage-scope choices, C4).
+        departments: The department copy (the usage-scope choices).
     """
 
     sharing: ResourceSharing
@@ -87,7 +87,7 @@ def reset_shared_parts() -> None:
         _discussion_parts = None
 
 
-# --- U5: decision reads and file attachments --------------------------------------
+# Decision reads and file attachments
 
 
 class LookupReaders(Protocol):
@@ -98,11 +98,11 @@ class LookupReaders(Protocol):
 
 @dataclass(frozen=True)
 class AccessParts:
-    """The per-task decision-read and attachment parts (U5).
+    """The per-task decision-read and attachment parts.
 
     Attributes:
         lookup: Reads the decision columns of personas, datasets and
-            knowledge bases (contract C3).
+            knowledge bases.
         files: Attaches uploads and decides who may read them.
     """
 
@@ -114,26 +114,26 @@ _access_parts: AccessParts | None = None
 
 
 def lookup_tables() -> list[LookupTable]:
-    """The resource types registered with ``ResourceLookup`` (C3).
+    """The resource types registered with ``ResourceLookup``.
 
     Datasets, knowledge bases and custom persona data are organization assets:
-    their ``shared_group_ids`` is the usage scope (U7 BR5.7); an asset without
+    their ``shared_group_ids`` is the usage scope; an asset without
     the column is admin only.
     """
     return [
         LookupTable(ResourceType.PERSONA, config.table_name("Personas"), "name"),
-        # U6: 議論（表示名は topic。所有者のない古い議論は owner_sub が空）
+        # Discussions (display name is the topic; old discussions without an owner have an empty owner_sub)
         LookupTable(ResourceType.DISCUSSION, config.table_name("Discussions"), "topic"),
         LookupTable(ResourceType.DATASET, config.table_name("Datasets"), "name"),
         LookupTable(
             ResourceType.KNOWLEDGE_BASE, config.table_name("KnowledgeBases"), "name"
         ),
-        # U7: テンプレートと結果（所有者のない古い行は owner_sub が空、BR1.6）
+        # Templates and results (old rows without an owner have an empty owner_sub)
         LookupTable(
             ResourceType.SURVEY_TEMPLATE, config.table_name("SurveyTemplates"), "name"
         ),
         LookupTable(ResourceType.SURVEY, config.table_name("Surveys"), "name"),
-        # U7: カスタムペルソナデータ（利用範囲だけ。名前の押さえ name# は読まない）
+        # Custom persona data (usage scope only; the name# key row is not read)
         LookupTable(
             ResourceType.CUSTOM_PERSONA_DATA,
             config.CUSTOM_PERSONA_DATA_TABLE_NAME,
@@ -161,14 +161,14 @@ def build_access_parts(
         (table.resource_type, lookup_service.reader(table)) for table in lookup_tables()
     )
     files = FileAttachments(file_store, tags, **file_options)
-    # U6 BR5.1: 議論を親とする資料は、議論を読める人に配信する
+    # Files whose parent is a discussion are served to whoever can read the discussion
     files.register_parent(
         "discussion",
         lambda principal, discussion_id: AccessPolicy.can_read(
             principal, lookup.get(ResourceType.DISCUSSION, discussion_id)
         ),
     )
-    # U7 BR1.9: テンプレートを親とする画像は、テンプレートを読める人に配信する
+    # Images whose parent is a template are served to whoever can read the template
     files.register_parent(
         "survey_template",
         lambda principal, template_id: AccessPolicy.can_read(
@@ -188,12 +188,12 @@ def shared_access_parts(build: Callable[[], AccessParts]) -> AccessParts:
     return _access_parts
 
 
-# --- U6: discussions -------------------------------------------------------------
+# Discussions
 
 
 @dataclass(frozen=True)
 class DiscussionParts:
-    """The per-task discussion parts (U6, ADR-006).
+    """The per-task discussion parts.
 
     Attributes:
         records: Saves, reads and deletes discussions (the four Managers).

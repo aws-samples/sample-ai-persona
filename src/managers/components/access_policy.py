@@ -1,25 +1,25 @@
-"""The authorization decision (ADR-005, contract C2).
+"""The authorization decision.
 
-Every "may this user ..." question is answered here and nowhere else (NFR1.1).
+Every "may this user ..." question is answered here and nowhere else.
 The functions are pure: they look only at the :class:`Principal`, the
 :class:`AccessTarget` and the permission table of ``src/models/authz.py``, and
-never call DynamoDB or Cognito (NFR9.13). Reading the targets is
+never call DynamoDB or Cognito. Reading the targets is
 ``ResourceLookup``'s job.
 
-Rules (``functional-design/rules.md``):
+Rules:
 
-- BR2.1: permissions come from the roles; no permission at all (no role, or
-  only unknown role names) and an empty ``sub`` allow nothing (NFR1.7).
-- BR2.2: ``require`` checks an operation permission. Admin-only screens and
+- Permissions come from the roles; no permission at all (no role, or
+  only unknown role names) and an empty ``sub`` allow nothing.
+- ``require`` checks an operation permission. Admin-only screens and
   APIs pass ``hidden_as`` so a member gets the same 404 as for a missing ID.
-- BR2.3 / BR2.4: read = owner, shared department, or ``resource:read_all``;
+- Read = owner, shared department, or ``resource:read_all``;
   manage = owner or ``resource:manage_all``. A ``None`` / empty owner matches
   nobody.
-- BR2.6: organization assets are used by in-scope departments or
+- Organization assets are used by in-scope departments or
   ``settings:manage``; their owner is not looked at.
-- BR2.7: unreadable -> the caller's resource-specific NOT_FOUND (same as a
+- Unreadable -> the caller's resource-specific NOT_FOUND (same as a
   missing ID); readable but not manageable -> ``ACCESS_DENIED`` (403).
-- BR2.13: every denial writes one ``authz.denied`` line (reason,
+- Every denial writes one ``authz.denied`` line (reason,
   resource_type, sub; never the resource ID) through :func:`_deny`.
 """
 
@@ -58,7 +58,7 @@ def _deny(
     resource_type: ResourceType | None,
     error: CodedError,
 ) -> NoReturn:
-    """Log the denial (BR2.13) and raise ``error``.
+    """Log the denial and raise ``error``.
 
     Logging is a local write, not an external call, so the decision stays pure.
     """
@@ -85,7 +85,7 @@ class AccessPolicy:
     def is_owner(principal: Principal, owner_sub: str | None) -> bool:
         """Whether ``principal`` owns something owned by ``owner_sub``.
 
-        Both sides must be non-empty and equal (NFR1.7), and the principal must
+        Both sides must be non-empty and equal, and the principal must
         hold at least one permission.
         """
         if not AccessPolicy._allowed(principal) or not owner_sub:
@@ -103,9 +103,9 @@ class AccessPolicy:
         """Raise ``not_found`` unless ``principal`` owns it (owner-only things).
 
         For things only the owner may use, even with ``resource:read_all``
-        (an interview session, BR3.2). A missing thing is passed as
+        (an interview session). A missing thing is passed as
         ``owner_sub=None`` and gets the same answer and the same one
-        ``authz.denied`` line as someone else's (NFR1.4, BR2.13).
+        ``authz.denied`` line as someone else's.
 
         Args:
             principal: The user.
@@ -133,7 +133,7 @@ class AccessPolicy:
         hidden_as: ErrorCode | None = None,
         resource_type: ResourceType | None = None,
     ) -> None:
-        """Check an operation permission (BR2.2).
+        """Check an operation permission.
 
         Args:
             principal: The user.
@@ -164,7 +164,7 @@ class AccessPolicy:
 
     @staticmethod
     def can_read(principal: Principal, target: AccessTarget) -> bool:
-        """Owner, a shared department, or ``resource:read_all`` (BR2.3)."""
+        """Owner, a shared department, or ``resource:read_all``."""
         allowed = AccessPolicy._allowed(principal)
         if not target.exists or not allowed:
             return False
@@ -176,7 +176,7 @@ class AccessPolicy:
 
     @staticmethod
     def can_manage(principal: Principal, target: AccessTarget) -> bool:
-        """Owner or ``resource:manage_all`` (BR2.4)."""
+        """Owner or ``resource:manage_all``."""
         allowed = AccessPolicy._allowed(principal)
         if not target.exists or not allowed:
             return False
@@ -187,7 +187,7 @@ class AccessPolicy:
 
     @staticmethod
     def can_use_asset(principal: Principal, target: AccessTarget) -> bool:
-        """In-scope department or ``settings:manage`` (BR2.6). Owner ignored."""
+        """In-scope department or ``settings:manage``. Owner ignored."""
         allowed = AccessPolicy._allowed(principal)
         if not target.exists or not allowed:
             return False
@@ -200,7 +200,7 @@ class AccessPolicy:
     def shareable_groups(
         principal: Principal, all_groups: frozenset[str]
     ) -> frozenset[str]:
-        """Departments ``principal`` may share with (BR2.5).
+        """Departments ``principal`` may share with.
 
         Args:
             all_groups: IDs of the departments that exist now.
@@ -216,9 +216,9 @@ class AccessPolicy:
     def ensure_readable(
         principal: Principal, target: AccessTarget, not_found: ErrorCode
     ) -> None:
-        """Raise ``not_found`` unless ``principal`` can read ``target`` (BR2.7).
+        """Raise ``not_found`` unless ``principal`` can read ``target``.
 
-        An unreadable target gets exactly what a missing one gets (NFR1.4).
+        An unreadable target gets exactly what a missing one gets.
         """
         if AccessPolicy.can_read(principal, target):
             return
@@ -233,7 +233,7 @@ class AccessPolicy:
     def ensure_manageable(
         principal: Principal, target: AccessTarget, not_found: ErrorCode
     ) -> None:
-        """Read check first (404), then the manage check (403) (BR2.7).
+        """Read check first (404), then the manage check (403).
 
         Raises:
             CodedError: ``not_found`` when the target is not readable.

@@ -7,12 +7,12 @@ export interface VpcProps {
 }
 
 /**
- * アプリの VPC（v1.0.0、App スタック）。
+ * App VPC (v1.0.0, App stack).
  *
- * 2 AZ、NAT 1 台、タスクと内部 ALB はプライベートサブネット。DynamoDB と S3 は
- * ゲートウェイ型の VPC エンドポイントで NAT を通さずに届く（infrastructure-specification.md）。
- * VPC は状態を持たないため App スタックと一緒に作り直せる。v0 にあった削除の
- * 明示（applyRemovalPolicy）はやめた（project.md の Forbidden）。
+ * 2 AZs, 1 NAT, tasks and the internal ALB in private subnets. DynamoDB and S3 are reached through
+ * gateway VPC endpoints without passing the NAT.
+ * The VPC holds no state, so it can be recreated with the App stack. The explicit removal
+ * (applyRemovalPolicy) that v0 had was dropped (DESTROY is forbidden in this project).
  */
 export class Vpc extends Construct {
   public readonly vpc: ec2.Vpc;

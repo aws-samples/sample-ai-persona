@@ -1,4 +1,4 @@
-"""What a finished advanced generation leaves behind (W5-6, BR9.1, contract C7/C8).
+"""What a finished advanced generation leaves behind.
 
 Pure builders of the run summary, the analysis record and the candidates, so
 the Manager only orders the writes. Nothing here reads a Service.
@@ -29,9 +29,9 @@ from ...models.persona_candidate import PersonaCandidate
 from ...models.source_file import SourceFile, SourceKind
 from .prompts import AdvancedPersonaOutput
 
-#: ``generation_context.mode`` of an advanced generation's persona (C7).
+#: ``generation_context.mode`` of an advanced generation's persona.
 ADVANCED_MODE = "advanced"
-#: Version of the ``generation_context`` it carries (C7).
+#: Version of the ``generation_context`` it carries.
 CONTEXT_SCHEMA_VERSION = 1
 
 
@@ -48,12 +48,12 @@ def build_analysis_run(
     ai_code_sha256: Sequence[str] = (),
     extra_params: Optional[Mapping[str, Any]] = None,
 ) -> AnalysisRun:
-    """The summary kept on the generation and each candidate (contract C8).
+    """The summary kept on the generation and each candidate.
 
-    U4: ``report`` is ``None`` for documents alone; every source's checksum is
+    ``report`` is ``None`` for documents alone; every source's checksum is
     kept in ``source_file_ids`` order, and the document mode is a parameter.
-    U6: the hashes of the successful AI-written code follow the library's,
-    and ``extra_params`` adds ``detailed_analysis`` and ``join`` (BR37.4).
+    The hashes of the successful AI-written code follow the library's,
+    and ``extra_params`` adds ``detailed_analysis`` and ``join``.
     """
     params: dict[str, Any] = {
         "persona_count": generation.persona_count,
@@ -89,11 +89,11 @@ def build_record(
     document_mode: Optional[DocumentMode] = None,
     ai_code: Sequence[tuple[str, str, str, Optional[str]]] = (),
 ) -> AnalysisRecord:
-    """The analysis record: the code that ran and its hash (BR9.1, BR38.2).
+    """The analysis record: the code that ran and its hash.
 
     ``calls`` are the tool calls (``tool_call_id``, ``tool``, ``ok``,
-    ``error_code``); their outputs are not kept. No URL goes in. U4: one
-    ``prepare_document`` block per document, then the quote check. U6: one
+    ``error_code``); their outputs are not kept. No URL goes in. One
+    ``prepare_document`` block per document, then the quote check; one
     ``prepare`` per table, and ``ai_code`` (``tool_call_id``, code, sha256 of
     the successful ``run_code`` calls only) as ``ai_written`` blocks in the
     order they ran; failed calls stay in ``tool_calls`` with their code only.
@@ -144,7 +144,7 @@ def build_record(
                     "sha256": sha,
                 }
                 if title:
-                    # BR37.4: the joined columns and the match rates (S9)
+                    # The joined columns and the match rates
                     block["title"] = title
                 blocks.append(block)
             continue
@@ -167,7 +167,7 @@ def build_record(
         prepare_version=report.prepare_version if report else DOCUMENT_PREPARE_VERSION,
         source_checksums=[s.checksum or "" for s in sources],
         now=now,
-        # U2 BR14.3: name the files even after they are deleted
+        # Name the files even after they are deleted
         source_file_ids=[s.source_file_id for s in sources],
         source_display_names=[s.display_name for s in sources],
         tool_calls=[
@@ -184,7 +184,7 @@ def build_record(
 
 
 def _playbook_of(call: Any) -> dict[str, str]:
-    """U6 addendum: the playbook a ``load_playbook`` read (a fixed name only)."""
+    """The playbook a ``load_playbook`` read (a fixed name only)."""
     name = getattr(call, "playbook", None)
     if call.tool == "load_playbook" and name in PLAYBOOK_NAMES:
         return {"playbook": str(name)}
@@ -203,8 +203,8 @@ def build_candidates(
 ) -> list[PersonaCandidate]:
     """One candidate per persona, readable as long as the result (24 hours).
 
-    ``generation_context`` (C7) points at the pending record (the generation
-    ID); ``PersonaManager`` re-points it at the persona's copy on save (BR9.4).
+    ``generation_context`` points at the pending record (the generation
+    ID); ``PersonaManager`` re-points it at the persona's copy on save.
     """
     shared = {
         "mode": ADVANCED_MODE,

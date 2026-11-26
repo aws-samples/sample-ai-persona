@@ -1,33 +1,24 @@
 {#
-  部署の選択（C6、約束 C6）。共有先（M7）・利用範囲（M10）の部署を複数選ぶ。
-  中間の部署の 3 段の切り替え（indeterminate）、{name}_unchanged の隠し入力、
-  外れるグループの注意、全部外すときの確認、保存ボタンの有効・無効は app.js の
-  DepartmentPicker が受け持つ。値の意味づけは U4 の ResourceSharing（BR1.12）:
-  {name} は共有する、{name}_unchanged は対象ごとに今のまま、{name}_initial は
-  開いたときに選択か中間だった部署。外すのは「開いたときに共有中か中間で、
-  利用者が外した部署」だけ（{name}_initial − {name} − {name}_unchanged）。
-  開いたときに未選択だった部署は外さない（開いた後に別の人が足した部署を守る）。
+  Department picker. Selects multiple departments for the share target or the usage scope.
+  The three-state toggle for intermediate departments (indeterminate), the {name}_unchanged hidden inputs, the warning for groups that will be removed, the confirmation when removing everything, and enabling/disabling the save button are handled by DepartmentPicker in app.js.
+  Semantics of the values (see ResourceSharing): {name} is shared, {name}_unchanged keeps each target as it is, {name}_initial is the set of departments that were selected or intermediate when the dialog opened. Only departments that were shared or intermediate at open time and that the user then removed are removed ({name}_initial - {name} - {name}_unchanged). Departments that were unselected at open time are never removed, which protects departments someone else added after the dialog opened.
 
-  引数（約束 C6。mode は Jinja のマクロとして書けるよう既定値を付けた）:
-    name      ... 送信欄の名前
-    choices   ... 選べるグループ（src/models/authz.py の Department。group_id と display_name を読む）。
-                  member は所属だけ、admin は全部署
-    selected  ... 1 件を対象に開いたときの今の設定（group_id の集合）
-    mixed     ... 複数を対象に開いたときの {group_id: (共有中の件数, 対象の件数)}
-    mode      ... "share"（共有先）/ "scope"（利用範囲）
-    id_prefix ... この部品の中の要素の id の頭。省略すると name。同じ name の部品を
-                  1 画面に 2 つ置くときは別の値を渡す（id が重ならないように）
-    vanished  ... もう存在しないが共有されている部署の group_id（U4、admin のときだけ渡す）。
-                  選択肢の最後に vanished_label の名前で出し、今の状態（選択か中間）から始める
-    vanished_label ... 消えた部署の表示名
-    legend_text ... 見出しを変えたいとき（省略すると mode から決める。設定画面の高度な生成は「許可グループ」）
+  Arguments (defaults are given so mode works as a Jinja macro argument):
+    name      ... name of the submitted field
+    choices   ... selectable groups (Department from src/models/authz.py; reads group_id and display_name). Members see only their own departments, admins see all
+    selected  ... current setting when opened for a single target (set of group_id)
+    mixed     ... when opened for multiple targets, {group_id: (shared count, target count)}
+    mode      ... "share" (share target) / "scope" (usage scope)
+    id_prefix ... prefix for element ids inside this component; defaults to name. Pass a different value when placing two components with the same name on one page, so ids do not collide
+    vanished  ... group_ids of departments that no longer exist but are still shared (admin only). Shown last under vanished_label, starting from the current state (selected or intermediate)
+    vanished_label ... display name for vanished departments
+    legend_text ... override for the legend (defaults to a value derived from mode; the advanced-generation settings use "allowed groups")
 #}
-{#- free（U6）: 部署のほかにも保存する値がある区画（設定画面の高度な生成）。保存ボタンの
-    有効・無効と全部外すときの確認を DepartmentPicker に任せない -#}
+{#- free: a section that holds values other than departments (the advanced-generation settings). Stops DepartmentPicker from managing the save button state and the confirmation when removing everything. -#}
 {% macro department_picker(name, choices, selected, mixed=None, mode="share", id_prefix=None, vanished=None, vanished_label="（存在しないグループ）", free=False, legend_text=None) -%}
 {%- set prefix = id_prefix or name -%}
 {%- set legend = legend_text or ("利用できるグループ（複数選択可）" if mode == "scope" else "共有するグループ（複数選択可）") -%}
-{#- 対象の件数（1 件を対象に開いたときは 1）。全部外す確認の判定に app.js が使う -#}
+{#- Number of targets (1 when opened for a single target). Used by app.js to decide whether the confirmation for removing everything is needed. -#}
 {%- set ns = namespace(targets=1) -%}
 {%- if mixed %}{% for counts in mixed.values() %}{% if counts[1] > ns.targets %}{% set ns.targets = counts[1] %}{% endif %}{% endfor %}{% endif -%}
 {%- set options = choices | list -%}
@@ -68,16 +59,16 @@
             <span id="{{ note_id }}" class="text-xs text-gray-600">{{ counts[1] }} 件中 {{ counts[0] }} 件で共有中</span>
             {%- endif %}
             {%- if state != "unchecked" %}
-            {#- 開いたときに選択か中間だった部署（BR1.12）。外す部署はこの中からだけ決まる #}
+            {#- Departments that were selected or intermediate when opened. Departments to remove are chosen only from this set. #}
             <input type="hidden" name="{{ name }}_initial" value="{{ group_id }}" data-department-initial>
             {%- endif %}
         </label>
         {%- endfor %}
     </div>
     {%- endif %}
-    {# 保存すると外れるグループと件数。読み込み時から置き、変わったときだけ文字を入れ替える #}
+    {# Groups (and count) that will be removed on save. Rendered from page load; only its text is swapped when it changes. #}
     <p id="{{ prefix }}-removing" data-department-removing role="status" aria-live="polite" class="mt-2 text-sm text-yellow-800"></p>
-    {# 選べるグループのすべてから外れる対象ができるときの確認。既定のフォーカスは「戻る」 #}
+    {# Confirmation shown when saving would remove a target from all selectable groups. Default focus is "Back". #}
     <div data-department-confirm hidden role="group" aria-labelledby="{{ prefix }}-confirm-text"
          class="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
         <p id="{{ prefix }}-confirm-text" class="text-sm text-yellow-900">

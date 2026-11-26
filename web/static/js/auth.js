@@ -1,5 +1,5 @@
 /*
- * Login forms of the closed network (v1.0.0 U8, mockups.md M2 / M3).
+ * Login forms of the closed network.
  *
  * - [data-busy-form]: on submit the button is disabled and shows its
  *   data-busy-label, so the form is not sent twice.

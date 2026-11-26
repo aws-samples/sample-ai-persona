@@ -1,4 +1,4 @@
-"""U4 の配信の値（``src/models/asset_delivery.py``、BR2.3、BR2.7）。"""
+"""Delivery value types (``src/models/asset_delivery.py``)."""
 
 import pytest
 

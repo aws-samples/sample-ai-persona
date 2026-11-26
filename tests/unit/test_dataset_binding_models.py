@@ -1,5 +1,5 @@
 """
-データセット連携機能の統合テスト
+Integration tests for the dataset binding feature.
 """
 
 import pytest
@@ -11,11 +11,11 @@ from src.models.persona_binding import PersonaBinding
 
 
 class TestDatasetIntegrationFlow:
-    """データセット連携フロー統合テスト"""
+    """Dataset binding flow integration tests."""
 
     @pytest.fixture
     def sample_dataset(self):
-        """サンプルデータセット"""
+        """Sample dataset."""
         now = datetime.now()
         return Dataset(
             id="dataset-integration-001",
@@ -41,7 +41,7 @@ class TestDatasetIntegrationFlow:
 
     @pytest.fixture
     def sample_persona(self):
-        """サンプルペルソナ"""
+        """Sample persona."""
         return Persona.create_new(
             name="田中太郎",
             age=35,
@@ -54,7 +54,7 @@ class TestDatasetIntegrationFlow:
 
     @pytest.fixture
     def sample_binding(self, sample_persona, sample_dataset):
-        """サンプル紐付け"""
+        """Sample binding."""
         return PersonaBinding.for_dataset(
             sample_persona.id,
             sample_dataset.id,
@@ -63,41 +63,41 @@ class TestDatasetIntegrationFlow:
         )
 
     def test_dataset_binding_flow(self, sample_dataset, sample_persona, sample_binding):
-        """データセット紐付けフローテスト"""
-        # 紐付け情報の検証
+        """Dataset binding flow."""
+        # Verify the binding
         assert sample_binding.persona_id == sample_persona.id
         assert sample_binding.target_id == sample_dataset.id
         assert sample_binding.target_key == f"DATASET#{sample_dataset.id}"
         assert sample_binding.binding_keys["user_id"] == "U12345"
 
     def test_dataset_to_dict_and_back(self, sample_dataset):
-        """データセットのシリアライズ/デシリアライズテスト"""
-        # 辞書に変換
+        """Dataset serialization/deserialization."""
+        # Convert to dict
         data = sample_dataset.to_dict()
 
-        # 辞書から復元
+        # Restore from dict
         restored = Dataset.from_dict(data)
 
-        # 検証
+        # Verify
         assert restored.id == sample_dataset.id
         assert restored.name == sample_dataset.name
         assert len(restored.columns) == len(sample_dataset.columns)
         assert restored.row_count == sample_dataset.row_count
 
     def test_binding_to_dict_and_back(self, sample_binding):
-        """紐付けのシリアライズ/デシリアライズテスト"""
-        # 辞書に変換
+        """Binding serialization/deserialization."""
+        # Convert to dict
         data = sample_binding.to_dict()
 
-        # 辞書から復元
+        # Restore from dict
         restored = PersonaBinding.from_dict(data)
 
-        # 検証
+        # Verify
         assert restored == sample_binding
 
 
 def _session(personas, **kwargs):
-    """A U6 interview session (kept outside the app) of ``personas``."""
+    """An interview session (kept outside the app) of ``personas``."""
     from datetime import timezone
 
     from src.models.interview_session import InterviewSession
@@ -113,11 +113,11 @@ def _session(personas, **kwargs):
 
 
 class TestInterviewDatasetIntegration:
-    """インタビューモードデータセット連携統合テスト"""
+    """Interview mode dataset integration tests."""
 
     @pytest.fixture
     def sample_personas(self):
-        """サンプルペルソナリスト"""
+        """Sample persona list."""
         return [
             Persona.create_new(
                 name="山田一郎",
@@ -140,7 +140,7 @@ class TestInterviewDatasetIntegration:
         ]
 
     def test_interview_session_with_dataset_enabled(self, sample_personas):
-        """データセット連携有効のインタビューセッションテスト"""
+        """Interview session with dataset binding enabled."""
         session = _session(sample_personas, enable_dataset=True)
 
         assert session.enable_dataset is True
@@ -148,7 +148,7 @@ class TestInterviewDatasetIntegration:
         assert len(session.persona_ids) == 2
 
     def test_interview_session_status_includes_dataset(self, sample_personas):
-        """保存したセッションに enable_dataset が残る（どの台の状態でも同じ値になる）"""
+        """enable_dataset survives saving (same value whichever instance handles it)."""
         from src.models.interview_session import InterviewSession
 
         session = _session(sample_personas, enable_dataset=True)

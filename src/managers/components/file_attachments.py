@@ -1,4 +1,4 @@
-"""Attaching uploads to their parent and deciding who may read them (U5).
+"""Attaching uploads to their parent and deciding who may read them.
 
 A Component (``.claude/rules/architecture.md``): ``FileManager`` (uploads and
 delivery) and the parents' Managers (``DiscussionManager``,
@@ -6,7 +6,7 @@ delivery) and the parents' Managers (``DiscussionManager``,
 built in ``sharing_runtime.shared_access_parts``. Services are injected; this
 module never reaches for ``service_factory``.
 
-``attach_all`` (security-design.md §3, BR5.3):
+``attach_all``:
 
 1. Check the IDs (UUID shape, duplicates dropped). More than 100 ->
    ``FILE_ATTACH_LIMIT_EXCEEDED``; none -> nothing to do.
@@ -22,15 +22,15 @@ module never reaches for ``service_factory``.
    unattached; read again and take the tag off if it got attached meanwhile.
    Then ``FILE_OPERATION_FAILED``.
 
-Delivery (BR5.4〜BR5.7): before attaching, only the uploader and only before
+Delivery: before attaching, only the uploader and only before
 ``expires_at``; after attaching, the parent type's registered reader decides.
-U6 registers discussions (the discussion's readers, BR5.1). Until U7 registers
-survey templates, a file attached to one is served to its uploader and to
+Discussions are registered (the discussion's readers). Until survey
+templates are registered, a file attached to one is served to its uploader and to
 ``resource:read_all`` only (narrower than the parent's readers, so nothing leaks).
-``delete_attached`` removes the files of a deleted parent (U6 BR1.5).
+``delete_attached`` removes the files of a deleted parent.
 
 Logs: ``file.attach_rollback_failed`` (``file_id``, ``parent_type``, ``step``,
-``error_type``; NFR8.15) and ``authz.denied`` for refused reads.
+``error_type``) and ``authz.denied`` for refused reads.
 """
 
 import logging
@@ -60,7 +60,7 @@ _PARENT_RESOURCE: Mapping[str, ResourceType] = {
     "survey_template": ResourceType.SURVEY_TEMPLATE,
 }
 
-#: ``(principal, parent_id) -> may read the parent``; registered by U6 / U7.
+# ``(principal, parent_id) -> may read the parent``.
 ParentReader = Callable[[Principal, str], bool]
 
 
@@ -127,7 +127,7 @@ class FileAttachments:
     # --- registration -----------------------------------------------------------
 
     def register_parent(self, parent_type: str, reader: ParentReader) -> None:
-        """Register how readers of one parent type are decided (U6 / U7).
+        """Register how readers of one parent type are decided.
 
         Raises:
             ValueError: Unknown parent type, or registered twice (start-up error).
@@ -147,7 +147,7 @@ class FileAttachments:
         parent_type: str,
         parent_id: str,
     ) -> AttachResult:
-        """Attach the user's uploads to a parent, all or nothing (BR5.3).
+        """Attach the user's uploads to a parent, all or nothing.
 
         Raises:
             CodedError: ``FILE_ATTACH_LIMIT_EXCEEDED`` (more than 100),
@@ -221,7 +221,7 @@ class FileAttachments:
     def delete_attached(
         self, parent_type: str, parent_id: str, file_ids: Sequence[str]
     ) -> list[str]:
-        """Delete the files attached to a deleted parent (U6 BR1.5 (3)).
+        """Delete the files attached to a deleted parent.
 
         Only files still attached to ``parent_id`` are touched: the S3 object
         first, then the metadata (conditioned on the parent). Files without an
@@ -264,7 +264,7 @@ class FileAttachments:
     # --- reading ------------------------------------------------------------------
 
     def can_read_file(self, principal: Principal, file_id: str) -> bool:
-        """Whether the user may read or be served the file (BR5.4〜BR5.7)."""
+        """Whether the user may read or be served the file."""
         try:
             self.readable_file(principal, file_id)
         except CodedError as e:
@@ -278,7 +278,7 @@ class FileAttachments:
 
         Raises:
             CodedError: ``FILE_NOT_FOUND`` when unreadable, expired, missing
-                or not a file ID (the same answer, NFR1.14).
+                or not a file ID (the same answer).
         """
         uploaded = self._read_one(file_id) if is_uuid(file_id) else None
         if uploaded is not None and self._may_read(principal, uploaded):
@@ -287,16 +287,16 @@ class FileAttachments:
         raise _not_found("file is not readable by this user")
 
     def attachable_file(self, principal: Principal, file_id: str) -> UploadedFile:
-        """The file's metadata when the user may still attach it (R-02).
+        """The file's metadata when the user may still attach it.
 
         A discussion's start reads its documents with this, the same rule as
-        :meth:`attach_all` at the save (functional-spec.md WF6 step 5): the
+        :meth:`attach_all` at the save: the
         user's own, unexpired, not yet attached upload. A file attached to
         another parent is refused before the discussion runs.
 
         Raises:
             CodedError: ``FILE_NOT_FOUND`` when not attachable (the same answer
-                as a missing file, NFR1.14).
+                as a missing file).
         """
         uploaded = self._read_one(file_id) if is_uuid(file_id) else None
         if uploaded is not None and self.is_attachable(
@@ -308,7 +308,7 @@ class FileAttachments:
 
     @staticmethod
     def is_attachable(principal: Principal, uploaded: UploadedFile, now: int) -> bool:
-        """The one rule for attaching and for a discussion's start (BR5.3, BR5.4).
+        """The one rule for attaching and for a discussion's start.
 
         The user's own upload, not attached to any parent and not expired at
         ``now`` (epoch seconds; ``expires_at`` itself is expired).
@@ -325,7 +325,7 @@ class FileAttachments:
         reader = self._readers.get(parent_type)
         if reader is not None:
             return bool(reader(principal, parent_id))
-        # Not registered yet: the uploader and resource:read_all only (BR5.7)
+        # Not registered yet: the uploader and resource:read_all only
         target = AccessTarget(
             resource_type=_PARENT_RESOURCE[parent_type],
             resource_id=parent_id,

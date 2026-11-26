@@ -1,4 +1,4 @@
-"""Shared fakes for the U6 discussion tests (DiscussionRecords and the Managers).
+"""Shared fakes for the discussion tests (DiscussionRecords and the Managers).
 
 ``FakeStore`` stands in for ``DiscussionStore`` (with failure injection);
 ``FakeShareStore`` for ``ResourceShareStore`` (it reads the same bodies);
@@ -262,7 +262,7 @@ class DiscussionReader:
 
 
 class AssetReader:
-    """Organization assets without a usage scope (admin only until U7)."""
+    """Organization assets without a usage scope (admin only)."""
 
     def read(self, ids, deadline):
         return {i: AccessTarget(ResourceType.DATASET, i) for i in ids}
@@ -296,7 +296,7 @@ def make_files() -> Mock:
 
 @dataclass
 class World:
-    """Everything a U6 Manager test wires together."""
+    """Everything a discussion Manager test wires together."""
 
     store: FakeStore = field(default_factory=FakeStore)
     personas: PersonaReader = field(default_factory=PersonaReader)

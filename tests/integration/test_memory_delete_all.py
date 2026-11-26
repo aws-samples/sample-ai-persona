@@ -1,8 +1,7 @@
-"""MemoryService.delete_all（ペルソナの長期記憶の一括削除）の結合テスト。
+"""Integration tests for MemoryService.delete_all (bulk deletion of a persona's long-term memory).
 
-performance-design.md §2、BR3.2、BR3.3、NFR2.11、NFR1.42。AgentCore Memory は moto に
-ないため、削除専用の boto3 クライアントを botocore の Stubber で差し替える。時計は
-差し替え、各 API 呼び出しの後に進める（time.sleep を使わない）。
+AgentCore Memory is not in moto, so the delete-only boto3 client is replaced with a
+botocore Stubber. The clock is replaced and advanced after each API call (no time.sleep).
 """
 
 from typing import Any
@@ -264,10 +263,9 @@ def _get(stub: Stubber, n: int, namespace: str) -> None:
 
 
 class TestDeleteOwnedMemory:
-    """One record is deleted only when it is under the actor's namespaces (R-01).
+    """One record is deleted only when it is under the actor's namespaces.
 
-    BR4.1, NFR1.23, AC4.2.4: persona A's ID with persona B's record ID must not
-    reach B's record.
+    Persona A's ID with persona B's record ID must not reach B's record.
     """
 
     def test_own_record_is_deleted(self, delete_client):
@@ -328,7 +326,7 @@ class TestDeleteOwnedMemory:
 
 
 class TestStrategyDeleteUsesTheActor:
-    """Each strategy's ``delete`` checks the record's namespace too (R-01)."""
+    """Each strategy's ``delete`` checks the record's namespace too."""
 
     @pytest.mark.parametrize("strategy_class", [SummaryStrategy, SemanticStrategy])
     def test_record_of_another_actor_is_not_deleted(self, strategy_class):

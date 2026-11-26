@@ -1,8 +1,8 @@
 """
-shared/agent_integration.py 単体テスト
+Unit tests for shared/agent_integration.py.
 
-combine_integration は純粋な合成関数（service/db/flag に触れない）。
-gate・DB 解決・build は Manager テスト側で検証する。
+combine_integration is a pure composition function (touches no service, DB, or flag).
+Gating, DB resolution, and build are verified in the Manager tests.
 """
 
 import pytest
@@ -13,33 +13,33 @@ from src.managers.shared.agent_integration import combine_integration
 
 @pytest.mark.unit
 class TestCombineIntegration:
-    """combine_integration のテスト"""
+    """Tests for combine_integration."""
 
     def test_no_sections_no_tools(self):
-        """section も tool も無ければプロンプト変更なし・ツールなし"""
+        """With no section or tool, the prompt is unchanged and there are no tools."""
         prompt, tools = combine_integration("base", [], [])
         assert prompt == "base"
         assert tools is None
 
     def test_empty_strings_and_lists_ignored(self):
-        """空文字 section・空 tool グループは無視される"""
+        """Empty sections and empty tool groups are ignored."""
         prompt, tools = combine_integration("base", ["", ""], [[], []])
         assert prompt == "base"
         assert tools is None
 
     def test_sections_concatenated_in_order(self):
-        """section は順に連結される"""
+        """Sections are concatenated in order."""
         prompt, _ = combine_integration("base", ["\nA", "\nB"], [])
         assert prompt == "base\nA\nB"
 
     def test_tool_groups_flattened(self):
-        """tool グループは平坦化して結合される"""
+        """Tool groups are flattened and joined."""
         t1, t2, t3 = Mock(), Mock(), Mock()
         _, tools = combine_integration("base", [], [[t1], [t2, t3]])
         assert tools == [t1, t2, t3]
 
     def test_sections_and_tools_together(self):
-        """section と tool の両方を合成する"""
+        """Combines both section and tool."""
         kb_tool, ds_tool = Mock(), Mock()
         prompt, tools = combine_integration(
             "base",
@@ -51,9 +51,9 @@ class TestCombineIntegration:
         assert tools == [kb_tool, ds_tool]
 
     def test_is_pure_no_service_or_db_arguments(self):
-        """combine_integration は base_prompt / sections / tool_groups のみを受け取る。
+        """combine_integration accepts only base_prompt / sections / tool_groups.
 
-        （service / store / flag を引数に取らない = 純粋性の担保）
+        (It takes no service / store / flag, which keeps it pure.)
         """
         import inspect
 
@@ -62,8 +62,7 @@ class TestCombineIntegration:
 
 
 # =============================================================================
-# U6: 実行する人に合わせた記憶と組織資産（約束 C1・C9、BR6.1、BR6.3、NFR1.50、
-# NFR1.51、NFR8.21、AC4.2.2、AC4.2.3）
+# Memory and organization assets that follow the acting principal
 # =============================================================================
 
 from datetime import datetime  # noqa: E402
@@ -119,7 +118,7 @@ def _context(principal: Principal) -> ExecutionContext:
 
 
 class _AssetReader:
-    """KB / dataset decision columns: no usage scope until U7 (admin only)."""
+    """KB / dataset decision columns: no usage scope until admin-only scoping is lifted."""
 
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
@@ -289,9 +288,9 @@ class TestAssetFilter:
 
 
 # =============================================================================
-# U7 Loop-back 1: 利用範囲を外した後の KB（NFR1.75、BR5.4、BR5.5、AC4.2.3、AC5.3.2、
-# AC5.3.3）。KB の本体と利用範囲、紐付けは moto（tests/unit/survey_world.py）、
-# 利用範囲の変更は本物の SettingsManager、判定は本物の ResourceLookup・AccessPolicy。
+# KB after a usage scope is removed. The KB body, usage scope, and binding use moto
+# (tests/unit/survey_world.py); scope changes go through the real SettingsManager,
+# and decisions through the real ResourceLookup and AccessPolicy.
 # =============================================================================
 
 from src.managers.settings_manager import SettingsManager  # noqa: E402
@@ -358,7 +357,7 @@ class _ScopedKbWorld:
 
 @pytest.mark.unit
 class TestKbAfterTheScopeIsRemoved:
-    """NFR1.75: removing a department keeps the binding but drops the KB tool."""
+    """Removing a department keeps the binding but drops the KB tool."""
 
     def test_member_loses_the_kb_tool_but_keeps_the_binding(self, survey_world, capsys):
         scoped = _ScopedKbWorld(survey_world)

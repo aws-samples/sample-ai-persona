@@ -1,4 +1,4 @@
-"""analyze_dataset tool closure + 入力契約(schema) 単体テスト。"""
+"""Unit tests for the analyze_dataset tool closure and its input schema."""
 
 import inspect
 
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 
 class FakeBackend:
-    """SQL/params を記録し、固定結果を返す backend。"""
+    """Backend that records SQL/params and returns a fixed result."""
 
     def __init__(self, columns=None, rows=None, raise_exc=None):
         self.columns = columns or ["region", "m0"]
@@ -31,7 +31,7 @@ class FakeBackend:
 
 
 def _fn(tool):
-    """@tool でラップされた元関数を取り出す。"""
+    """Extract the original function wrapped by @tool."""
     return tool.__wrapped__ if hasattr(tool, "__wrapped__") else tool
 
 
@@ -61,7 +61,7 @@ class TestToolContract:
             "order_by",
             "limit",
         }
-        # SQL・パス・認証情報を受け取る引数が無いこと
+        # No argument accepts SQL, a path or credentials
         for forbidden in ("sql", "query", "s3_path", "path", "credentials", "secret"):
             assert forbidden not in params
 
@@ -89,10 +89,10 @@ class TestToolContract:
             "median",
         ]
         assert defs["OrderBy"]["properties"]["direction"]["enum"] == ["asc", "desc"]
-        # Metric.column は optional（required に含まれない）
+        # Metric.column is optional (not in required)
         assert "column" not in defs["Metric"].get("required", [])
         assert defs["Metric"]["required"] == ["func"]
-        # GroupBy: column 必須、date_trunc は optional の単位 Literal。
+        # GroupBy: column is required; date_trunc is an optional unit Literal.
         assert defs["GroupBy"]["properties"]["date_trunc"]["enum"] == [
             "day",
             "week",
@@ -138,7 +138,7 @@ class TestToolBehavior:
         tool = _make([_rd()], backend)
         out = _fn(tool)(dataset_id="dataset_1")
         assert "エラー" in out
-        assert "kaboom" not in out  # 内部例外文は露出しない
+        assert "kaboom" not in out  # Internal exception text is not exposed
 
     def test_empty_result_message(self):
         backend = FakeBackend(rows=[])
@@ -163,7 +163,7 @@ class TestToolBehavior:
             group_by=["region"],
         )
         assert "sum(amount)" in out
-        assert "m0" not in out  # 内部別名は露出しない
+        assert "m0" not in out  # Internal aliases are not exposed
 
 
 class TestMultiDatasetSingleTool:
@@ -172,7 +172,7 @@ class TestMultiDatasetSingleTool:
         r1 = _rd(alias="dataset_1", path="local://datasets/a.csv")
         r2 = _rd(alias="dataset_2", path="local://datasets/b.csv")
         tool = _make([r1, r2], backend)
-        # ツールは 1 つ（名前 analyze_dataset）
+        # There is exactly one tool (named analyze_dataset)
         assert tool.tool_spec["name"] == "analyze_dataset"
         _fn(tool)(dataset_id="dataset_1")
         _fn(tool)(dataset_id="dataset_2")
@@ -180,7 +180,7 @@ class TestMultiDatasetSingleTool:
         assert backend.calls[1]["source"] == "local://datasets/b.csv"
 
     def test_two_closures_same_alias_do_not_mix(self):
-        # 並行する 2 生成が同名 alias を別 path に割り当てても混線しない。
+        # Two concurrent generations that map the same alias to different paths do not get mixed up.
         b1, b2 = FakeBackend(), FakeBackend()
         t1 = _make([_rd(alias="source_1", path="local://datasets/gen1.csv")], b1)
         t2 = _make([_rd(alias="source_1", path="local://datasets/gen2.csv")], b2)

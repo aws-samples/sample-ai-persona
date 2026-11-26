@@ -1,8 +1,8 @@
-"""Sample values the advanced generation (beta) screen tests render (U1, Steps 29〜35).
+"""Sample values the advanced generation (beta) screen tests render .
 
 The router tests (``tests/api/``) hand them to mocked Managers and the
 component tests (``tests/ui/``) render the real partials with them. Column
-names and cells carry HTML on purpose so that both check the escaping (BR3.4).
+names and cells carry HTML on purpose so that both check the escaping.
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ RUN = AnalysisRun(
 
 
 def advanced_context(segment_id: str, *, unverified: tuple[str, ...] = ()) -> dict:
-    """The ``generation_context`` of an advanced candidate or saved persona (C7)."""
+    """The ``generation_context`` of an advanced candidate or saved persona."""
     return {
         "mode": "advanced",
         "schema_version": 1,
@@ -280,12 +280,12 @@ def result() -> AdvancedGenerationResult:
     )
 
 
-#: U4: a document and its quoted evidence (HTML in the quote on purpose).
+#: A document and its quoted evidence (HTML in the quote on purpose).
 DOCUMENT_ID = "doc-1"
 
 
 def ready_document(**changes: Any) -> SourceFile:
-    """An inspected PDF of 80MB with its estimate (U4 BR22.3)."""
+    """An inspected PDF of 80MB with its estimate."""
     draft = SourceFile.create_new(
         owner_sub=OWNER,
         filename="面談記録.pdf",
@@ -331,7 +331,7 @@ DOCUMENT_EVIDENCE = (
 
 
 def document_result() -> AdvancedGenerationResult:
-    """A finished result of a table and a document (U4 BR28.2)."""
+    """A finished result of a table and a document."""
     base = result()
     candidates = tuple(
         PersonaCandidate(

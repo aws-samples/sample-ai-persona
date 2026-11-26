@@ -1,13 +1,11 @@
-"""
-LoginSession data model (U1, ``entities.md``).
+"""LoginSession data model.
 
 A LoginSession is the server-side state behind the ``session_id`` cookie.
 For ``oidc`` / ``admin_api`` it lives in the DynamoDB Sessions table; for
-``local`` it lives in the process (BR1.15). Only the hash of the session id is
-ever stored (BR1.5).
+``local`` it lives in the process. Only the hash of the session id is
+ever stored.
 
-Writes come in two kinds that must never overwrite each other (BR1.10,
-BR1.12):
+Writes come in two kinds that must never overwrite each other:
 
 - the activity write: ``last_accessed_at`` only, without touching ``version``
   (:meth:`LoginSession.touch` / :meth:`LoginSession.last_access_attributes`);
@@ -52,7 +50,7 @@ _TIME_ATTRIBUTES = (
 
 
 class AuthMethod(StrEnum):
-    """How the session was established. Must match the running AUTH_MODE (BR1.21)."""
+    """How the session was established. Must match the running AUTH_MODE."""
 
     OIDC = "oidc"
     ADMIN_API = "admin_api"
@@ -163,7 +161,7 @@ class LoginSession:
         return replace(self, last_accessed_at=now)
 
     def to_principal(self) -> Principal:
-        """Build the per-request Principal (contract C1)."""
+        """Build the per-request Principal."""
         return Principal(
             sub=self.user_sub,
             roles=self.roles,
@@ -175,8 +173,7 @@ class LoginSession:
     def _serialized(self, name: str) -> Any:
         """Storage form of one attribute, or ``None`` when it must be absent.
 
-        Empty sets are absent because DynamoDB string sets cannot be empty
-        (Functional Design review R-13).
+        Empty sets are absent because DynamoDB string sets cannot be empty.
         """
         value = getattr(self, name)
         if value is None:
@@ -190,7 +187,7 @@ class LoginSession:
         return value
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize for storage. ``None`` and empty sets are omitted (R-13)."""
+        """Serialize for storage. ``None`` and empty sets are omitted."""
         names = (
             "session_id_hash",
             "user_sub",
@@ -204,11 +201,11 @@ class LoginSession:
         return {name: value for name, value in data.items() if value is not None}
 
     def last_access_attributes(self) -> dict[str, Any]:
-        """Attributes of the activity write: ``last_accessed_at`` only (BR1.10)."""
+        """Attributes of the activity write: ``last_accessed_at`` only."""
         return {"last_accessed_at": self._serialized("last_accessed_at")}
 
     def versioned_attributes(self) -> tuple[dict[str, Any], tuple[str, ...]]:
-        """Attributes of the versioned write (BR1.11, BR1.12).
+        """Attributes of the versioned write.
 
         Returns:
             ``(to_set, to_remove)``: values to write, and names whose value is
@@ -286,7 +283,7 @@ class SessionStore(Protocol):
         """Delete, optionally only if the stored version matches."""
         ...
 
-    # --- LoginChallenge (U8, ``admin_api`` first password change) -------------
+    # LoginChallenge (``admin_api`` first password change)
 
     def put_challenge(self, challenge: "LoginChallenge") -> None:
         """Store a new challenge."""

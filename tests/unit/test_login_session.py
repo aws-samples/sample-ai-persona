@@ -1,4 +1,4 @@
-"""LoginSession モデルの単体テスト（entities.md、BR1.5、BR1.10、BR1.15）。"""
+"""Unit tests for the LoginSession model."""
 
 from datetime import datetime, timedelta, timezone
 

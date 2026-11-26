@@ -1,37 +1,37 @@
-"""AnalysisToolService: the tools of one advanced generation (C9, BR5.2, BR35.3).
+"""AnalysisToolService: the tools of one advanced generation.
 
 Made per generation by ``ServiceFactory.create_analysis_tools`` (never a
-singleton; ADR-012). Only the tools named in ``AnalysisToolPolicy`` are made:
-``profile_dataset``, ``analyze_dataset`` and ``cluster_segments`` in U1; U6
-may add ``run_code`` and ``load_playbook``.
+singleton). Only the tools named in ``AnalysisToolPolicy`` are made:
+``profile_dataset``, ``analyze_dataset`` and ``cluster_segments``, and
+optionally ``run_code`` and ``load_playbook``.
 
 - The agent never writes SQL. ``analyze_dataset`` takes the structured
   arguments of this package and ``sql_builder`` builds the SQL here, checking
-  every column against the profiled ones (security-design.md §7).
+  every column against the profiled ones.
 - ``cluster_segments`` accepts profiled columns only; the group count is the
-  persona count and the seed is fixed (BR5.3).
-- U6 (BR37.2): with several tables each tool takes ``source`` (``source_1``〜
+  persona count and the seed is fixed.
+- With several tables each tool takes ``source`` (``source_1`` to
   ``source_3``); with one table it may be left out.
 - Every call gets a ``tool_call_id``. Its structured output is kept for the
   Manager (Evidence.location, AnalysisVerifier), and the text the agent sees
-  is wrapped as untrusted data (BR5.6, BR36.5).
+  is wrapped as untrusted data.
 - Call count, total time and output characters are limited by the policy
-  (NFR5.8〜NFR5.10). Past a limit the tool answers ``LIMIT_REACHED`` so the
+  Past a limit the tool answers ``LIMIT_REACHED`` so the
   agent sums up with what it has.
 
-``run_code`` (U6, security-design.md NFR3.35): each call writes the code into
+``run_code``: each call writes the code into
 an empty ``ai_work/<random>`` folder and starts ``run_ai_code`` as its own
 command; the poll only tells whether it ended (its output is never read as
 the result). Past the time it is cancelled. Then the check runs with this
-app's library sent inside the command (``call_verified``; nothing is written,
-security review): it stops what is left of the code, hashes the prepared
+app's library sent inside the command (``call_verified``; nothing is written):
+it stops what is left of the code, hashes the prepared
 Parquets and the session's library and recounts the assignment. Hashes that
 differ from the expected ones, or processes the code left outside its group
 (``changed`` ``process``), halt every tool; a check or a process scan that
 could not run halts too (fail closed) but is no tamper. The decision to take ``run_code`` off or to
 stop is the gate's (``RunCodeGate``, a Models protocol the Manager's budget
 implements); this Service only tells it each outcome. The code itself is
-never inspected (NFR3.34). Code, output and error text never reach the log.
+never inspected. Code, output and error text never reach the log.
 
 This package must not import ``sandbox_service``; the sandbox is injected.
 """
@@ -83,7 +83,7 @@ from .sql_builder import SqlBuildError, build_analyze_query
 logger = logging.getLogger(__name__)
 
 _VIEW_NAME = "dataset"
-#: Rows the clustering learns from at most (BR5.3).
+#: Rows the clustering learns from at most.
 DEFAULT_SAMPLE_MAX_ROWS = 1_000_000
 _DEFAULT_LIMITS = {
     LIMIT_MAX_CALLS: 30,
@@ -91,16 +91,16 @@ _DEFAULT_LIMITS = {
     LIMIT_MAX_OUTPUT_CHARS: 20_000,
     LIMIT_RUN_CODE_MAX_FAILURES: 5,
     LIMIT_RUN_CODE_TIMEOUT_SECONDS: 120,
-    #: Longest AI-written code (BR36.1); the policy gives the configured one.
+    #: Longest AI-written code; the policy gives the configured one.
     LIMIT_RUN_CODE_MAX_CHARS: 20_000,
 }
 _TRUNCATED_NOTE = "...(truncated)"
 _RESELECT_CODES = frozenset({"TOO_FEW_COLUMNS", "EMPTY_CLUSTER"})
-#: Seconds between two polls of a running ``run_code`` (NFR1.27).
+#: Seconds between two polls of a running ``run_code``.
 RUN_CODE_POLL_SECONDS = 1.0
-#: The playbooks of the beta (BR39.1), kept as documents in the repository.
+#: The playbooks of the beta, kept as documents in the repository.
 PLAYBOOK_NAMES: tuple[str, ...] = ANALYSIS_PLAYBOOK_NAMES
-#: U6 addendum: run_code ended normally without emit_result (a look around).
+#: run_code ended normally without emit_result (a look around).
 _NO_RESULT = "NO_RESULT"
 _NO_RESULT_TEXT = (
     "結果なし: emit_result が呼ばれませんでした。失敗には数えません。"
@@ -109,14 +109,14 @@ _NO_RESULT_TEXT = (
 _PLAYBOOKS_DIR = (
     Path(__file__).resolve().parent.parent.parent.parent / "sandbox" / "playbooks"
 )
-#: What the agent is told (BR36.2, NFR5.55); it is never told why it halted.
+#: What the agent is told; it is never told why it halted.
 _DISABLED_TEXT = "AI による詳細分析は使えません。決まった関数で続けてください"
 _HALTED_TEXT = "分析を続けられません。今ある結果でまとめてください"
 
 
 @dataclass(frozen=True)
 class AnalysisTable:
-    """One table the tools may read (U6 BR37.2).
+    """One table the tools may read.
 
     Attributes:
         alias: ``source_1``〜``source_3``, in the order the user chose.
@@ -133,7 +133,7 @@ class AnalysisTable:
 class ToolCall:
     """One tool call, kept for the Manager (IDs, counts and codes only).
 
-    ``playbook`` (U6 addendum) is the name a successful ``load_playbook``
+    ``playbook`` is the name a successful ``load_playbook``
     read: one of :data:`PLAYBOOK_NAMES`, never the user's data.
     """
 
@@ -148,9 +148,9 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class CodeRun:
-    """One ``run_code`` call (entities.md CodeRun).
+    """One ``run_code`` call.
 
-    The code goes to the analysis record only when ``ok`` (BR38.2); the
+    The code goes to the analysis record only when ``ok``; the
     output and the error text are given to the analysis agent only.
     """
 
@@ -233,7 +233,7 @@ class AnalysisToolService:
     # --- what the Manager reads ------------------------------------------------
 
     def tools(self) -> List[Callable]:
-        """The allowed tools, in the policy's order (BR5.2, BR35.3)."""
+        """The allowed tools, in the policy's order."""
         builders: Dict[AnalysisTool, Callable[[], Callable]] = {
             AnalysisTool.PROFILE_DATASET: self._profile_tool,
             AnalysisTool.ANALYZE_DATASET: self._analyze_tool,
@@ -253,15 +253,15 @@ class AnalysisToolService:
         return self._outputs.get(tool_call_id)
 
     def emitted_results(self) -> Dict[str, EmittedResult]:
-        """U6: the recounted result of each successful ``run_code`` call."""
+        """The recounted result of each successful ``run_code`` call."""
         return dict(self._emitted)
 
     def run_code_ids(self) -> List[str]:
-        """U6: every ``run_code`` call, failed ones included, in order."""
+        """Every ``run_code`` call, failed ones included, in order."""
         return [c.tool_call_id for c in self.calls if c.tool == "run_code"]
 
     def pgid_files(self) -> List[str]:
-        """U6: the process-group files of every started ``run_code``."""
+        """The process-group files of every started ``run_code``."""
         return list(self._pgid_files)
 
     # --- the common path of every call ----------------------------------------
@@ -379,11 +379,11 @@ class AnalysisToolService:
             lines.append(_HALTED_TEXT)
         text = "\n".join(lines) + "\n"
         if detail:
-            # BR36.5: the error text of AI-written code is untrusted data
+            # The error text of AI-written code is untrusted data
             return self._wrapped(text, detail, tool_name, call_id)
         return text.rstrip("\n")
 
-    # --- U6: the table a tool reads (BR37.2) ------------------------------------
+    # --- The table a tool reads ------------------------------------------------
 
     def _table(self, source: Optional[str]) -> AnalysisTable | str:
         """The chosen table, or the error code when it cannot be told."""
@@ -612,7 +612,7 @@ class AnalysisToolService:
             },
         )
 
-    # --- U6: load_playbook (BR39.1) --------------------------------------------
+    # --- load_playbook -------------------------------------------------------
 
     def _playbook_tool(self) -> Callable:
         read = self._load_playbook
@@ -632,7 +632,7 @@ class AnalysisToolService:
         return load_playbook
 
     def _load_playbook(self, name: str) -> str:
-        """Read the playbook and keep its name on the call (U6 addendum)."""
+        """Read the playbook and keep its name on the call."""
         self._reading = name
         try:
             return self._run("load_playbook", lambda: self._read_playbook(name))
@@ -651,7 +651,7 @@ class AnalysisToolService:
         text = (self._playbooks_dir / f"{name}.md").read_text(encoding="utf-8")
         return {"ok": True, "value": {"name": name, "text": text}}
 
-    # --- U6: run_code (BR36, security-design.md NFR3.35) -----------------------
+    # --- run_code ---------------------------------------------------------------
 
     def _run_code_tool(self) -> Callable:
         run_code_now = self._run_code
@@ -753,7 +753,7 @@ class AnalysisToolService:
         if left:
             changed.append(CHANGED_PROCESS)
         if not changed and (not hashes_read or left is None):
-            # review-01 R-03 / security review: the check itself (or its
+            # the check itself (or its
             # process scan) failed. Fail closed (halt), but this is no tamper.
             self._gate.record(RunCodeOutcome(ok=False, verify_failed=True))
             logger.warning("analysis tool halted: tool=run_code check failed")
@@ -819,7 +819,7 @@ class AnalysisToolService:
         }
         text = self._result_text(tool_name, call_id, payload)
         self._record_call(ToolCall(call_id, tool_name, True, None, elapsed, len(text)))
-        # review-01 R-02: only the recounted numbers can back a segment
+        # only the recounted numbers can back a segment
         self._outputs[call_id] = result.recounted()
         logger.info(
             "analysis tool ok: tool=run_code tool_call_id=%s elapsed=%.2fs",
@@ -829,7 +829,7 @@ class AnalysisToolService:
         return text
 
     def _no_result(self, code: str, stdout: str, elapsed: float) -> str:
-        """U6 addendum: a look around (no ``emit_result``) is no failure.
+        """A look around (no ``emit_result``) is no failure.
 
         It counts as one of the calls but not as a failure of ``run_code``;
         the printed output goes back to the agent as untrusted data.
@@ -882,7 +882,7 @@ class AnalysisToolService:
     def _changed(self, hashes: Any) -> list[str]:
         """``library`` / ``parquet`` when a hash differs from the expected one.
 
-        Fail closed (review-01 R-01): a missing expected hash, or one the
+        Fail closed: a missing expected hash, or one the
         check did not return, counts as a change; nothing is skipped.
         """
         hashes = hashes if isinstance(hashes, Mapping) else {}

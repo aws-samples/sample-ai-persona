@@ -1,9 +1,7 @@
-"""
-インタビュールーター（interview.py）のテスト
+"""Tests for the interview router (interview.py).
 
-U6: セッションはアプリの外（moto の InterviewSessionStore）に置き、持ち主だけが
-使える。Router は利用者と添付の ID を Manager に渡すだけ。BR3.1〜BR3.8、BR7.2、
-NFR1.48、NFR1.54、NFR1.56、NFR1.60、AC2.4.1〜AC2.4.3。
+Sessions live outside the app (moto InterviewSessionStore) and only the owner can
+use them. The Router only passes the user and attachment IDs to the Manager.
 """
 
 import json
@@ -114,7 +112,7 @@ def _sse(response) -> list[dict]:
 
 
 # =============================================================================
-# 開始（BR3.1）
+# Start
 # =============================================================================
 
 
@@ -173,13 +171,13 @@ class TestCreate:
 
         NO_ROLE.login(client)
         response = client.post("/interview/create", data={"persona_ids": ["p1"]})
-        # ロールのない利用者は AuthMiddleware が止める（U2 BR2.8）
+        # Users without a role are stopped by AuthMiddleware
         assert response.status_code == 403
         iw.agent_service.create_persona_agent.assert_not_called()
 
 
 # =============================================================================
-# 持ち主だけ（BR3.2）
+# Owner only
 # =============================================================================
 
 
@@ -227,9 +225,9 @@ class TestOwnerOnly:
     def test_missing_and_someone_elses_look_the_same(
         self, iw, client, method, path, data
     ):
-        """存在しない ID と他人の ID で、状態コード・トースト・本文が同じ（NFR1.56）。
+        """A nonexistent ID and someone else's ID give the same status code, toast and body.
 
-        Build and Test の Loop-back 1 で足した。ID の文字を同じ値に置き換えて比べる。
+        Compared by swapping the ID characters for the same value.
         """
         others = iw.start("p1").id
         missing = str(uuid.uuid4())
@@ -252,7 +250,7 @@ class TestOwnerOnly:
 
         a, b = call(others), call(missing)
 
-        assert a[0] in (200, 404)  # SSE は 200 で止まるイベントを返す
+        assert a[0] in (200, 404)  # SSE returns events that stop with a 200
         assert a == b
 
     def test_manual_cleanup_is_gone(self, iw, client):
@@ -260,7 +258,7 @@ class TestOwnerOnly:
 
 
 # =============================================================================
-# 送信（BR3.3、BR3.6、BR7.2、NFR1.54、NFR1.60）
+# Sending
 # =============================================================================
 
 
@@ -409,7 +407,7 @@ class TestSend:
 
 
 # =============================================================================
-# 保存・終了・状態（BR3.7、BR3.8）
+# Save, end and state
 # =============================================================================
 
 
@@ -471,7 +469,7 @@ class TestSaveAndEnd:
 
 
 # =============================================================================
-# チャット画面
+# Chat screen
 # =============================================================================
 
 

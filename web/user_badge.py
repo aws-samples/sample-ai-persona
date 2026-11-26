@@ -1,8 +1,8 @@
 """
-Display values for the signed-in user in the page header (BR1.16, M1).
+Display values for the signed-in user in the page header.
 
 A template global, not business logic: it only formats the Principal that
-``AuthMiddleware`` put on ``request.state.principal``. In U1 the department
+``AuthMiddleware`` put on ``request.state.principal``. The department
 names are the Cognito group names as-is.
 """
 
@@ -26,7 +26,7 @@ class UserBadge:
     shown_departments: tuple[str, ...]
     all_departments: tuple[str, ...]
     hidden_count: int
-    #: U7 BR3.2: show the "設定" link (``settings:manage``, never the role name).
+    #: Show the "設定" link (``settings:manage``, never the role name).
     can_manage_settings: bool = False
 
     @property

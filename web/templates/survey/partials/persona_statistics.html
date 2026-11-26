@@ -1,5 +1,5 @@
 <div class="space-y-6">
-    <!-- サマリーカード -->
+    <!-- Summary cards -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div class="bg-white rounded-lg shadow-md p-5 text-center">
             <p class="text-3xl font-bold text-teal-600">{{ stats.total_count }}</p>
@@ -21,7 +21,7 @@
         {% endif %}
     </div>
 
-    <!-- 性別分布 -->
+    <!-- Gender distribution -->
     {% if stats.sex_distribution %}
     <div class="bg-white rounded-lg shadow-md p-6">
         <h3 class="text-md font-semibold text-gray-900 mb-4">性別分布</h3>
@@ -49,7 +49,7 @@
     </div>
     {% endif %}
 
-    <!-- 年代分布 -->
+    <!-- Age distribution -->
     {% if stats.age_distribution %}
     <div class="bg-white rounded-lg shadow-md p-6">
         <h3 class="text-md font-semibold text-gray-900 mb-4">年代分布</h3>
@@ -77,7 +77,7 @@
     </div>
     {% endif %}
 
-    <!-- 地域分布 -->
+    <!-- Region distribution -->
     {% if stats.region_distribution %}
     <div class="bg-white rounded-lg shadow-md p-6">
         <h3 class="text-md font-semibold text-gray-900 mb-4">地域分布</h3>
@@ -105,7 +105,7 @@
     </div>
     {% endif %}
 
-    <!-- 都道府県分布（上位15） -->
+    <!-- Prefecture distribution (top 15) -->
     {% if stats.prefecture_distribution %}
     <div class="bg-white rounded-lg shadow-md p-6">
         <h3 class="text-md font-semibold text-gray-900 mb-1">都道府県分布</h3>
@@ -134,7 +134,7 @@
     </div>
     {% endif %}
 
-    <!-- 結婚・子供の有無 -->
+    <!-- Marital status and children -->
     {% if stats.marital_status_distribution %}
     <div class="bg-white rounded-lg shadow-md p-6">
         <h3 class="text-md font-semibold text-gray-900 mb-4">結婚・子供の有無</h3>
@@ -162,7 +162,7 @@
     </div>
     {% endif %}
 
-    <!-- 職業分布（上位15） -->
+    <!-- Occupation distribution (top 15) -->
     {% if stats.occupation_distribution %}
     <div class="bg-white rounded-lg shadow-md p-6">
         <h3 class="text-md font-semibold text-gray-900 mb-1">職業分布</h3>

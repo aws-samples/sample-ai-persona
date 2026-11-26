@@ -1,11 +1,9 @@
-"""Discussion and interview screens of U6 (marker ``ui``, Playwright + axe-core).
+"""Discussion and interview screens (marker ``ui``, Playwright + axe-core).
 
-M9  参照権限なし・削除済みの表示（議論の詳細）
-M12 会話を続けられなくなったとき（議論の設定画面・インタビュー）
-M13 参加するペルソナの選択（タブ・選択の保持・〔共有〕・記憶と利用権限の注意）
-
-BR2.1、BR5.3、BR7.3〜BR7.5、NFR1.60、NFR6.17〜NFR6.19、AC4.2.1〜AC4.2.3、
-AC4.3.1〜AC4.3.3。
+Covers the discussion detail with unreadable or deleted personas, the state when
+a conversation can no longer continue (discussion settings, interview), and
+persona selection for participants (tabs, selection retention, shared marker,
+memory and access warnings).
 """
 
 import json
@@ -53,7 +51,7 @@ SSE_HEADERS = {"Content-Type": "text/event-stream; charset=utf-8"}
 
 
 # =============================================================================
-# M9: 議論の詳細の参加者の状態
+# Discussion detail: participant states
 # =============================================================================
 
 
@@ -100,20 +98,20 @@ def test_detail_marks_participants_in_text_and_has_no_axe_violations(
     participants = ui.page.locator("[data-testid='discussion-participant']")
     texts = [t.replace("\n", " ") for t in participants.all_inner_texts()]
     assert "〔参照権限なし〕" in texts[1] and "〔削除済み〕" in texts[2]
-    # 読めるペルソナだけ、これまでどおり属性とプロフィールを出す（BR7.3）
+    # Only readable personas show attributes and profile, as before
     assert "会社員 / 30歳" in texts[0] and "東京で働いている。" in texts[0]
     assert "効率" in texts[0]
     assert "会社員" not in texts[1] and "会社員" not in texts[2]
     assert ui.page.locator("a[href='/persona/p1']").count() == 1
     assert ui.page.locator("a[href='/persona/p2']").count() == 0
     assert ui.page.locator("a[href='/persona/p3']").count() == 0
-    # 発言の話者にも同じ文字を付ける（M9）
+    # The same label is attached to the speaker of each message
     speaker = ui.page.locator("[data-testid='message-speaker']", has_text="鈴木 一郎")
     assert "〔参照権限なし〕" in speaker.inner_text()
     assert (
         ui.page.locator("[data-testid='discussion-share-button']").count() == 1
     ) is (manageable)
-    # 操作ボタンはペルソナの詳細と同じく、ヘッダーの 2 段目の右に置く
+    # As in the persona detail, action buttons sit at the right of the header's second row
     actions = ui.page.locator("[data-testid='discussion-detail-actions']")
     assert actions.locator("[data-testid='discussion-export-button']").count() == 1
     assert (
@@ -130,7 +128,7 @@ def test_detail_marks_participants_in_text_and_has_no_axe_violations(
 
 
 # =============================================================================
-# M13・M12: 議論の設定画面
+# Discussion settings screen
 # =============================================================================
 
 
@@ -188,7 +186,7 @@ def test_selection_tabs_keep_the_selection_and_mark_shared(
     assert ui.page.locator("[data-testid='shared-memory-note']").is_visible()
     assert ui.page.locator("[data-testid='unusable-assets-note']").is_visible()
 
-    # 自分のものだけに戻すと記憶の注意は消える
+    # Switching back to own personas only clears the memory warning
     ui.page.locator("[data-testid='selected-persona-remove-p2']").click()
     ui.settle()
     assert not ui.page.locator("[data-testid='shared-memory-note']").is_visible()
@@ -220,7 +218,7 @@ def test_memory_mode_is_retrieve_only_when_only_shared_personas_are_chosen(
     ui.page.wait_for_selector("#persona-card-p2")
     ui.page.click("#persona-card-p2")
     ui.settle()
-    # 共有されたペルソナだけなら書き込める相手がいない
+    # With only shared personas, no one is writable
     assert _memory_mode(ui) == (False, "retrieve_only")
     assert ui.page.locator("[data-testid='memory-shared-only-note']").is_visible()
 
@@ -229,7 +227,7 @@ def test_memory_mode_is_retrieve_only_when_only_shared_personas_are_chosen(
     ui.page.wait_for_selector("#persona-card-p1")
     ui.page.click("#persona-card-p1")
     ui.settle()
-    # 自分のペルソナが入れば、選んでいたフルに戻る（共有されたものは検索のみ）
+    # Once own personas are included, the previously chosen full mode returns (shared ones are search-only)
     assert _memory_mode(ui) == (True, "full")
     assert not ui.page.locator("[data-testid='memory-shared-only-note']").is_visible()
     assert ui.page.locator("[data-testid='memory-shared-mixed-note']").is_visible()
@@ -251,7 +249,7 @@ def test_a_participant_gone_while_running_shows_the_stop_panel(
     ui.page.fill("#topic", "新商品のマーケティングについて")
     with ui.page.expect_request("**/discussion/stream") as started:
         ui.page.click("button:has-text('リアルタイム議論を開始')")
-    # 開始は CSRF の検査を受ける POST（NFR4.13）。条件は本文で送り URL に載せない
+    # Start is a POST subject to the CSRF check; conditions go in the body, not the URL
     request = started.value
     assert request.method == "POST"
     assert request.headers.get("x-requested-with") == "XMLHttpRequest"
@@ -306,7 +304,7 @@ def test_documents_list_is_cleared_after_the_discussion_is_saved(
 
 
 # =============================================================================
-# M12: インタビュー
+# Interview
 # =============================================================================
 
 
@@ -360,7 +358,7 @@ def test_chat_stops_and_keeps_the_typed_message(
     assert panel.get_attribute("role") == "alert"
     ui.settle()
     assert ui.page.input_value("#message-input") == "価格は 5,000 円でも買いますか？"
-    # 送れなかった発言は会話に残さず、文字数の表示も入力欄に合わせる
+    # A message that failed to send is not kept in the conversation, and the character count follows the input
     assert "価格は 5,000 円" not in ui.page.locator("#chat-messages").inner_text()
     assert (
         ui.page.inner_text("#char-counter")

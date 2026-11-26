@@ -1,7 +1,7 @@
-"""U6 の型の単体テスト（entities.md、BR1.7、BR2.6、BR2.7、BR3.5、BR6.1、BR8.3）。
+"""Unit tests for the discussion and interview session types.
 
-議論の本体は発言・レポートを持たず、所有者・共有先・件数を持つ。インタビューの
-セッションはアプリの外に置く形（持ち主、番号、応答中の印、期限）になる。
+A discussion body holds no messages or report, only owner, sharing and counts. An interview
+session lives outside the app (owner, number, in-progress mark, expiry).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -142,7 +142,7 @@ class TestDiscussionToDict:
 
 
 class TestDiscussionFromLegacyItems:
-    """v1.0.0 より前の議論（中に発言・レポートを持ち、所有者がない、BR1.7）。"""
+    """A discussion from before v1.0.0 (holds messages and report inline, no owner)."""
 
     _LEGACY = {
         "id": "old-1",
@@ -458,7 +458,7 @@ class TestInterviewMessage:
 
 
 # =============================================================================
-# ExecutionContext（約束 C1）と Job.error_code（BR8.3）
+# ExecutionContext and Job.error_code
 # =============================================================================
 
 

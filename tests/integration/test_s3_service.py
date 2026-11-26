@@ -1,11 +1,8 @@
-"""
-S3Serviceの単体テスト
-motoを使用してS3をモック
-"""
+"""Unit tests for S3Service, mocking S3 with moto."""
 
 import pytest
 
-# motoモジュールがない場合はテストをスキップ
+# Skip the tests when the moto module is missing
 moto = pytest.importorskip("moto", reason="moto is required for S3 tests")
 mock_aws = moto.mock_aws
 
@@ -22,79 +19,79 @@ from tests.error_helpers import raises_code  # noqa: E402
 
 @pytest.fixture
 def s3_bucket_name():
-    """テスト用S3バケット名"""
+    """S3 bucket name for tests."""
     return "test-bucket"
 
 
 @pytest.fixture
 def aws_region():
-    """テスト用AWSリージョン"""
+    """AWS region for tests."""
     return "us-east-1"
 
 
 @pytest.fixture
 def s3_service(s3_bucket_name, aws_region, monkeypatch):
-    """モックS3サービス"""
+    """Mock S3 service."""
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     with mock_aws():
-        # バケットを作成
+        # Create the bucket
         s3_client = boto3.client("s3", region_name=aws_region)
         s3_client.create_bucket(Bucket=s3_bucket_name)
 
-        # S3Serviceインスタンスを作成
+        # Create the S3Service instance
         service = S3Service(s3_bucket_name, aws_region)
         yield service
 
 
 def test_upload_file(s3_service, s3_bucket_name):
-    """ファイルアップロードのテスト"""
+    """File upload test."""
     file_content = b"Test file content"
     s3_key = "uploads/test_file.txt"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # 検証
+    # Verify
     assert s3_path == f"s3://{s3_bucket_name}/{s3_key}"
 
 
 def test_download_file(s3_service, s3_bucket_name):
-    """ファイルダウンロードのテスト"""
+    """File download test."""
     file_content = b"Test file content"
     s3_key = "uploads/test_file.txt"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # ダウンロード
+    # Download
     downloaded_content = s3_service.download_file(s3_path)
 
-    # 検証
+    # Verify
     assert downloaded_content == file_content
 
 
 def test_delete_file(s3_service, s3_bucket_name):
-    """ファイル削除のテスト"""
+    """File deletion test."""
     file_content = b"Test file content"
     s3_key = "uploads/test_file.txt"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # 削除
+    # Delete
     result = s3_service.delete_file(s3_path)
 
-    # 検証
+    # Verify
     assert result is True
 
-    # 削除後のダウンロードは失敗する
+    # Download after deletion fails
     with pytest.raises(S3ServiceError) as exc_info:
         s3_service.download_file(s3_path)
     assert exc_info.value.code is ErrorCode.S3_OBJECT_NOT_FOUND
 
 
 def test_download_nonexistent_file(s3_service):
-    """存在しないファイルのダウンロードテスト"""
+    """Download test for a nonexistent file."""
     s3_path = f"s3://{s3_service.bucket_name}/uploads/nonexistent.txt"
 
     with pytest.raises(S3ServiceError) as exc_info:
@@ -103,7 +100,7 @@ def test_download_nonexistent_file(s3_service):
 
 
 def test_extract_key_from_path(s3_service):
-    """S3パスからキーを抽出するテスト"""
+    """Test extracting the key from an S3 path."""
     s3_path = f"s3://{s3_service.bucket_name}/uploads/test_file.txt"
 
     key = s3_service._extract_key_from_path(s3_path)
@@ -112,7 +109,7 @@ def test_extract_key_from_path(s3_service):
 
 
 def test_extract_key_from_invalid_path(s3_service):
-    """無効なS3パスからのキー抽出テスト"""
+    """Test extracting the key from an invalid S3 path."""
     invalid_path = "invalid/path/format"
 
     with pytest.raises(S3ServiceError) as exc_info:
@@ -121,127 +118,127 @@ def test_extract_key_from_invalid_path(s3_service):
 
 
 def test_upload_large_file(s3_service, s3_bucket_name):
-    """大きなファイルのアップロードテスト"""
-    # 1MBのファイル
+    """Large file upload test."""
+    # 1MB file
     file_content = b"x" * (1024 * 1024)
     s3_key = "uploads/large_file.txt"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # ダウンロードして検証
+    # Download and verify
     downloaded_content = s3_service.download_file(s3_path)
     assert len(downloaded_content) == len(file_content)
     assert downloaded_content == file_content
 
 
 def test_upload_empty_file(s3_service, s3_bucket_name):
-    """空ファイルのアップロードテスト"""
+    """Empty file upload test."""
     file_content = b""
     s3_key = "uploads/empty_file.txt"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # ダウンロードして検証
+    # Download and verify
     downloaded_content = s3_service.download_file(s3_path)
     assert downloaded_content == file_content
 
 
 def test_upload_with_special_characters(s3_service, s3_bucket_name):
-    """特殊文字を含むファイル名のアップロードテスト"""
+    """Upload test for a filename with special characters."""
     file_content = b"Test content"
     s3_key = "uploads/test_file_with_特殊文字.txt"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # ダウンロードして検証
+    # Download and verify
     downloaded_content = s3_service.download_file(s3_path)
     assert downloaded_content == file_content
 
 
 def test_generate_presigned_url(s3_service, s3_bucket_name):
-    """署名付きURL生成のテスト"""
+    """Presigned URL generation test."""
     file_content = b"Test file content for presigned URL"
     s3_key = "discussion_documents/test_image.png"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # 署名付きURL生成
+    # Generate a presigned URL
     presigned_url = s3_service.generate_presigned_url(s3_path)
 
-    # 検証
+    # Verify
     assert presigned_url is not None
     assert s3_bucket_name in presigned_url
     assert s3_key in presigned_url
 
 
 def test_generate_presigned_url_with_custom_expiration(s3_service, s3_bucket_name):
-    """カスタム有効期限付き署名付きURL生成のテスト"""
+    """Presigned URL generation test with a custom expiration."""
     file_content = b"Test file content"
     s3_key = "discussion_documents/test_doc.pdf"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # 署名付きURL生成（30分有効）
+    # Generate a presigned URL (valid for 30 minutes)
     presigned_url = s3_service.generate_presigned_url(s3_path, expiration=1800)
 
-    # 検証
+    # Verify
     assert presigned_url is not None
     assert s3_bucket_name in presigned_url
 
 
 def test_generate_presigned_url_for_nonexistent_file(s3_service, s3_bucket_name):
-    """存在しないファイルの署名付きURL生成テスト（URLは生成されるが、アクセス時にエラー）"""
+    """Presigned URL generation for a nonexistent file (the URL is generated; access fails)."""
     s3_path = f"s3://{s3_bucket_name}/discussion_documents/nonexistent.png"
 
-    # 署名付きURLは生成される（ファイルの存在チェックは行われない）
+    # A presigned URL is generated (file existence is not checked)
     presigned_url = s3_service.generate_presigned_url(s3_path)
 
-    # URLは生成される
+    # The URL is generated
     assert presigned_url is not None
     assert s3_bucket_name in presigned_url
 
 
 def test_upload_discussion_document_to_s3(s3_service, s3_bucket_name):
-    """議論用ドキュメントのS3アップロードテスト"""
-    # 画像ファイルのシミュレーション
+    """S3 upload test for a discussion document."""
+    # Simulate an image file
     file_content = b"\x89PNG\r\n\x1a\n" + b"x" * 1000  # PNG magic bytes + content
     s3_key = "discussion_documents/uuid_test_image.png"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # 検証
+    # Verify
     assert s3_path == f"s3://{s3_bucket_name}/{s3_key}"
 
-    # ダウンロードして検証
+    # Download and verify
     downloaded_content = s3_service.download_file(s3_path)
     assert downloaded_content == file_content
 
 
 def test_upload_pdf_document_to_s3(s3_service, s3_bucket_name):
-    """PDFドキュメントのS3アップロードテスト"""
-    # PDFファイルのシミュレーション
+    """S3 upload test for a PDF document."""
+    # Simulate a PDF file
     file_content = b"%PDF-1.4" + b"x" * 1000  # PDF magic bytes + content
     s3_key = "discussion_documents/uuid_test_document.pdf"
 
-    # アップロード
+    # Upload
     s3_path = s3_service.upload_file(file_content, s3_key)
 
-    # 検証
+    # Verify
     assert s3_path == f"s3://{s3_bucket_name}/{s3_key}"
 
-    # ダウンロードして検証
+    # Download and verify
     downloaded_content = s3_service.download_file(s3_path)
     assert downloaded_content == file_content
 
 
 # =============================================================================
-# U5: タグと写し（BR5.2、BR5.3、BR6.1、NFR1.30、infrastructure-specification.md）
+# Tags and copies
 # =============================================================================
 
 
@@ -268,8 +265,8 @@ def test_tags_are_removed_put_back_and_read(s3_service, s3_bucket_name):
 
 
 def test_tag_calls_on_a_missing_object_fail(s3_service):
-    # moto 5.1 の delete_object_tagging は存在しないキーで内部エラーになるため、
-    # 失敗の変換は put / get で確かめる（実 S3 はどれも NoSuchKey を返す）
+    # moto 5.1's delete_object_tagging raises an internal error for a missing key,
+    # so failure conversion is checked with put / get (real S3 returns NoSuchKey for all)
     with pytest.raises(S3ServiceError):
         s3_service.put_object_tags("uploads/none", {"pending": "true"})
     with pytest.raises(S3ServiceError):
@@ -307,14 +304,14 @@ def test_paths_and_keys_convert_both_ways(s3_service, s3_bucket_name):
 
 
 def test_exists_tells_whether_an_object_is_there(s3_service):
-    """U7 BR2.2・BR2.8: 実行に要るファイルと写しの画像が残っているか。"""
+    """Whether the files needed for a run and the copied images still exist."""
     path = s3_service.upload_file(b"x", "persona-dataset/custom/x.parquet")
     assert s3_service.exists(path) is True
     s3_service.delete_file(path)
     assert s3_service.exists(path) is False
 
 
-# --- 閉域対応 U4: ストリームでの読み取り（BR2.2、BR2.5、BR2.6、BR4.5） ---------------
+# --- Streaming reads ---------------------------------------------------------------
 
 CHUNK = 256 * 1024
 
@@ -437,7 +434,7 @@ def test_a_failure_while_streaming_closes_the_body(s3_service, monkeypatch):
     assert body.close_calls == 1
 
 
-# --- アンケートのオンデマンド推論（functional-spec.md 2 章、reliability 3.1） ------
+# --- On-demand inference for surveys -----------------------------------------------
 
 
 def _failing_client(monkeypatch, s3_service, operation: str, code: str) -> None:
@@ -453,7 +450,7 @@ def _failing_client(monkeypatch, s3_service, operation: str, code: str) -> None:
 
 
 def test_nemotron_parquet_presence_is_checked_by_key(s3_service, s3_bucket_name):
-    """Manager が head_object を直接呼んでいた箇所の置き換え（exists + path_of）。"""
+    """Replaces what the Manager did by calling head_object directly (exists + path_of)."""
     key = "datasets/nemotron/nemotron.parquet"
     assert not s3_service.exists(s3_service.path_of(key))
 
@@ -494,7 +491,7 @@ def test_head_failures_carry_the_failure_class(
 def test_upload_failures_carry_the_failure_class(
     s3_service, monkeypatch, code, failure_name
 ):
-    """完了のまとめで CSV を置けないとき、Manager は分類で扱いを決める（NFR4.8）。"""
+    """When the CSV cannot be stored at completion, the Manager decides handling by classification."""
     from src.models.external_failure import FailureClass
 
     _failing_client(monkeypatch, s3_service, "put_object", code)
@@ -504,8 +501,7 @@ def test_upload_failures_carry_the_failure_class(
     assert info.value.failure is FailureClass[failure_name]
 
 
-# --- 高度な生成（ベータ）U1: 分割アップロードと先頭の読み取り ---------------------------
-# US2.1、US3.1、BR2.3、BR2.4、BR2.7、BR3.1、NFR3.5、NFR3.12（security-design.md §3）
+# --- Advanced generation (beta): multipart upload and reading the head ------------
 
 SOURCE_KEY = "sources/sub-a/11111111-2222-3333-4444-555555555555"
 MIB = 1024 * 1024
@@ -698,7 +694,7 @@ class TestHeadReads:
         with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
             s3_service.read_range(SOURCE_KEY, 4)
 
-    # U4 NFR3.25: the tail of a document (the PDF trailer, the ZIP directory)
+    # The tail of a document (the PDF trailer, the ZIP directory)
 
     def test_read_tail_reads_only_the_end(self, s3_service):
         s3_service.upload_file(b"0123456789", SOURCE_KEY)
@@ -785,7 +781,7 @@ class TestConditionalPut:
             s3_service.put_new_object(self.RECORD_KEY, b"{}", "application/json")
 
 
-# --- 高度な生成 U2: 全版の削除とコピーし直し（BR13.4、BR14.1、NFR3.14、NFR3.19） ---
+# --- Advanced generation: deleting all versions and re-copying ---------------------
 
 
 def _versioned(s3_bucket_name: str) -> None:

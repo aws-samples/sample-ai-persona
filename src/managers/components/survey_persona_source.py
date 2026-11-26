@@ -1,13 +1,13 @@
 """SurveyPersonaSource: the persona data a survey samples from (shared rules).
 
-Both ``SurveyExecutionManager`` (accepting a survey, BR1.2) and
-``SurveyRunManager`` (starting it, BR1.4) need the same two decisions, so they
+Both ``SurveyExecutionManager`` (accepting a survey) and
+``SurveyRunManager`` (starting it) need the same two decisions, so they
 live here (Manager → Component → Service):
 
 - Nemotron is usable only when its Parquet is at ``Config.NEMOTRON_DATASET_KEY``.
   A missing file is never downloaded here: it is ``NEMOTRON_DATASET_NOT_PLACED``
   when the file is placed beforehand (closed network), else
-  ``SURVEY_DATASET_NOT_DOWNLOADED`` (closed network U3 BR2.4).
+  ``SURVEY_DATASET_NOT_DOWNLOADED``.
 - At least :data:`MIN_SURVEY_PERSONAS` personas must be available. Too few with
   filters suggests loosening them; too few without filters means the dataset
   itself is small (Issue #118).
@@ -85,7 +85,7 @@ class SurveyPersonaSource:
         filters: Optional[Dict[str, Any]],
         error_type: type[CodedError] = CodedError,
     ) -> None:
-        """At least :data:`MIN_SURVEY_PERSONAS` personas (BR1.2, BR1.4).
+        """At least :data:`MIN_SURVEY_PERSONAS` personas.
 
         Raises:
             error_type: ``SURVEY_AVAILABLE_PERSONAS_TOO_FEW`` (filters) or

@@ -1,19 +1,18 @@
-"""PersonaGenerationManager のデータセット分析連携（source 経路）テスト。"""
+"""Tests for PersonaGenerationManager dataset analysis integration (source path)."""
 
 import os
 from unittest.mock import Mock
 
 import pytest
 
-# モジュール経由で参照し import 形式を from ... import に統一する
-# （同一モジュールの import / import from 混在を避ける。config / save_temp_csv 等の
-#  monkeypatch もこのハンドル経由で行う）。
+# Reference through the module so the import style stays uniform (``from ... import``);
+# monkeypatching config / save_temp_csv etc. also goes through this handle.
 from src.managers import persona_generation_manager as mod
 from tests.conftest import MEMBER_A
 
 pytestmark = pytest.mark.unit
 
-#: 生成には ai:execute が要る（U5: generate は利用者を受け取る）
+#: Generation requires ai:execute (generate takes the user)
 MEMBER = MEMBER_A.principal()
 
 
@@ -65,7 +64,7 @@ class TestExtractFileTexts:
             assert d["alias"] == "source_1"
             assert d["columns"] == ["region", "amount"]
             assert os.path.exists(d["path"])
-            # combined text は別名を使い、元ファイル名を出さない
+            # The combined text uses an alias and does not expose the original file name
             assert "source_1" in combined
             assert "購買履歴" not in combined
         finally:
@@ -92,7 +91,7 @@ class TestExtractFileTexts:
             detail = descriptors[0]["columns_detail"]
             names = [c["name"] for c in detail]
             assert names == ["region", "amount"]
-            # 型が推定され、プロンプトにも型が現れる
+            # The type is inferred and appears in the prompt
             prompt = mgr._build_user_prompt("data", 1, descriptors)
             assert "(integer)" in prompt or "(string)" in prompt
         finally:
@@ -140,8 +139,8 @@ class TestTempCleanup:
         assert created and all(not os.path.exists(p) for p in created)
 
     def test_temp_removed_on_schema_parse_error(self, monkeypatch):
-        # analyze_csv_schema が Manager 例外以外（_csv.Error 等）を投げても
-        # temp CSV は残らない（_extract_file_texts の except が広いこと）。
+        # Even if analyze_csv_schema raises a non-Manager exception (e.g. _csv.Error),
+        # the temp CSV is not left behind (the except in _extract_file_texts is broad).
         mgr = _manager()
         created = self._capture_paths(mgr, monkeypatch)
 
@@ -150,13 +149,13 @@ class TestTempCleanup:
 
         monkeypatch.setattr(mod, "analyze_csv_schema", boom)
 
-        with pytest.raises(Exception):  # noqa: B017 - Manager 例外に限定されない
+        with pytest.raises(Exception):  # noqa: B017 - not limited to Manager exceptions
             mgr._extract_file_texts([(b"region,amount\neast,10\n", "d.csv")])
         assert created and all(not os.path.exists(p) for p in created)
 
     def test_preview_header_omits_tool_claim(self):
-        # プレビュー見出しは analyze_dataset 可用性を主張しない
-        # （有効判定前に生成されるため、無効時の誤誘導を避ける）。
+        # The preview heading does not claim analyze_dataset availability
+        # (it is generated before the enabled check, so avoid misleading when disabled).
         mgr = _manager()
         combined, descriptors = mgr._extract_file_texts(
             [(b"region,amount\neast,10\n", "d.csv")]
@@ -170,7 +169,7 @@ class TestTempCleanup:
             cleanup_temp_files([d["path"] for d in descriptors])
 
     def test_temp_removed_on_tool_build_exception(self, monkeypatch):
-        # build_source_tools が失敗しても temp CSV は残らない（抽出直後から finally）。
+        # The temp CSV is not left behind even if build_source_tools fails (finally right after extraction).
         ds = Mock()
         ds.build_source_tools.side_effect = RuntimeError("tool build boom")
         mgr = _manager(dataset_service=ds)
@@ -211,13 +210,13 @@ class TestEffectiveFlag:
             persona_count=1,
         )
         ds.build_source_tools.assert_called_once()
-        # 採番済み別名で呼ばれる
+        # Called with the assigned alias
         descriptors = ds.build_source_tools.call_args[0][0]
         assert descriptors[0]["alias"] == "source_1"
 
 
 class TestDataAgentNotAllowed:
-    """閉域対応 U3 BR3.2 の (3) と BR3.7: data_type=dwh の生成を止める。"""
+    """data_type=dwh generation is stopped."""
 
     @pytest.fixture
     def not_allowed(self, monkeypatch):

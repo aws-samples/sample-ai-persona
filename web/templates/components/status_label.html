@@ -1,9 +1,8 @@
 {#
-  状態の表示（C7、約束 C6）。「参照権限なし」「削除済み」「利用権限なし」「所有者不明」
-  「共有なし」、ロール名などを、〔〕で囲んだ文字と枠線で示す（A3、NFR6.11）。
-  色は text-gray-700 だけで、意味を色に持たせない。ただの文字なので ARIA の役割は付けない。
-  引数:
-    text ... 表示する文字
+  Status display. Shows states such as "no read permission", "deleted", "no usage permission", "unknown owner", "not shared", and role names as text in brackets (〔〕) with a border.
+  Color is only text-gray-700 so meaning is not carried by color. It is plain text, so no ARIA role is added.
+  Arguments:
+    text ... text to show
 #}
 {% macro status_label(text) -%}
 <span data-status-label class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-400 text-xs text-gray-700">〔{{ text }}〕</span>

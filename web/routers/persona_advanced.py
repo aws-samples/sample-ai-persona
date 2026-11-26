@@ -1,18 +1,18 @@
-"""高度な生成（ベータ）のルーター（U1、契約 C1・C3）。
+"""Router of advanced generation (beta).
 
-- ページ: ``GET /persona/generation/advanced``。使えない利用者は通常の生成へ 303 で戻し、
-  戻った先でトーストを出す（BR1.1）。
-- アップロード（W2、W3）: 開始・URL の取り直し・確定は小さな JSON（画面のスクリプトが読む）。
-  ファイルの中身は受け取らない（BR2.6）。署名付き URL はこの JSON の応答にだけ出し、
-  ログにも画面の HTML にも出さない（security-design.md §3）。
-- 生成（W4）: 開始は CSRF の検査を通る POST。``run`` はこのモジュールの専用のプールに渡し、
-  渡せなければ ``abort_start`` で取り消す（scalability-design.md §1）。
-- 進み具合（C3）: ``GET .../events`` の SSE。1 秒ごとにストアを読み直し、15 秒ごとに
-  ``: keepalive``、各イベントに ``id: <sequence>``。``Last-Event-ID`` の続きから送る。
-  終わった生成は最後の result か error と done を送って閉じる（performance-design.md §4）。
+- Page: ``GET /persona/generation/advanced``. Users who cannot use it are sent back to normal generation with a 303,
+  and a toast is shown there.
+- Upload: start, re-fetching URLs and completion are small JSON (read by the page script).
+  File contents are not received. Signed URLs appear only in this JSON response and
+  are never in logs or the page HTML.
+- Generation: start is a POST that goes through the CSRF check. ``run`` is handed to this module's own pool, and
+  if it cannot be handed over it is canceled with ``abort_start``.
+- Progress: SSE at ``GET .../events``. The store is re-read every second, ``: keepalive`` is sent every 15 seconds,
+  and each event carries ``id: <sequence>``. Sending resumes after ``Last-Event-ID``.
+  A finished generation sends only the last result or error plus done, then closes.
 
-認証は ``AuthMiddleware``、CSRF は ``CSRFMiddleware`` がアプリ全体にかける（新しい入口でも同じ）。
-他人の生成・ファイルは、ないものと同じ応答にする（NFR3.9）。
+Authentication is done by ``AuthMiddleware`` and CSRF by ``CSRFMiddleware`` across the whole app (same for new entry points).
+Someone else's generation or file gets the same response as a nonexistent one.
 """
 
 from __future__ import annotations
@@ -81,26 +81,26 @@ templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates"
 templates.env.globals["gender_label"] = gender_label
 templates.env.globals["country_name"] = country_service.country_name
 
-#: Seconds between reads of the store while a generation runs (C3).
+#: Seconds between reads of the store while a generation runs.
 SSE_POLL_SECONDS = 1.0
 #: Seconds without a frame before a ``: keepalive`` comment (CloudFront 120 s).
 SSE_KEEPALIVE_SECONDS = 15.0
 #: The notice the ordinary page turns into a toast (``persona.py``).
 UNAVAILABLE_NOTICE = "advanced_unavailable"
-#: The parallel uploads of one file in the browser (BR2.5, performance-design.md §2).
+#: The parallel uploads of one file in the browser.
 UPLOAD_CONCURRENCY = 4
 #: Inspections (head read + parse) running at once in this process; the rest wait.
 INSPECT_CONCURRENCY = 4
 _inspect_slots = asyncio.Semaphore(INSPECT_CONCURRENCY)
 
-#: The generations' own pool, apart from the other routers' pools (NFR2.2).
+#: The generations' own pool, apart from the other routers' pools.
 generation_executor = ThreadPoolExecutor(
     max_workers=config.ADVANCED_GENERATION_MAX_CONCURRENT,
     thread_name_prefix="advanced-generation",
 )
 
 _GENERATION_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-#: Statuses answered with 409 instead of the TRANSIENT 503 (contract C1, U5 §5).
+#: Statuses answered with 409 instead of the TRANSIENT 503.
 _CONFLICT_CODES = frozenset(
     {
         ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING.value,
@@ -150,7 +150,7 @@ def screen_limits() -> dict[str, object]:
         "max_bytes": int(config.ADVANCED_UPLOAD_MAX_BYTES),
         "max_size_mb": int(config.ADVANCED_UPLOAD_MAX_BYTES) // 1_000_000,
         "max_files": int(config.ADVANCED_UPLOAD_MAX_FILES),
-        # U4 BR21.1: documents (PDF, Word, text) up to 100MB
+        # documents (PDF, Word, text) up to 100MB
         "max_document_bytes": int(config.ADVANCED_DOCUMENT_MAX_BYTES),
         "max_document_size_mb": int(config.ADVANCED_DOCUMENT_MAX_BYTES) // 1_000_000,
         "max_document_man_chars": int(config.ADVANCED_DOCUMENT_MAX_TOTAL_CHARS)
@@ -158,13 +158,13 @@ def screen_limits() -> dict[str, object]:
         "concurrency": UPLOAD_CONCURRENCY,
         "persona_count_max": PERSONA_COUNT_MAX,
         "purpose_max_chars": PURPOSE_MAX_CHARS,
-        # U2 NFR1.11: 検査中の行を取り直す間隔と、打ち切るまでの秒
+        # Interval for re-fetching a row under inspection, and the seconds before giving up
         "inspect_poll_seconds": int(config.ADVANCED_UPLOAD_INSPECT_POLL_SECONDS),
         "inspect_stop_seconds": int(config.ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS),
         "retention_days": int(config.ADVANCED_SOURCE_RETENTION_DAYS),
-        # U5 NFR8.8: 計画のカードを待てる分（「15 分以内に選んでください」）
+        # How long the plan card can be waited on ("choose within 15 minutes")
         "plan_wait_minutes": int(config.ADVANCED_GENERATION_PLAN_WAIT_SECONDS) // 60,
-        # U6 BR37.1: 1 回の生成に選べる表の数
+        # Number of tables that can be chosen for one generation
         "max_tables": int(config.ADVANCED_MAX_TABLES),
     }
 
@@ -182,7 +182,7 @@ def _no_store(body: dict[str, Any]) -> JSONResponse:
 async def advanced_generation_page(
     request: Request, generation: Optional[str] = None
 ) -> Any:
-    """高度な生成のページ（W1）。使えないときは通常の生成へ戻す（BR1.1、AC1.2.2）。"""
+    """Advanced generation page. If it cannot be used, return to normal generation."""
     principal = _principal(request)
     manager = get_advanced_generation_manager()
     if not await run_in_threadpool(manager.is_available, principal):
@@ -203,9 +203,9 @@ async def advanced_generation_page(
                 manager.elapsed_clock, principal, generation_id
             )
         except CodedError:
-            # 読めない生成は経過時間を出さない（理由は SSE の error が伝える）
+            # An unreadable generation shows no elapsed time (the reason is conveyed by the SSE error)
             logger.info("advanced generation elapsed time not readable")
-    # U2 W2-1: 本人のファイルの一覧（古い記録の補正で S3 を呼びうるのでスレッドへ、NFR2.6）
+    # The user's own file list (stale-record correction may call S3, so it runs in a thread)
     uploads = get_source_upload_manager()
     rows: list[dict[str, Any]] = []
     list_failed = False
@@ -215,7 +215,7 @@ async def advanced_generation_page(
     except Exception:
         logger.warning("advanced upload list not readable", exc_info=True)
         list_failed = True
-    # U6 BR35.4: the box shows (checked) only when the Manager offers it
+    # the box shows (checked) only when the Manager offers it
     detailed_offered = await run_in_threadpool(
         manager.detailed_analysis_offered, principal
     )
@@ -237,11 +237,11 @@ async def advanced_generation_page(
     )
 
 
-# --- uploads (C1, C2) --------------------------------------------------------
+# --- uploads --------------------------------------------------------
 
 
 class PartNumbers(BaseModel):
-    """Body of the part URL refresh (BR2.4)."""
+    """Body of the part URL refresh."""
 
     part_numbers: list[int] = Field(min_length=1, max_length=10000)
 
@@ -254,13 +254,13 @@ class CompletedPart(BaseModel):
 
 
 class Completion(BaseModel):
-    """Body of the completion (C1 ``parts``)."""
+    """Body of the completion (``parts``)."""
 
     parts: list[CompletedPart] = Field(max_length=10000)
 
 
 def _completed(source_file: SourceFile) -> dict[str, Any]:
-    """The ``UploadCompleted`` body of contract C1."""
+    """The ``UploadCompleted`` body."""
     body: dict[str, Any] = {
         "source_file_id": source_file.source_file_id,
         "status": source_file.status.value,
@@ -279,7 +279,7 @@ async def start_upload(
     size_bytes: int = Form(...),
     content_type: str = Form(""),
 ) -> Any:
-    """アップロードを始め、すべてのパートの署名付き URL を返す（W2、BR2.1〜BR2.3）。"""
+    """Start an upload and return signed URLs for all parts."""
     manager = get_source_upload_manager()
     try:
         session = await run_in_threadpool(
@@ -304,7 +304,7 @@ async def start_upload(
 async def refresh_part_urls(
     request: Request, source_file_id: str, body: PartNumbers
 ) -> Any:
-    """まだ送っていないパートの URL を取り直す（BR2.4、FD-Q7）。"""
+    """Re-fetch URLs of the parts not yet sent."""
     manager = get_source_upload_manager()
     try:
         session = await run_in_threadpool(
@@ -328,7 +328,7 @@ async def refresh_part_urls(
 async def complete_upload(
     request: Request, source_file_id: str, body: Completion
 ) -> Any:
-    """確定し、先頭を検査する（W3、BR2.7、BR3.1〜BR3.3）。"""
+    """Complete the upload and inspect the head of the file."""
     manager = get_source_upload_manager()
     parts = [(p.part_number, p.etag) for p in body.parts]
     try:
@@ -382,7 +382,7 @@ def render_upload_row(
 
 @router.get("/advanced/uploads/{source_file_id}", response_class=HTMLResponse)
 async def get_upload_row(request: Request, source_file_id: str) -> Any:
-    """ファイルの状態の断片（W3。検査中の行が読み直す）。他人・ないは 404。"""
+    """Fragment of the file state (the row under inspection re-reads it). Someone else's or nonexistent gives 404."""
     manager = get_source_upload_manager()
     try:
         source_file = await run_in_threadpool(
@@ -396,7 +396,7 @@ async def get_upload_row(request: Request, source_file_id: str) -> Any:
 
 @router.delete("/advanced/uploads/{source_file_id}")
 async def cancel_upload(request: Request, source_file_id: str) -> Any:
-    """アップロード中のファイルを取り消す（W2-6、C2 の送り直しが尽きたとき）。"""
+    """Cancel a file being uploaded (when the resend attempts run out)."""
     manager = get_source_upload_manager()
     try:
         await run_in_threadpool(
@@ -419,10 +419,10 @@ def _delete_dialog_id(source_file_id: str) -> str:
 
 @router.delete("/advanced/sources/{source_file_id}")
 async def delete_source(request: Request, source_file_id: str) -> Any:
-    """上げたファイルを消す（W2-6、BR14.1、BR14.2）。成功なら行を消し、ダイアログを閉じる。
+    """Delete an uploaded file. On success remove the row and close the dialog.
 
-    使用中・他人・ないはトースト。S3 で消せなかったときは「削除できませんでした」の行に
-    差し替え、トーストで知らせる（もう一度押すと続きから消す）。
+    In use, someone else's or nonexistent gives a toast. If S3 could not delete it, the row is
+    replaced with a "could not delete" row and a toast is shown (pressing again continues from where it stopped).
     """
     principal = _principal(request)
     manager = get_source_upload_manager()
@@ -476,7 +476,7 @@ async def _deleting_row(
 
 
 def _form_error(request: Request, message: str) -> Any:
-    """入力を直せば解決するエラーを、送信元のフォームの中の領域に出す（入力は残す）。"""
+    """Show errors the user can fix by correcting input in an area inside the originating form (keeping the input)."""
     return mark_renderable(
         templates.TemplateResponse(
             request,
@@ -507,7 +507,7 @@ def render_progress(request: Request, generation_id: str) -> HTMLResponse:
 async def _already_running(
     request: Request, principal: Principal, message: str
 ) -> Response:
-    """The notice under the form and the running generation's progress (BR30.2).
+    """The notice under the form and the running generation's progress.
 
     409 so the request reads as refused; ``mark_renderable`` lets htmx put it
     in the progress area below the form. No running one found: the notice only.
@@ -549,12 +549,12 @@ async def start_generation(
     confirm_plan: bool = Form(False),
     use_detailed_analysis: bool = Form(False),
 ) -> Any:
-    """生成を始め、進み具合の区画を返す（W4）。``run`` は専用のプールで動く。
+    """Start a generation and return the progress section. ``run`` runs on a dedicated pool.
 
-    U5: 「分析の計画を確認してから実行する」を ``confirm_plan`` で受け取る（BR29.1）。
-    U6: 「AI による詳細分析」を ``use_detailed_analysis`` で受け取る。使うかどうかは
-    Manager が開始のときに決める（BR35.2。許されていなければ送られても使わない）。
-    実行中の生成があるときは、その旨と実行中の生成の進み具合を 409 で返す（BR30.2）。
+    Receives "review the analysis plan before running" as ``confirm_plan``.
+    Receives "detailed analysis by AI" as ``use_detailed_analysis``. Whether it is used is
+    decided by the Manager at start (it is not used even if sent when not allowed).
+    When a generation is already running, return that fact and its progress with 409.
     """
     principal = _principal(request)
     manager = get_advanced_generation_manager()
@@ -571,7 +571,7 @@ async def start_generation(
     except CodedError as e:
         logger.info("advanced generation not started")
         if error_kind_of(e) is ErrorKind.FORBIDDEN:
-            raise  # 403 は共通の例外ハンドラ（トースト）
+            raise  # 403 goes to the shared exception handler (toast)
         if is_correctable(e):
             return _form_error(request, user_message_for(e))
         code = error_payload(e)["error_code"]
@@ -594,7 +594,7 @@ async def start_generation(
     return render_progress(request, generation_id)
 
 
-# --- U5: the plan card and the cancel (C1) -----------------------------------
+# --- The plan card and the cancel -----------------------------------
 
 
 async def _control(
@@ -674,7 +674,7 @@ async def decide_plan(
     action: str = Form(...),
     revised_purpose: str = Form(""),
 ) -> Any:
-    """計画の承認、または指示を直して計画し直す（W5-1、BR29.3、BR29.4）。"""
+    """Approve the plan, or correct the instructions and replan."""
     revised = revised_purpose if action == "replan" else None
     refused = await _control(
         request,
@@ -705,7 +705,7 @@ async def decide_plan(
     "/advanced/generations/{generation_id}/cancel", response_class=HTMLResponse
 )
 async def cancel_generation(request: Request, generation_id: str) -> Any:
-    """中止を受け付け、「中止しています」を返す（W5-3、BR31.1、BR31.4）。"""
+    """Accept the cancel and return "canceling"."""
     refused = await _control(request, generation_id, "cancel")
     if refused is not None:
         return refused
@@ -716,7 +716,7 @@ async def cancel_generation(request: Request, generation_id: str) -> Any:
     )
 
 
-# --- progress (C3) -----------------------------------------------------------
+# --- progress -----------------------------------------------------------
 
 
 def _frame(event: str, data: str, event_id: Optional[int] = None) -> str:
@@ -748,12 +748,12 @@ def _summary(event: GenerationEvent) -> dict[str, Any]:
 
 
 def _failure_values(progress: GenerationProgress) -> dict[str, Any]:
-    """The values the failure wording may use (U4: with the owner's file name)."""
+    """The values the failure wording may use (with the owner's file name)."""
     return dict(progress.failure_context or progress.generation.error_context or {})
 
 
 def _stored_error(code_value: Optional[str], context: Optional[dict[str, Any]]) -> str:
-    """The C3 ``error`` payload of a failure stored as a code (never text)."""
+    """The ``error`` payload of a failure stored as a code (never text)."""
     code = ErrorCode.parse(code_value) or ErrorCode.GENERATION_OPERATION_FAILED
     return json.dumps(
         {
@@ -765,7 +765,7 @@ def _stored_error(code_value: Optional[str], context: Optional[dict[str, Any]]) 
 
 
 def render_result(result: AdvancedGenerationResult) -> str:
-    """Section D as HTML (the C3 ``result`` payload)."""
+    """Section D as HTML (the ``result`` payload)."""
     generation = result.generation
     readable_until = (
         generation.finished_at
@@ -782,7 +782,7 @@ def render_result(result: AdvancedGenerationResult) -> str:
 
 
 def _has_card(progress: GenerationProgress) -> bool:
-    """A plan the user confirms is shown as its card (U5 BR29.2)."""
+    """A plan the user confirms is shown as its card."""
     generation = progress.generation
     return generation.confirm_plan and generation.plan is not None
 
@@ -790,7 +790,7 @@ def _has_card(progress: GenerationProgress) -> bool:
 def render_plan_card(
     generation: AdvancedGeneration, *, accepted: Optional[str] = None
 ) -> str:
-    """The plan card as HTML (the C3 ``plan`` payload; escaped, NFR3.28).
+    """The plan card as HTML (the ``plan`` payload; escaped).
 
     ``accepted``: ``approve`` or ``replan`` once the user chose (the POST's
     answer); the buttons are then left out.
@@ -835,7 +835,7 @@ async def _event_frames(
     last_write = time.monotonic()
     events: tuple[GenerationEvent, ...] = progress.events
     if after is None and progress.is_finished:
-        # 終わった生成に初めてつないだ: 最後の result か error だけを送る（C3）
+        # First connection to a finished generation: send only the last result or error
         events = tuple(e for e in events if e.event_type in _TERMINAL_EVENTS)[-1:]
     while True:
         for event in events:
@@ -845,7 +845,7 @@ async def _event_frames(
                 )
                 terminal_sent = True
             elif event.event_type is EventType.CANCELLED:
-                # U5 BR31.2: the cancel is not an error; the payload is empty
+                # the cancel is not an error; the payload is empty
                 frame = _frame("cancelled", "", event.sequence)
                 terminal_sent = True
             elif event.event_type is EventType.PLAN and _has_card(progress):
@@ -918,12 +918,12 @@ async def _expired_frames(payload: dict[str, str]) -> AsyncIterator[str]:
 
 @router.get("/advanced/generations/{generation_id}/events")
 async def generation_events(request: Request, generation_id: str) -> Any:
-    """進み具合の SSE（C3、BR7.2）。読むだけで、生成を始めない。持ち主だけ。"""
-    # セッションは接続時だけ確かめる（最長 60 分）。接続中は確かめ直さない。
-    # 受け身の要求なので、つなぐだけでは最終操作の時刻を延ばさない（PASSIVE_REQUESTS）
+    """SSE of progress. Read-only; it does not start a generation. Owner only."""
+    # The session is checked only at connect time (up to 60 minutes). It is not re-checked while connected.
+    # It is a passive request, so connecting alone does not extend the last-activity time (PASSIVE_REQUESTS)
     principal = _principal(request)
     manager = get_advanced_generation_manager()
-    # ブラウザの自動のつなぎ直しはヘッダー、画面が自分でつなぎ直すときはクエリで届く
+    # The browser's automatic reconnect sends it in a header; when the page reconnects itself it arrives in the query
     after = _last_event_id(
         request.headers.get("Last-Event-ID")
         or request.query_params.get("last_event_id")
@@ -945,7 +945,7 @@ async def generation_events(request: Request, generation_id: str) -> Any:
 
 @router.get("/advanced/generations/{generation_id}/record", response_class=HTMLResponse)
 async def generation_record(request: Request, generation_id: str) -> Any:
-    """分析の記録のダイアログの中身（W6-2、BR9.1）。持ち主だけ、24 時間まで。"""
+    """Contents of the analysis-record dialog. Owner only, up to 24 hours."""
     manager = get_advanced_generation_manager()
     try:
         record = await run_in_threadpool(

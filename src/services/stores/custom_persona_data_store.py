@@ -1,15 +1,13 @@
-"""DynamoDB reads and writes of custom persona data records (U7, Q2 A).
+"""DynamoDB reads and writes of custom persona data records.
 
 ``CustomPersonaData`` (PK ``id``, no index) holds two kinds of items:
 
 - the record of one imported file (``id`` = UUID, :class:`CustomPersonaData`);
-- the name reservation ``id = "name#{name}"`` that keeps names unique
-  (BR4.4). It carries ``data_id`` and is never returned as a record
-  (NFR1.74).
+- the name reservation ``id = "name#{name}"`` that keeps names unique.
+It carries ``data_id`` and is never returned as a record.
 
 Who may read or change a record is decided by ``SurveyDatasetManager``; this
-service only runs the reads, the conditional writes and the transactions
-(``reliability-design.md`` §1):
+service only runs the reads, the conditional writes and the transactions:
 
 - registration writes the record and its reservation in one transaction,
   both "id does not exist yet";
@@ -52,7 +50,7 @@ UNPROCESSED_RETRIES = 3
 #: Waits before each re-read (jittered).
 UNPROCESSED_BACKOFF_SECONDS: tuple[float, ...] = (0.05, 0.1, 0.2)
 #: Columns a caller may change with :meth:`CustomPersonaDataStore.update_fields`.
-#: ``id``, ``name`` and ``shared_group_ids`` have their own operations (BR1.5).
+#: ``id``, ``name`` and ``shared_group_ids`` have their own operations.
 UPDATABLE_FIELDS = frozenset({"columns", "row_count", "standard_mapping"})
 
 _ID = "id"
@@ -81,7 +79,7 @@ class CustomPersonaDataConditionFailed(CustomPersonaDataStoreError):
 
 
 class CustomPersonaDataNameTaken(CustomPersonaDataStoreError):
-    """Another record holds the name (BR4.4)."""
+    """Another record holds the name."""
 
     code = ErrorCode.CUSTOM_PERSONA_DATA_NAME_TAKEN
 
@@ -140,7 +138,7 @@ class CustomPersonaDataStore:
         )
 
     def rename(self, data_id: str, *, old_name: str, new_name: str) -> None:
-        """Move the reservation and change ``name`` together (BR4.4).
+        """Move the reservation and change ``name`` together.
 
         Raises:
             CustomPersonaDataNameTaken: ``new_name`` is held by another record.
@@ -179,7 +177,7 @@ class CustomPersonaDataStore:
         )
 
     def update_fields(self, data_id: str, fields: Mapping[str, Any]) -> None:
-        """Change only the given columns, conditioned on the record (BR1.5).
+        """Change only the given columns, conditioned on the record.
 
         Raises:
             ValueError: A column outside :data:`UPDATABLE_FIELDS`.
@@ -205,7 +203,7 @@ class CustomPersonaDataStore:
     def update_scope(
         self, data_id: str, *, add: frozenset[str], remove: frozenset[str]
     ) -> None:
-        """``ADD`` the added departments, then ``DELETE`` the removed ones (BR5.2).
+        """``ADD`` the added departments, then ``DELETE`` the removed ones.
 
         Two separate updates, each conditioned on the record; a side with no
         department is not sent. When the second update fails the first one is
@@ -226,7 +224,7 @@ class CustomPersonaDataStore:
             )
 
     def delete(self, data_id: str, name: str) -> bool:
-        """Delete the record and its reservation in one transaction (BR4.6).
+        """Delete the record and its reservation in one transaction.
 
         Returns:
             ``False`` when the record did not exist.
@@ -286,7 +284,7 @@ class CustomPersonaDataStore:
         return found
 
     def list_all(self) -> list[CustomPersonaData]:
-        """Every record, reading every scan page (NFR2.23, NFR9.37)."""
+        """Every record, reading every scan page."""
         params: dict[str, Any] = {
             "TableName": self.table_name,
             "FilterExpression": "NOT begins_with(#id, :prefix)",

@@ -5,12 +5,13 @@ import { synthClosed, templatesOf } from './helpers/stages';
 import { exportedRef, exportTargets, flattenReference, PATH_METADATA_CONTEXT } from './template-paths';
 
 /**
- * IAM の `*` と方針の大きさ、秘密の読み手（U9、NFR7.16、NFR3.14、security-design.md）。
+ * IAM `*` usage, policy size, and who can read secrets.
  *
- * Stage を 3 通り（既定の dev の値、追加のペルソナモデルを有効にした値、U1 閉域の Stage）synth し、
- * 全スタック（公開は Data・App・Edge、閉域は Data・App）の全ロールの方針を調べる。`Resource: "*"` の文の操作は、下の例外の一覧と
- * 完全に一致させる（増えても、減って一覧が古くなっても失敗する）。IAM の文を足す変更は、
- * 同じ変更でこの一覧を直す。
+ * Synthesizes three Stages (default dev values, extra persona models enabled, and the closed
+ * Stage) and inspects the policies of every role in every stack (Data, App, Edge for public;
+ * Data, App for closed). The actions of `Resource: "*"` statements must match the exception
+ * list below exactly (it fails if one is added, or if one is removed and the list goes stale).
+ * A change that adds IAM statements must update this list in the same change.
  */
 
 jest.setTimeout(60_000);
@@ -18,13 +19,13 @@ jest.setTimeout(60_000);
 const ACCOUNT = '123456789012';
 const REGION = 'ap-northeast-1';
 
-/** `Resource: "*"` を残してよい操作と理由。リソースを指定できない API だけ。 */
+/** Actions allowed to keep `Resource: "*"`, with reasons. Only APIs that cannot take a resource. */
 const WILDCARD_EXCEPTIONS: Record<string, string> = {
   'dynamodb:ListTables': '一覧の API で、リソースを指定できない（起動時の接続の確認）',
   'bedrock-agentcore:ListMemories': '一覧の API で、リソースを指定できない',
   'ecr:GetAuthorizationToken': '認可トークンの取得で、リソースを指定できない。CDK が実行ロールに足す',
-  // アンケートのステートマシンのログの出力（NFR5.6）。CloudWatch Logs の配信の API は
-  // リソースを指定できない（CDK がステートマシンの実行ロールに足す）
+  // Log output of the survey state machine. The CloudWatch Logs delivery APIs cannot
+  // take a resource (CDK adds them to the state machine's execution role)
   'logs:CreateLogDelivery': 'ログの配信の API で、リソースを指定できない',
   'logs:GetLogDelivery': 'ログの配信の API で、リソースを指定できない',
   'logs:UpdateLogDelivery': 'ログの配信の API で、リソースを指定できない',
@@ -34,18 +35,18 @@ const WILDCARD_EXCEPTIONS: Record<string, string> = {
   'logs:DescribeResourcePolicies': 'ログの配信の API で、リソースを指定できない',
   'logs:DescribeLogGroups': 'ログの配信の API で、リソースを指定できない',
 };
-/** アンケートのステートマシンが呼ぶモデル（global の Haiku 5.5、基盤設計 3.1）。 */
+/** Models the survey state machine calls (global Haiku 5.5). */
 const SURVEY_MODEL_ARNS = [
   `arn:aws:bedrock:*:${ACCOUNT}:inference-profile/global.anthropic.claude-haiku-5-5`,
   'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5',
 ];
-/** enableAdditionalPersonaModels のときだけ足す例外。 */
+/** Exceptions added only when enableAdditionalPersonaModels is set. */
 const MANTLE_WILDCARD_EXCEPTIONS: Record<string, string> = {
   'bedrock-mantle:CallWithBearerToken':
     'リソースの種類を持たない（条件キー bedrock-mantle:BearerTokenType だけ）',
 };
 
-/** 推論の 3 つの ARN（基盤モデル・推論プロファイルはリージョンを `*`）。 */
+/** The three inference ARNs (foundation model and inference profile use `*` for the region). */
 const INFERENCE_ARNS = [
   'arn:aws:bedrock:*::foundation-model/*',
   `arn:aws:bedrock:*:${ACCOUNT}:inference-profile/*`,
@@ -53,10 +54,10 @@ const INFERENCE_ARNS = [
 ];
 
 /**
- * タスクロールが Query してよい GSI（アプリが IndexName で引くものだけ、名前で付ける）。
- * OwnerIndex: src/services/stores/resource_share_store.py、TargetIndex: src/services/stores/persona_binding_store.py。
- * 型固定の GSI（NameIndex など）は外す途中で、アプリは使わないため付けない。
- * `data` は Data スタックの construct のパス（公開は AIPersonaDev/Data、閉域は AIPersonaDevClosed/Data）。
+ * GSIs the task role may Query (only those the app looks up by IndexName, named explicitly).
+ * OwnerIndex: src/services/stores/resource_share_store.py, TargetIndex: src/services/stores/persona_binding_store.py.
+ * Type-fixed GSIs (NameIndex etc.) are being removed and the app does not use them, so they are not granted.
+ * `data` is the Data stack construct path (AIPersonaDev/Data for public, AIPersonaDevClosed/Data for closed).
  */
 function queriedIndexArns(data: string): string[] {
   const tableArn = (id: string) => exportedRef(`${data}/Database/${id}/Resource`, 'Arn');
@@ -66,15 +67,15 @@ function queriedIndexArns(data: string): string[] {
     `${tableArn('Personas')}/index/OwnerIndex`,
     `${tableArn('SurveyTemplates')}/index/OwnerIndex`,
     `${tableArn('Surveys')}/index/OwnerIndex`,
-    // 進行役が待ちと実行中を読む疎な索引（src/services/stores/survey_store.py）
+    // Sparse index the facilitator reads for waiting and running surveys (src/services/stores/survey_store.py)
     `${tableArn('Surveys')}/index/RunQueueIndex`,
-    // 高度な生成（ベータ、U1）: 本人のファイルと生成（source_file_store.py・advanced_generation_store.py）
+    // Advanced generation (beta): a user's files and generations (source_file_store.py, advanced_generation_store.py)
     `${tableArn('SourceFiles')}/index/owner_sub-created_at`,
     `${tableArn('AdvancedGenerations')}/index/owner_sub-created_at`,
   ];
 }
 
-/** IAM の 1 つの方針の上限（区切りの空白を除いた文字数）。 */
+/** Upper limit of one IAM policy (characters excluding whitespace). */
 const MAX_INLINE_POLICY = 10_240;
 const MAX_MANAGED_POLICY = 6_144;
 
@@ -83,7 +84,7 @@ const FEATURE_FLAGS: Record<string, unknown> = require('../cdk.json').context;
 
 interface Variant {
   name: string;
-  /** Data スタックの construct のパス。 */
+  /** Data stack construct path. */
   data: string;
   build: () => Template[];
   expectedWildcards: string[];
@@ -106,7 +107,7 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    // U1 閉域: Data・App だけ（Edge なし）。検証用 EC2 のロールは管理ポリシーだけで、* の文を足さない
+    // Closed Stage: Data and App only (no Edge). The verification EC2 role has managed policies only and adds no `*` statements
     name: '閉域の Stage（検証用 EC2 あり）',
     data: 'AIPersonaDevClosed/Data',
     build: () => Object.values(synthClosed().templates),
@@ -299,7 +300,7 @@ describe.each(VARIANTS)('IAM（$name）', ({ data: DATA, build, expectedWildcard
       expect(roles).toHaveLength(1);
       expect(roles[0]).toMatch(/^AppTaskDefinitionExecutionRole[0-9A-F]{8}$/);
     }
-    // 秘密を読む文はほかにない（ワイルドカードでも読ませない）
+    // No other statement reads secrets (not even via wildcards)
     const all = withAction(docs, 'secretsmanager:GetSecretValue');
     expect(all.flatMap(resourcesOf)).not.toContain('*');
   });

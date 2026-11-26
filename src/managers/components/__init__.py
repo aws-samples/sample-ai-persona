@@ -1,6 +1,6 @@
-"""Manager Component 層。
+"""Manager component layer.
 
-複数の Manager が共通で使う **ビジネスワークフロー** を保持する。shared/（純粋
-ヘルパー）とは異なり判断ロジックを持ってよいが、Manager そのものではないため
-Router/Manager を import してはならない（依存方向は Manager → Component → Service）。
+Holds business workflow parts shared by several Managers. Unlike shared/ (pure
+helpers) it may contain decision logic, but it is not a Manager itself, so it
+must not import Routers or Managers (dependency direction: Manager -> Component -> Service).
 """

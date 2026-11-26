@@ -1,9 +1,6 @@
 """
 Retry Logic with Exponential Backoff
-指数バックオフでリトライするデコレータとユーティリティ
-
-Requirements:
-    - 10.4: リトライロジック（指数バックオフ）
+Decorator and utilities that retry with exponential backoff
 """
 
 import functools
@@ -36,7 +33,7 @@ TRANSIENT_ERROR_CODES = frozenset(
 
 
 class RetryExhaustedError(Exception):
-    """リトライ回数を超過した場合のエラー"""
+    """Error raised when the retry count is exceeded."""
 
     def __init__(
         self, message: str, attempts: int, last_exception: Optional[Exception] = None
@@ -48,13 +45,13 @@ class RetryExhaustedError(Exception):
 
 def is_transient_error(exception: Exception) -> bool:
     """
-    一時的なエラー（リトライ可能）かどうかを判定
+    Decide whether an error is transient (retryable)
 
     Args:
-        exception: 判定する例外
+        exception: The exception to check
 
     Returns:
-        リトライ可能な一時的エラーの場合True
+        True if the error is a retryable transient error
     """
     # Check for botocore ClientError with transient error codes
     if isinstance(exception, ClientError):
@@ -82,16 +79,16 @@ def calculate_backoff_delay(
     attempt: int, base_delay: float = 1.0, max_delay: float = 60.0, jitter: bool = True
 ) -> float:
     """
-    指数バックオフの遅延時間を計算
+    Compute the delay for exponential backoff
 
     Args:
-        attempt: 現在の試行回数（0から開始）
-        base_delay: 基本遅延時間（秒）
-        max_delay: 最大遅延時間（秒）
-        jitter: ジッターを追加するか（thundering herd防止）
+        attempt: Current attempt number (starting at 0)
+        base_delay: Base delay (seconds)
+        max_delay: Maximum delay (seconds)
+        jitter: Whether to add jitter (prevents thundering herd)
 
     Returns:
-        計算された遅延時間（秒）
+        Computed delay (seconds)
     """
     # Exponential backoff: base_delay * 2^attempt
     delay = base_delay * (2**attempt)
@@ -115,30 +112,27 @@ def with_retry(
     on_retry: Optional[Callable[[Exception, int, float], None]] = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
-    指数バックオフでリトライするデコレータ
+    Decorator that retries with exponential backoff
 
-    一時的なエラー（ネットワークエラー、スロットリング等）が発生した場合、
-    指数バックオフで自動的にリトライする。
+    On a transient error (network error, throttling, etc.),
+    retries automatically with exponential backoff.
 
     Args:
-        max_retries: 最大リトライ回数（デフォルト: 3）
-        base_delay: 基本遅延時間（秒）（デフォルト: 1.0）
-        max_delay: 最大遅延時間（秒）（デフォルト: 60.0）
-        jitter: ジッターを追加するか（デフォルト: True）
-        retryable_exceptions: リトライ対象の例外タプル（Noneの場合は自動判定）
-        on_retry: リトライ時に呼び出されるコールバック関数
+        max_retries: Maximum number of retries (default: 3)
+        base_delay: Base delay in seconds (default: 1.0)
+        max_delay: Maximum delay in seconds (default: 60.0)
+        jitter: Whether to add jitter (default: True)
+        retryable_exceptions: Tuple of exceptions to retry (auto-detected if None)
+        on_retry: Callback invoked on each retry
 
     Returns:
-        デコレートされた関数
+        The decorated function
 
     Example:
         @with_retry(max_retries=3, base_delay=1.0)
         def call_external_service():
             # This will be retried on transient errors
             pass
-
-    Requirements:
-        - 10.4: リトライロジック（指数バックオフ）
     """
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:

@@ -1,4 +1,4 @@
-"""Models of advanced generation (beta) U1 (entities.md, contracts C4, C5, C8).
+"""Models of advanced generation (beta).
 
 Each model follows the project pattern: frozen dataclass, ``create_new()`` /
 ``update()`` return new instances, ``to_dict()`` leaves out ``None`` values and
@@ -416,12 +416,12 @@ class TestGenerationEvent:
             "plan",
             "result",
             "error",
-            "cancelled",  # U5 BR31.2
+            "cancelled",
         ]
 
 
 class TestGenerationControl:
-    """U5 (entities.md): plan confirmation, the control request, the session ID."""
+    """Plan confirmation, the control request, the session ID."""
 
     def _new(self, **overrides) -> AdvancedGeneration:
         values = dict(
@@ -650,12 +650,12 @@ class TestAnalysisModels:
 
     def test_tool_policy_rejects_unknown_tools(self):
         with pytest.raises(ValueError):
-            # U6 BR35.3 replaced BR5.2: run_code is a tool now, write_sql never
+            # run_code is a tool now; write_sql never is
             AnalysisToolPolicy.from_dict({"tools": ["write_sql"], "limits": {}})
 
 
 class TestAdvancedGenerationErrorCodes:
-    """functional-spec.md §5: names and kinds of the U1 error codes."""
+    """Names and kinds of the error codes."""
 
     @pytest.mark.parametrize(
         ("code", "kind"),
@@ -684,7 +684,7 @@ class TestAdvancedGenerationErrorCodes:
         assert code.kind is kind
 
 
-# --- U2: 同じ名前の番号・期限・元のファイルの判定（BR11.3、BR13.2、BR14.3、BR12.1） ---
+# --- Same-name numbering, expiry and source-file checks ---
 
 
 class TestSourceFileU2:
@@ -860,7 +860,7 @@ class TestSourceErrorCodesU2:
         assert code.kind is kind
 
 
-# --- U4: documents (entities.md, BR21.1, BR22.3, BR24, BR28) -------------------
+# --- Documents ----------------------------------------------------------------
 
 
 def _document_metadata(**overrides) -> DocumentMetadata:
@@ -1074,7 +1074,7 @@ class TestAdvancedGenerationU4:
         assert DocumentMode(mode).value == mode
 
 
-# --- U6: detailed analysis and several tables (entities.md U6) -----------------
+# --- Detailed analysis and several tables --------------------------------------
 
 
 class TestAdvancedGenerationU6:
@@ -1271,7 +1271,7 @@ class TestEmittedResult:
             self._result(segments=({"segment_key": "a", "size": -1},))
 
     def test_recounted_holds_only_what_the_library_counted(self):
-        """review-01 R-02: statistics and features are the code's own numbers."""
+        """Statistics and features are the code's own numbers."""
         result = self._result(
             segments=(
                 {

@@ -1,4 +1,4 @@
-"""AnalysisPolicy: the tools, limits and plan rules of one analysis (BR5.1, BR5.2).
+"""AnalysisPolicy: the tools, limits and plan rules of one analysis.
 
 The three fixed tools only (no ``run_code``), limits from config, and a plan
 that departs from the guide must say why (asked once more, then the guide).
@@ -155,7 +155,7 @@ class TestSettlePlan:
         assert plan is not None and len(plan.questions) == 1
 
 
-# --- U6: run_code and several tables (BR35.3, BR36.2, BR37.2, NFR3.33) ------
+# --- run_code and several tables ---------------------------------------------
 
 SOURCES = ("source_1", "source_2")
 
@@ -322,7 +322,7 @@ def _col(name: str, *, distinct: bool, type_: str = "VARCHAR") -> dict:
 
 
 class TestReadTables:
-    """The proposal of how each table reads (U6 addendum)."""
+    """The proposal of how each table reads."""
 
     def test_a_customer_table_with_a_repeating_store_id_is_people(self) -> None:
         profile = {
