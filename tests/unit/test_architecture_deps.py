@@ -329,36 +329,46 @@ def test_baseline_has_no_stale_entries() -> None:
 _COMPONENTS_DIR = _MANAGERS_DIR / "components"
 
 
-def _component_imports(components_dir: Path) -> dict[str, set[str]]:
-    """Component file -> Component files it imports (``src.managers.components.x``)."""
+def _package_imports(directory: Path, package: list[str]) -> dict[str, set[str]]:
+    """Module file -> modules of the same package it imports.
+
+    ``package`` is the package's dotted path as segments, e.g.
+    ``["src", "managers", "components"]``.
+    """
     graph: dict[str, set[str]] = {}
-    files = _py_files(components_dir)
+    files = _py_files(directory)
     names = {p.stem for p in files}
+    depth = len(package)
     for path in files:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         targets: set[str] = set()
         for dotted in _iter_imported_dotted(tree, path):
             seg = _segments(dotted)
-            if seg[:3] == ["src", "managers", "components"] and len(seg) >= 4:
-                targets.add(seg[3])
+            if seg[:depth] == package and len(seg) > depth:
+                targets.add(seg[depth])
         # `from . import x` / `from src.managers.components import x` points at
-        # the package itself, so treat the imported names as Components
+        # the package itself, so treat the imported names as its modules
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 resolved = _resolve_import(node, path)
-                if resolved and _segments(resolved) == [
-                    "src",
-                    "managers",
-                    "components",
-                ]:
+                if resolved and _segments(resolved) == package:
                     targets |= {alias.name for alias in node.names}
         graph[path.stem] = {t for t in targets if t in names and t != path.stem}
     return graph
 
 
+def _component_imports(components_dir: Path) -> dict[str, set[str]]:
+    """Component file -> Component files it imports (``src.managers.components.x``)."""
+    return _package_imports(components_dir, ["src", "managers", "components"])
+
+
 def _component_cycles(components_dir: Path) -> list[list[str]]:
     """Cycles in the Component import graph, each as ``[a, b, ..., a]``."""
-    graph = _component_imports(components_dir)
+    return _import_cycles(_component_imports(components_dir))
+
+
+def _import_cycles(graph: dict[str, set[str]]) -> list[list[str]]:
+    """Cycles in a module import graph, each as ``[a, b, ..., a]``."""
     cycles: list[list[str]] = []
     seen: set[frozenset[str]] = set()
 
@@ -399,6 +409,75 @@ def test_components_have_no_import_cycle() -> None:
     Component-to-Component imports unconditionally. Cycles are checked here on a per-file graph.
     """
     assert _component_cycles(_COMPONENTS_DIR) == []
+
+
+_ADVANCED_DIR = _MANAGERS_DIR / "advanced_generation"
+_ADVANCED_PACKAGE = ["src", "managers", "advanced_generation"]
+
+#: Layer of each module of the advanced generation package (higher calls lower).
+#: The Manager uses the stage classes, the stage classes share the run context,
+#: and everything else is a leaf: types, errors and the pure helpers. A name
+#: whose file does not exist is skipped; a file missing here fails the check.
+_ADVANCED_LAYERS: dict[str, int] = {
+    "manager": 3,
+    "preparation": 2,
+    "analysis_stage": 2,
+    "finishing": 2,
+    "controls": 2,
+    "run_context": 1,
+    "run_types": 0,
+    "errors": 0,
+    "documents": 0,
+    "prompts": 0,
+    "results": 0,
+    "analysis_policy": 0,
+    "analysis_verifier": 0,
+    "detailed_analysis": 0,
+    "join_planner": 0,
+    "persona_check": 0,
+    "segment_features": 0,
+}
+#: The only import allowed between two stage classes (the reader's end
+#: goes through the finishing stage).
+_ADVANCED_STAGE_PAIRS = frozenset({("controls", "finishing")})
+
+
+def _advanced_layer_violations(directory: Path) -> list[tuple[str, str]]:
+    """``(module, imported)`` pairs that go against the package's layers.
+
+    Leaves may import each other (cycles are checked on their own); any other
+    import must point at a lower layer, or be one of ``_ADVANCED_STAGE_PAIRS``.
+    A module not in ``_ADVANCED_LAYERS`` is reported as ``(module, "")``.
+    """
+    found: list[tuple[str, str]] = []
+    for module, targets in sorted(
+        _package_imports(directory, _ADVANCED_PACKAGE).items()
+    ):
+        layer = _ADVANCED_LAYERS.get(module)
+        if layer is None:
+            found.append((module, ""))
+            continue
+        for target in sorted(targets):
+            other = _ADVANCED_LAYERS.get(target)
+            if other is None:
+                found.append((module, target))
+            elif other < layer or (layer == other == 0):
+                continue
+            elif (module, target) not in _ADVANCED_STAGE_PAIRS:
+                found.append((module, target))
+    return found
+
+
+def test_advanced_generation_modules_follow_their_layers() -> None:
+    """The advanced generation package has no import cycle and no upward import.
+
+    The layer checks above treat all of ``advanced_generation/`` as one unit,
+    so imports between its own modules are checked here on a per-file graph:
+    Manager -> stage classes -> run context -> leaves, one way only.
+    """
+    graph = _package_imports(_ADVANCED_DIR, _ADVANCED_PACKAGE)
+    assert _import_cycles(graph) == []
+    assert _advanced_layer_violations(_ADVANCED_DIR) == []
 
 
 def test_routers_do_not_import_access_target() -> None:
@@ -578,6 +657,24 @@ class TestCheckerItself:
             "from ...models.authz import Principal\n",
         )
         assert _component_cycles(tmp_path / "src/managers/components") == []
+
+    def test_advanced_upward_and_unlisted_imports_are_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        package = "src/managers/advanced_generation"
+        self._write(tmp_path, f"{package}/manager.py", "from .finishing import F\n")
+        self._write(tmp_path, f"{package}/finishing.py", "from . import run_context\n")
+        self._write(tmp_path, f"{package}/controls.py", "from .finishing import F\n")
+        self._write(tmp_path, f"{package}/run_context.py", "from .errors import E\n")
+        self._write(tmp_path, f"{package}/errors.py", "from .prompts import P\n")
+        self._write(tmp_path, f"{package}/prompts.py", "x = 1\n")
+        assert _advanced_layer_violations(tmp_path / package) == []
+        self._write(tmp_path, f"{package}/results.py", "from .manager import M\n")
+        self._write(tmp_path, f"{package}/extra.py", "x = 1\n")
+        assert _advanced_layer_violations(tmp_path / package) == [
+            ("extra", ""),
+            ("results", "manager"),
+        ]
 
     def test_importing_sandbox_is_flagged(self, tmp_path: Path) -> None:
         self._write(
