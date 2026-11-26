@@ -827,6 +827,8 @@ class EmittedResult:
         statistics: ``{name, value, p_value?, effect_size?}`` of tests, as the
             code passed them (not recounted).
         joined_columns: The key and the columns used, for a joined table.
+        tables_read: The table aliases the code read (``read_table`` /
+            ``join_tables``), whether or not it joined them with join_tables.
     """
 
     population: int
@@ -834,6 +836,7 @@ class EmittedResult:
     segments: tuple[dict[str, Any], ...]
     statistics: tuple[dict[str, Any], ...] = ()
     joined_columns: tuple[str, ...] = ()
+    tables_read: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "segments", tuple(dict(s) for s in self.segments))
@@ -841,6 +844,7 @@ class EmittedResult:
         object.__setattr__(
             self, "joined_columns", tuple(str(c) for c in self.joined_columns)
         )
+        object.__setattr__(self, "tables_read", tuple(str(t) for t in self.tables_read))
         if not _POPULATION_SOURCE.match(str(self.population_source)):
             raise ValueError("unknown population source")
         if int(self.population) < 0:
@@ -877,6 +881,8 @@ class EmittedResult:
             data["statistics"] = [dict(s) for s in self.statistics]
         if self.joined_columns:
             data["joined_columns"] = list(self.joined_columns)
+        if self.tables_read:
+            data["tables_read"] = list(self.tables_read)
         return data
 
     @classmethod
@@ -887,6 +893,7 @@ class EmittedResult:
             segments=tuple(dict(s) for s in data.get("segments") or []),
             statistics=tuple(dict(s) for s in data.get("statistics") or []),
             joined_columns=tuple(str(c) for c in data.get("joined_columns") or []),
+            tables_read=tuple(str(t) for t in data.get("tables_read") or []),
         )
 
 

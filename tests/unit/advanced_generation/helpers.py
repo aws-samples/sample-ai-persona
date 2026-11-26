@@ -253,6 +253,8 @@ class _Agents:
         }
         self.analysis_mode = "cluster"
         self.synthesis_mode = "ok"
+        #: The prompt of each synthesis call (not of the assignment).
+        self.synthesis_prompts: list[str] = []
         self.fail_planning = False
         self.calls: list[str] = []
         self.data_seen: list[Mapping[str, str]] = []
@@ -436,6 +438,7 @@ class _Agents:
                 + [{"evidence_id": "ev-unknown", "segment_id": "seg-0", "reason": "x"}]
             )
         self.calls.append("synthesis")
+        self.synthesis_prompts.append(prompt)
         self.data_seen.append(data)
         self.documents_seen.append(list(documents))
         document_evidence: list[dict[str, Any]] = []
@@ -459,6 +462,14 @@ class _Agents:
                 segment_id = segment["id"]
             if self.synthesis_mode == "orphan" and i == 0:
                 segment_id = "seg-missing"
+            # The first persona cites only IDs the generation does not have
+            no_evidence = i == 0 and (
+                self.synthesis_mode == "no_evidence"
+                or (
+                    self.synthesis_mode == "no_evidence_first"
+                    and self.calls.count("synthesis") == 1
+                )
+            )
             personas.append(
                 {
                     "name": f"山田 {i}",
@@ -469,9 +480,9 @@ class _Agents:
                     "pain_points": ["悩み"],
                     "goals": ["目標"],
                     "segment_id": segment_id,
-                    "evidence_ids": list(segment["evidence_ids"])
-                    + doc_ids
-                    + ["ev-made-up"],
+                    "evidence_ids": ["ev-made-up"]
+                    if no_evidence
+                    else list(segment["evidence_ids"]) + doc_ids + ["ev-made-up"],
                 }
             )
         return output_schema(personas=personas, document_evidence=document_evidence)

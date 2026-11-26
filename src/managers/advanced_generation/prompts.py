@@ -278,6 +278,38 @@ def analysis_prompt(
     return "\n".join(lines)
 
 
+#: What the second writing is told, by the problem of the first (fixed words).
+_RETRY_NOTES = {
+    "incomplete": (
+        "name・occupation・background と、values・pain_points・goals の"
+        "それぞれ 1 つ以上を、すべてのペルソナに書いてください"
+    ),
+    "no_evidence": (
+        "evidence_ids には、渡した evidence の id だけを書いてください。"
+        "代表する層（segment_id）の evidence_ids から選ぶと確実です"
+    ),
+    "coverage": (
+        "ペルソナごとに違う層を segment_id に選び、できるだけ多くの層を"
+        "代表させてください"
+    ),
+}
+
+
+def persona_retry_note(problem: str, missing_evidence: Sequence[int] = ()) -> str:
+    """The note added to the synthesis prompt when it is written again.
+
+    Only fixed words and persona numbers: no data and no model output.
+    """
+    lines = ["", "", "# 前回の出力で直すところ"]
+    if problem == "no_evidence" and missing_evidence:
+        numbers = "・".join(f"{n} 人目" for n in missing_evidence)
+        lines.append(
+            f"- {numbers}のペルソナに、使える根拠（evidence_ids）がありませんでした"
+        )
+    lines.append("- " + _RETRY_NOTES.get(problem, "形どおりに、もう一度書いてください"))
+    return "\n".join(lines)
+
+
 def synthesis_prompt(
     persona_count: int,
     *,

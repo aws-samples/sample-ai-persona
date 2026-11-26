@@ -466,7 +466,12 @@ class TestRunCodeSegments:
 
         assert result.unverified_segment_ids == ("a",)
 
-    def test_a_joined_cluster_must_add_up_to_its_own_population(self) -> None:
+    def test_some_segments_of_a_recounted_result_may_be_left_out(self) -> None:
+        """The check already put every person in one segment of run_code.
+
+        With fewer personas than its segments, the ones used need not add up
+        to the population; each size must still be the recounted one.
+        """
         segments = [_coded("a", "buyer", 20, 0.4)]
 
         result = _verify_u6(
@@ -477,4 +482,30 @@ class TestRunCodeSegments:
             method=AnalysisMethod.CLUSTER,
         )
 
-        assert not result.passed and result.reason == "cluster_sum"
+        assert result.passed and result.unverified_segment_ids == ()
+
+    def test_a_left_out_segment_does_not_let_a_wrong_size_pass(self) -> None:
+        segments = [_coded("a", "buyer", 21, 0.42)]
+
+        result = _verify_u6(
+            segments,
+            outputs={"tc-5": _EMITTED.to_dict()},
+            populations={"source_1": 50},
+            emitted={"tc-5": _EMITTED},
+            method=AnalysisMethod.CLUSTER,
+        )
+
+        assert result.unverified_segment_ids == ("a",)
+
+    def test_recounted_sizes_over_the_population_still_fail(self) -> None:
+        segments = [_coded("a", "buyer", 20, 0.4), _coded("b", "buyer", 40, 0.8)]
+
+        result = _verify_u6(
+            segments,
+            outputs={"tc-5": _EMITTED.to_dict()},
+            populations={"source_1": 50},
+            emitted={"tc-5": _EMITTED},
+            method=AnalysisMethod.CLUSTER,
+        )
+
+        assert not result.passed and result.reason == "sum"

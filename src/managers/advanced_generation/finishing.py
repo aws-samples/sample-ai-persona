@@ -215,10 +215,20 @@ class FinishingStage:
 
     @staticmethod
     def _join_title(state: Run, result: Optional[EmittedResult]) -> Optional[str]:
-        """The record's line for a joined result: columns and match rates."""
-        if result is None or not result.population_source.startswith("join:"):
+        """The record's line for the tables a result used.
+
+        A join with join_tables gives its columns and match rates; code that
+        read several tables without it (a merge of its own) gives the tables.
+        """
+        if result is None:
             return None
         names = {t.alias: t.source.display_name for t in state.tables}
+        joined = result.population_source.startswith("join:")
+        if (not joined or not result.joined_columns) and len(result.tables_read) > 1:
+            used = ", ".join(names.get(a, "CSV") for a in result.tables_read)
+            return f"使った表: {used}"
+        if not joined:
+            return None
         rates = "、".join(
             f"{names.get(plan.table, '結合した CSV')} の一致 {plan.match_rate:.0%}"
             for plan, _ in state.joins

@@ -794,8 +794,10 @@ def test_detailed_analysis_joins_two_tables_and_records_the_code(
         expect(record).to_be_visible()
         kinds = record.get_by_test_id("advanced-record-code-kind")
         expect(kinds.filter(has_text="AI による詳細分析").first).to_be_visible()
+        # Either "結合した列: ..." (join_tables) or "使った表: ..." (a merge of the
+        # code's own) names the purchases table: both tables were used.
         expect(record.get_by_test_id("advanced-record-joined").first).to_contain_text(
-            "customer_id"
+            PURCHASES_CSV.name
         )
         page.keyboard.press("Escape")
     finally:

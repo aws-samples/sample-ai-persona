@@ -292,6 +292,10 @@ class Config:
     # Retry count for transient errors in evidence extraction (dropped connections, throttling) and
     # the first wait in seconds (doubled on each retry)
     ADVANCED_EVIDENCE_MAX_RETRIES: int = 2
+    # Output tokens of the planning call. A plan is a few short fields, so a
+    # runaway output stops in about a minute instead of writing up to
+    # AGENT_MAX_TOKENS for minutes. Adaptive thinking counts toward it too.
+    ADVANCED_PLANNING_MAX_TOKENS: int = 8000
     ADVANCED_EVIDENCE_RETRY_BASE_SECONDS: int = 2
 
     def __post_init__(self) -> None:

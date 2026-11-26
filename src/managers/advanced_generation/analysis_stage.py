@@ -792,7 +792,10 @@ class AnalysisStage:
             segment_ids={s.id for s in state.segments},
         )
 
-    def synthesize(self, state: Run) -> list[prompts.AdvancedPersonaOutput]:
+    def synthesize(
+        self, state: Run, retry_note: str = ""
+    ) -> list[prompts.AdvancedPersonaOutput]:
+        """Write the personas; ``retry_note`` tells what to fix the second time."""
         generation = state.generation
         has_documents = bool(state.documents)
         full_text = state.document_mode is DocumentMode.FULL_TEXT
@@ -836,7 +839,8 @@ class AnalysisStage:
                 has_table=state.source is not None,
                 has_documents=has_documents,
                 full_text=full_text,
-            ),
+            )
+            + retry_note,
             data,
             prompts.AdvancedPersonaListOutput,
             documents=self._full_texts(state),
@@ -858,6 +862,21 @@ class AnalysisStage:
             state.document_evidence = self._context.check_quotes(state, evidence)
         # Only the generation's own evidence IDs are kept
         known = {e.id for e in [*state.evidence, *state.document_evidence]}
+        unknown = [
+            p
+            for p in personas
+            if p.evidence_ids
+            and not any(renamed.get(i, i) in known for i in p.evidence_ids)
+        ]
+        empty = [p for p in personas if not p.evidence_ids]
+        if unknown or empty:
+            logger.info(
+                "advanced synthesis personas without evidence: %d of %d"
+                " (unknown ids %d)",
+                len(unknown) + len(empty),
+                len(personas),
+                len(unknown),
+            )
         return [
             p.model_copy(
                 update={

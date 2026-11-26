@@ -1588,6 +1588,13 @@ def _ai_namespace(workdir: str, work: str, sources: Dict[str, str]) -> Dict[str,
     }
     _AI_CONTEXT.clear()
     _AI_CONTEXT.update(workdir=workdir, work=work, paths=paths)
+    # The tables read through read_table / join_tables, for the record: a
+    # merge of the code's own leaves no joined columns, yet used both tables.
+    read: List[str] = []
+
+    def note(alias: Any) -> None:
+        if alias in paths and alias not in read:
+            read.append(alias)
 
     def read_table(alias: str) -> Any:
         """The prepared table ``alias`` as a pandas DataFrame."""
@@ -1595,6 +1602,7 @@ def _ai_namespace(workdir: str, work: str, sources: Dict[str, str]) -> Dict[str,
 
         if alias not in paths:
             raise KeyError(f"unknown table {alias}; use one of {sorted(paths)}")
+        note(alias)
         con = duckdb.connect(":memory:")
         try:
             return con.execute(
@@ -1604,10 +1612,16 @@ def _ai_namespace(workdir: str, work: str, sources: Dict[str, str]) -> Dict[str,
             con.close()
 
     def emit(frame: Any, assign_column: str, population_source: str, **kw: Any) -> None:
+        kw["tables_read"] = list(read)  # what was read, never what the code says
         emit_result(frame, assign_column, population_source, out_dir=work, **kw)
 
     def join(axis: str, key: str, others: List[Dict[str, Any]]) -> Any:
-        return join_tables(axis, key, others, paths=paths)
+        frame = join_tables(axis, key, others, paths=paths)
+        note(axis)
+        for other in others or []:
+            if isinstance(other, dict):
+                note(other.get("source"))
+        return frame
 
     return {
         "__name__": "__ai_code__",
@@ -1648,6 +1662,26 @@ def _numeric_columns(frame: Any, skip: Tuple[str, ...]) -> List[str]:
     return [str(c) for c in numeric.columns if str(c) not in skip]
 
 
+def _text_or_none(value: Any) -> Optional[str]:
+    """An ID or a segment as text; missing values (None, NaN, NA, NaT) stay None.
+
+    Otherwise a pandas missing value would become the text ``nan`` and pass
+    the check as a segment (or a person) of its own.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    try:
+        import pandas as pd
+
+        if pd.isna(value) is True:
+            return None
+    except Exception:  # noqa: BLE001 - no pandas, or a value it cannot judge
+        pass
+    return str(value)
+
+
 def _metric_value(value: Any) -> Optional[float]:
     """A number the code computed as a float; text, bools and NaN are no metric."""
     if isinstance(value, bool) or value is None:
@@ -1684,6 +1718,7 @@ def emit_result(
     features: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     metrics: Optional[List[str]] = None,
     out_dir: Optional[str] = None,
+    tables_read: Optional[List[str]] = None,
 ) -> None:
     """Hand the result of AI-written code over, once (BR36.3).
 
@@ -1698,6 +1733,8 @@ def emit_result(
     segment is shown as ``derived`` features (the values are the code's own).
     Left out, every numeric column of a pandas frame counts (the columns of the
     axis table are counted by the library itself and are not repeated).
+    ``tables_read`` is set by the sandbox (the tables the code read), not by
+    the code.
 
     Raises:
         RuntimeError: Called a second time.
@@ -1729,8 +1766,8 @@ def emit_result(
         if not joined_columns and str(population_source).startswith("join:"):
             joined_columns = list(_LAST_JOINED)
     data: Dict[str, Any] = {
-        "person_id": [None if v is None else str(v) for v in columns[id_column]],
-        "segment": [None if v is None else str(v) for v in columns[assign_column]],
+        "person_id": [_text_or_none(v) for v in columns[id_column]],
+        "segment": [_text_or_none(v) for v in columns[assign_column]],
     }
     for index, name in enumerate(names):
         data[f"metric_{index}"] = [_metric_value(v) for v in columns[name]]
@@ -1743,6 +1780,7 @@ def emit_result(
         "joined_columns": [str(c)[:_VALUE_MAX_CHARS] for c in joined_columns][:50],
         "features": _short_features(features),
         "metrics": [str(m)[:_VALUE_MAX_CHARS] for m in names],
+        "tables_read": [str(t)[:_VALUE_MAX_CHARS] for t in tables_read or []][:10],
     }
     with open(os.path.join(folder, _META_FILE), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=True)
@@ -2244,28 +2282,31 @@ def _profile_views(
 
 def _recount(
     workdir: str, work: str, sources: Dict[str, str]
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """Count sizes and the population again from the assignment and the data."""
+) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, Any]]]:
+    """Count sizes and the population again from the assignment and the data.
+
+    Returns ``(result, error, error_context)``; the context holds counts only.
+    """
     count_path = os.path.join(work, _EMIT_COUNT_FILE)
     assignment = os.path.join(work, _ASSIGNMENT_FILE)
     if not os.path.isfile(assignment):
-        return None, "NO_RESULT"
+        return None, "NO_RESULT", None
     try:
         with open(count_path, encoding="utf-8") as f:
             calls = int(f.read().strip() or 0)
         with open(os.path.join(work, _META_FILE), encoding="utf-8") as f:
             meta = json.load(f)
     except (OSError, ValueError):
-        return None, "RESULT_INVALID"
+        return None, "RESULT_INVALID", None
     if calls != 1:
-        return None, "EMIT_TWICE" if calls > 1 else "NO_RESULT"
+        return None, "EMIT_TWICE" if calls > 1 else "NO_RESULT", None
     population_source = str(meta.get("population_source", ""))
     match = _POPULATION_SOURCE.match(population_source)
     if not isinstance(meta, dict) or not match:
-        return None, "RESULT_INVALID"
+        return None, "RESULT_INVALID", None
     axis = match.group(1) or population_source[len("join:") :].split("+")[0]
     if axis not in sources:
-        return None, "RESULT_INVALID"
+        return None, "RESULT_INVALID", None
     id_column = str(meta.get("id_column", ""))
     source = _parquet_path(workdir, sources[axis])
     con = _connect(workdir)
@@ -2278,23 +2319,48 @@ def _recount(
             f"{_quote_ident(id_column)} AS VARCHAR) AS person_id "
             f"FROM read_parquet({_sql_literal(source)})"
         )
-        n_a, d_a, null_a, n_s, d_s = con.execute(
+        n_a, d_a, null_a, n_s, d_s, null_s = con.execute(
             "SELECT (SELECT count(*) FROM a), (SELECT count(DISTINCT person_id) "
             "FROM a), (SELECT count(*) FROM a WHERE person_id IS NULL OR segment "
             "IS NULL), (SELECT count(*) FROM s), (SELECT count(DISTINCT person_id) "
-            "FROM s WHERE person_id IS NOT NULL)"
+            "FROM s WHERE person_id IS NOT NULL), (SELECT count(*) FROM s WHERE "
+            "person_id IS NULL)"
         ).fetchone()
+        # Counts only (never values): they tell the agent what to fix.
+        if null_s:
+            return None, "POPULATION_ID_MISSING", {"rows_without_id": int(null_s)}
         if null_a:
-            return None, "UNASSIGNED"
-        if n_a != d_a or n_s != d_s:
-            return None, "DUPLICATE_IDS"
+            return None, "UNASSIGNED", {"rows_unassigned": int(null_a)}
+        # The population first: a history table as the population is the
+        # usual cause, and the frame built from it repeats people as well.
+        if n_s != d_s:
+            return (
+                None,
+                "DUPLICATE_IDS",
+                {"side": "population", "rows": int(n_s), "distinct_ids": int(d_s)},
+            )
+        if n_a != d_a:
+            return (
+                None,
+                "DUPLICATE_IDS",
+                {"side": "result", "rows": int(n_a), "distinct_ids": int(d_a)},
+            )
         missing, unknown = con.execute(
             "SELECT (SELECT count(*) FROM s WHERE person_id NOT IN "
             "(SELECT person_id FROM a)), (SELECT count(*) FROM a WHERE person_id "
             "NOT IN (SELECT person_id FROM s))"
         ).fetchone()
         if missing or unknown or n_a != n_s:
-            return None, "ID_MISMATCH"
+            return (
+                None,
+                "ID_MISMATCH",
+                {
+                    "population_rows": int(n_s),
+                    "result_rows": int(n_a),
+                    "not_in_result": int(missing),
+                    "not_in_population": int(unknown),
+                },
+            )
         sizes = con.execute(
             "SELECT segment, count(*) FROM a GROUP BY segment ORDER BY 2 DESC, 1"
         ).fetchall()
@@ -2315,7 +2381,7 @@ def _recount(
     except Exception as e:  # noqa: BLE001 - a missing column or a bad file
         if _is_out_of_memory(e):
             raise AnalysisError("OUT_OF_MEMORY") from None
-        return None, "RESULT_INVALID"
+        return None, "RESULT_INVALID", None
     finally:
         con.close()
     result: Dict[str, Any] = {
@@ -2336,7 +2402,13 @@ def _recount(
     joined = meta.get("joined_columns")
     if isinstance(joined, list) and joined:
         result["joined_columns"] = [str(c) for c in joined]
-    return result, None
+    read = meta.get("tables_read")
+    if isinstance(read, list):
+        # Only the tables of this run (the meta file is the code's to write)
+        known = sorted({str(t) for t in read if str(t) in sources})
+        if known:
+            result["tables_read"] = known
+    return result, None, None
 
 
 def finalize_ai_result(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
@@ -2346,14 +2418,20 @@ def finalize_ai_result(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     Stops the code's process group and anything else it left (see
     :func:`_stop_leftovers`), hashes the prepared Parquets and
     ``session_library``, then recounts the assignment. Returns ``{hashes,
-    result, error, process_scan[, leftover_processes]}``.
+    result, error, error_context, process_scan[, leftover_processes]}``.
     """
     work_rel = _checked_relative(args.get("work_dir"), _WORK_DIR, "work_dir")
     sources = _checked_sources(args.get("sources"))
     processes = _stop_leftovers(workdir, [args.get("pgid_file")])
     hashes = _hashes(workdir, sources, args.get("session_library"))
-    result, error = _recount(workdir, _inside(workdir, work_rel), sources)
-    return {"hashes": hashes, "result": result, "error": error, **processes}
+    result, error, context = _recount(workdir, _inside(workdir, work_rel), sources)
+    return {
+        "hashes": hashes,
+        "result": result,
+        "error": error,
+        "error_context": context,
+        **processes,
+    }
 
 
 def verify_hashes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:

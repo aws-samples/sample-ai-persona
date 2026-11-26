@@ -82,7 +82,7 @@ from .analysis_stage import AnalysisStage
 from .controls import ControlDesk
 from .errors import AdvancedGenerationError, Cancelled, StopRun, fail
 from .finishing import FinishingStage
-from .persona_check import check_personas
+from .persona_check import check_personas, without_evidence
 from .preparation import PreparationStage
 from .run_context import RunContext
 from .run_types import AdvancedGenerationResult, ElapsedClock, GenerationProgress, Run
@@ -421,7 +421,8 @@ class AdvancedPersonaGenerationManager:
                 EventType.PROGRESS,
                 message="ペルソナに足りないところがあったため、書き直します",
             )
-            personas = self._analysis.synthesize(state)
+            note = prompts.persona_retry_note(problem, without_evidence(personas))
+            personas = self._analysis.synthesize(state, retry_note=note)
             problem = self._persona_problem(state, personas)
             if problem is not None:
                 logger.info("advanced generation personas rejected again: %s", problem)
