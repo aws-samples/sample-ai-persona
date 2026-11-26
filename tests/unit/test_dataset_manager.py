@@ -1,9 +1,8 @@
 """
-DatasetManager単体テスト
+Unit tests for DatasetManager.
 
-U7: BR3.1、BR3.3、BR5.1、BR5.2、BR5.6、NFR1.72、NFR1.77、NFR8.23、NFR8.24、AC5.2.1、
-AC5.2.3、AC5.3.1、AC5.3.3。設定の全メソッドは settings:manage（なければ 404）。
-DynamoDB と S3 は moto（tests/unit/survey_world.py）。
+Every settings method requires settings:manage (404 otherwise).
+DynamoDB and S3 use moto (tests/unit/survey_world.py).
 """
 
 import pytest
@@ -25,10 +24,10 @@ NOW = datetime(2026, 10, 25, 0, 0, 0)
 
 
 class TestDatasetModels:
-    """データセットモデルテスト"""
+    """Dataset model tests."""
 
     def test_dataset_column_creation(self):
-        """DatasetColumn作成テスト"""
+        """DatasetColumn creation."""
         column = DatasetColumn(
             name="user_id", data_type="string", description="ユーザーID"
         )
@@ -38,7 +37,7 @@ class TestDatasetModels:
         assert column.description == "ユーザーID"
 
     def test_dataset_column_asdict(self):
-        """DatasetColumn辞書変換テスト"""
+        """DatasetColumn to-dict conversion."""
         column = DatasetColumn(name="age", data_type="integer", description="年齢")
 
         data = asdict(column)
@@ -48,7 +47,7 @@ class TestDatasetModels:
         assert data["description"] == "年齢"
 
     def test_dataset_creation(self):
-        """Dataset作成テスト"""
+        """Dataset creation."""
         now = datetime.now()
         dataset = Dataset(
             id="ds-001",
@@ -67,7 +66,7 @@ class TestDatasetModels:
         assert dataset.row_count == 100
 
     def test_dataset_create_new(self):
-        """Dataset.create_newテスト"""
+        """Dataset.create_new."""
         dataset = Dataset.create_new(
             name="新規データセット",
             description="説明",
@@ -82,7 +81,7 @@ class TestDatasetModels:
         assert dataset.updated_at is not None
 
     def test_dataset_to_dict(self):
-        """Dataset辞書変換テスト"""
+        """Dataset to-dict conversion."""
         now = datetime.now()
         dataset = Dataset(
             id="ds-002",
@@ -107,7 +106,7 @@ class TestDatasetModels:
         assert data["row_count"] == 50
 
     def test_dataset_from_dict(self):
-        """Dataset辞書からの復元テスト"""
+        """Dataset restore from dict."""
         data = {
             "id": "ds-003",
             "name": "行動データ",
@@ -133,12 +132,12 @@ class TestDatasetModels:
         assert dataset.row_count == 1000
 
 
-# ペルソナとデータセットの紐付けのモデル（PersonaBinding）は
-# tests/unit/test_persona_u5_models.py が確かめる（U5）。
+# The persona-to-dataset binding model (PersonaBinding) is covered by
+# tests/unit/test_persona_u5_models.py.
 
 
 class TestInterviewManagerDataset:
-    """InterviewManagerデータセット連携テスト"""
+    """InterviewManager dataset integration tests."""
 
     """U6: セッションはアプリの外に置き、発言は別のテーブルに書く（設定は保たれる）。"""
 
@@ -158,22 +157,22 @@ class TestInterviewManagerDataset:
         )
 
     def test_interview_session_enable_dataset_field(self):
-        """InterviewSessionのenable_datasetフィールドテスト"""
+        """InterviewSession enable_dataset field."""
         assert self._session(enable_dataset=True).enable_dataset is True
 
     def test_interview_session_enable_dataset_default(self):
-        """InterviewSessionのenable_datasetデフォルト値テスト"""
+        """InterviewSession enable_dataset default value."""
         assert self._session().enable_dataset is False
 
     def test_enable_dataset_survives_storage(self):
-        """保存した形から読み直しても enable_dataset が保たれる"""
+        """enable_dataset is kept when a saved session is read back."""
         from src.models.interview_session import InterviewSession
 
         session = self._session(enable_dataset=True)
         assert InterviewSession.from_dict(session.to_dict()).enable_dataset is True
 
     def test_touching_preserves_enable_dataset(self):
-        """操作のたびの期限の延長で enable_dataset が変わらない"""
+        """Extending the expiry on each operation does not change enable_dataset."""
         from datetime import timedelta
 
         session = self._session(enable_dataset=True)
@@ -182,11 +181,11 @@ class TestInterviewManagerDataset:
 
 
 class TestDatasetManagerSchemaAnalysis:
-    """DatasetManagerスキーマ解析テスト"""
+    """DatasetManager schema parsing tests."""
 
     @pytest.fixture
     def dataset_manager(self):
-        """DatasetManagerインスタンス（モック使用）"""
+        """DatasetManager instance (with mocks)."""
         from src.managers.dataset_manager import DatasetManager
 
         return DatasetManager(
@@ -197,7 +196,7 @@ class TestDatasetManagerSchemaAnalysis:
         )
 
     def test_analyze_schema_rejects_empty_header(self, dataset_manager):
-        """空ヘッダー列は FILE_CSV_HEADER_INVALID で弾く（DuckDBが列名を全リネームする）。"""
+        """An empty header column is rejected with FILE_CSV_HEADER_INVALID (DuckDB renames all columns)."""
         from src.managers.dataset_manager import DatasetManagerError
 
         csv_content = b"user_id,,category\nU001,100,food\n"
@@ -205,7 +204,7 @@ class TestDatasetManagerSchemaAnalysis:
             dataset_manager.analyze_schema(ADMIN, csv_content)
 
     def test_analyze_schema_rejects_duplicate_header(self, dataset_manager):
-        """重複ヘッダーは FILE_CSV_HEADER_INVALID で弾く（DuckDBが name_1 にリネーム）。"""
+        """A duplicate header is rejected with FILE_CSV_HEADER_INVALID (DuckDB renames it to name_1)."""
         from src.managers.dataset_manager import DatasetManagerError
 
         csv_content = b"user_id,amount,amount\nU001,100,10\n"
@@ -213,21 +212,21 @@ class TestDatasetManagerSchemaAnalysis:
             dataset_manager.analyze_schema(ADMIN, csv_content)
 
     def test_analyze_schema_lets_a_wrong_encoding_through(self, dataset_manager):
-        """文字コードの誤りはヘッダーの誤りに変えず、これまでどおりそのまま上げる。"""
+        """An encoding error is raised as is, not turned into a header error."""
         with pytest.raises(UnicodeDecodeError):
             dataset_manager.analyze_schema(
                 ADMIN, "id,名前\n1,太郎\n".encode("shift_jis")
             )
 
     def test_analyze_schema_strips_whitespace_headers(self, dataset_manager):
-        """前後空白ヘッダーは正規化して受け入れる（DuckDBのtrimと揃える）。"""
+        """Headers with surrounding whitespace are normalized and accepted (matches DuckDB trim)."""
         csv_content = b"user id, amount ,category\nU001,100,food\n"
         columns, _ = dataset_manager.analyze_schema(ADMIN, csv_content)
         assert [c.name for c in columns] == ["user id", "amount", "category"]
 
 
 # =============================================================================
-# U7: 設定は admin だけ・部分更新・利用範囲
+# Settings: admin only, partial update, usage scope
 # =============================================================================
 
 
@@ -392,7 +391,7 @@ class TestDatasetManagerCRUD:
     def test_delete_succeeds_when_the_bindings_cannot_be_removed(
         self, ds_mgr, survey_world, monkeypatch
     ):
-        """残った紐付けは、読むときに本体のない紐付けとして飛ばされる。"""
+        """Remaining bindings are skipped on read as bindings without a body."""
         dataset = survey_world.dataset()
         monkeypatch.setattr(
             survey_world.binding_store,
@@ -446,7 +445,7 @@ class TestDatasetScope:
         assert survey_world.raw(survey_world.datasets_table, "missing") is None
 
     def test_member_in_scope_can_then_use_it(self, ds_mgr, survey_world):
-        """利用範囲の変更は次の判定から効く（AccessPolicy.can_use_asset、NFR9.36）。"""
+        """A usage-scope change takes effect from the next check (AccessPolicy.can_use_asset)."""
         from src.managers.components.access_policy import AccessPolicy
         from src.models.authz import ResourceType
 

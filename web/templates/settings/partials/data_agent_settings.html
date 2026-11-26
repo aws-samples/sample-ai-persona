@@ -1,4 +1,4 @@
-{#- この環境で Data Agent を使ってよくないときは、設定欄の代わりに案内を出す（U3 BR3.4） #}
+{#- When Data Agent must not be used in this environment, show a notice instead of the settings fields. #}
 {% if not data_agent_allowed %}
 <div data-testid="data-agent-not-allowed" class="text-sm text-gray-600 bg-gray-50 rounded-md p-4">
     この環境ではデータ分析エージェントを使えません。設定と接続テストはできません。

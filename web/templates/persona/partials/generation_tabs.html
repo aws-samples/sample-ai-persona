@@ -1,10 +1,9 @@
 {#
-  通常の生成と高度な生成（ベータ）のタブの帯（S1、BR10.2）。リンクのタブで、今のページに
-  aria-current="page" を付ける。使えない利用者には帯そのものを出さない（BR1.1、S11）。
-  引数:
-    active_tab        ... "standard" か "advanced"
-    show_advanced_tab ... 高度な生成を使えるか
-    notice_message    ... 任意。高度な生成から戻されたときのトーストの文言
+  Tab strip for standard and advanced (beta) generation. These are link tabs; the current page gets aria-current="page". The strip itself is hidden from users who cannot use advanced generation.
+  Arguments:
+    active_tab        ... "standard" or "advanced"
+    show_advanced_tab ... whether advanced generation is available
+    notice_message    ... optional; toast text shown when sent back from advanced generation
 #}
 {% if show_advanced_tab %}
 <nav aria-label="生成の種類" data-testid="generation-tabs" class="mb-6 border-b border-gray-200">

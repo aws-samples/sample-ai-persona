@@ -13,10 +13,10 @@ from .survey_template import Question, SurveyTemplate, TemplateImage
 
 
 class SurveyStatus(StrEnum):
-    """Where a survey is in its life (functional-spec.md ch.5).
+    """Where a survey is in its life.
 
     ``pending`` is only held by records written before the move to Step
-    Functions; new surveys start ``queued`` so the two are told apart (BR8.1).
+    Functions; new surveys start ``queued`` so the two are told apart.
     """
 
     QUEUED = "queued"
@@ -27,11 +27,11 @@ class SurveyStatus(StrEnum):
 
 
 #: ``run_queue`` of queued and running surveys; the partition key of the
-#: sparse ``RunQueueIndex`` (only these surveys appear in it, NFR3.10).
+#: sparse ``RunQueueIndex`` (only these surveys appear in it).
 RUN_QUEUE_ACTIVE = "active"
 
 #: Fewest personas a survey runs with, and so the fewest rows a dataset may be
-#: registered or extracted with (FR4.1; was the batch inference minimum 100).
+#: registered or extracted with (the earlier batch inference minimum was 100).
 MIN_SURVEY_PERSONAS = 10
 #: Most personas one survey may target, and the most when its template has images
 #: (each persona then carries its own request body with the images).
@@ -53,7 +53,7 @@ def _read_int(value: Any) -> Optional[int]:
 
 @dataclass
 class InsightReport:
-    """インサイトレポート"""
+    """Insight report"""
 
     id: str
     survey_id: str
@@ -92,7 +92,7 @@ class InsightReport:
 
 @dataclass
 class VisualAnalysisData:
-    """ビジュアル分析用データ"""
+    """Data for visual analysis"""
 
     multiple_choice_charts: List[Dict[str, Any]] = field(default_factory=list)
     scale_rating_charts: List[Dict[str, Any]] = field(default_factory=list)
@@ -100,7 +100,7 @@ class VisualAnalysisData:
 
 @dataclass
 class PersonaStatistics:
-    """調査対象ペルソナの統計データ"""
+    """Statistics of the surveyed personas"""
 
     total_count: int
     sex_distribution: Dict[str, int]
@@ -114,11 +114,11 @@ class PersonaStatistics:
 
 @dataclass(frozen=True)
 class TemplateSnapshot:
-    """The template as it was when a survey started (U7 BR2.7).
+    """The template as it was when a survey started.
 
     Analysis, display and the insight prompt use this copy, so editing or
     deleting the template later does not change past results. Images are
-    references only; the files stay attached to the template (BR2.8).
+    references only; the files stay attached to the template.
     """
 
     name: str
@@ -135,7 +135,7 @@ class TemplateSnapshot:
         )
 
     def image(self, image_id: str) -> Optional[TemplateImage]:
-        """The image reference with ``image_id``, or ``None`` (BR2.8)."""
+        """The image reference with ``image_id``, or ``None``."""
         return next((img for img in self.images if img.id == image_id), None)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -160,19 +160,21 @@ class TemplateSnapshot:
 
 @dataclass
 class Survey:
-    """アンケート実行インスタンス
+    """Survey execution instance.
 
-    U7（約束 C8、BR1.1、BR2.7）: ``owner_sub`` は実行した人（古い結果にはない）、
-    ``shared_group_ids`` は ``ResourceSharing`` だけが書く共有先、``template_snapshot``
-    は開始時のテンプレートの写し、``datasource_name`` は開始時のカスタムペルソナ
-    データの名前（表示用）。
+    ``owner_sub`` is whoever ran it (absent in old results),
+    ``shared_group_ids`` the departments it is shared with (written only by
+    ``ResourceSharing``), ``template_snapshot`` a copy of the template at start,
+    and ``datasource_name`` the name of the custom persona data at start (for
+    display).
 
-    Step Functions への移行（entities.md）: ``run_queue`` と ``queued_at`` は
-    queued・running の間だけ持つ（疎な索引のキー）。``execution_arn``・
-    ``started_at``・``model_id`` は実行を始めたときに書く。``start_attempts`` と
-    ``finish_attempts`` は開始と完了のまとめの一時的な失敗の回数、
-    ``start_blocked_since`` は権限・設定の失敗で開始できなくなった時刻、
-    ``failed_count`` は取れなかった回答の件数。
+    Step Functions execution: ``run_queue`` and ``queued_at`` exist only while
+    queued or running (keys of a sparse index). ``execution_arn``,
+    ``started_at`` and ``model_id`` are written when the execution starts.
+    ``start_attempts`` and ``finish_attempts`` count transient failures of
+    starting and of the completion step, ``start_blocked_since`` is when a
+    permission or configuration failure stopped the start, and
+    ``failed_count`` is the number of answers that could not be obtained.
     """
 
     id: str
@@ -223,7 +225,7 @@ class Survey:
         template_snapshot: Optional[TemplateSnapshot] = None,
         datasource_name: Optional[str] = None,
     ) -> "Survey":
-        """Create a new, unshared, queued Survey with ID and timestamps (FR3.1)."""
+        """Create a new, unshared, queued Survey with ID and timestamps."""
         now = datetime.now()
         return cls(
             id=str(uuid.uuid4()),
@@ -247,7 +249,7 @@ class Survey:
 
     @property
     def template_name(self) -> Optional[str]:
-        """The template name of the snapshot; ``None`` for surveys before v1.0.0."""
+        """The template name of the snapshot; ``None`` for surveys without a snapshot."""
         return self.template_snapshot.name if self.template_snapshot else None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -304,7 +306,7 @@ class Survey:
 
     @property
     def is_legacy_in_flight(self) -> bool:
-        """Running or pending without an execution or a queue entry (BR8.1).
+        """Running or pending without an execution or a queue entry.
 
         Only records started by batch inference look like this; they can never
         finish now.
@@ -354,7 +356,7 @@ class Survey:
 
     @property
     def datasource_label(self) -> str:
-        """The persona data name to show (BR2.10): Nemotron or the stored name."""
+        """The persona data name to show: Nemotron or the stored name."""
         if not self.datasource or self.datasource == "nemotron":
             return "Nemotron"
         if self.datasource_name:
@@ -379,7 +381,7 @@ class Survey:
 
 @dataclass(frozen=True)
 class SurveyDetail:
-    """What the result detail screen shows for one reader (U7 BR2.7〜BR2.11).
+    """What the result detail screen shows for one reader.
 
     Attributes:
         survey: The survey.

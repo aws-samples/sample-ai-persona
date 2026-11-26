@@ -1,4 +1,4 @@
-"""Toast behaviour (WF4, NFR3.10, NFR6.5, NFR6.6, B19-B22)."""
+"""Toast behaviour."""
 
 import json
 
@@ -21,7 +21,7 @@ def test_live_regions_exist_on_load_with_their_roles(ui: UiHarness) -> None:
 
     assert ui.page.get_attribute(STATUS, "role") == "status"
     assert ui.page.get_attribute(ALERT, "role") == "alert"
-    # 外側に読み上げ領域を重ねない（二重に読まれるため）
+    # Do not nest a live region outside (it would be announced twice)
     assert ui.page.get_attribute("#flash-messages", "aria-live") is None
 
 
@@ -62,7 +62,7 @@ def test_pointer_and_focus_pause_the_countdown(ui: UiHarness) -> None:
     ui.page.clock.fast_forward(10000)
     assert toast.count() == 1
     ui.page.mouse.move(0, 0)
-    # 残りの約 2 秒から数え直す
+    # Restart counting from the remaining ~2 seconds
     ui.page.clock.fast_forward(1500)
     assert toast.count() == 1
     ui.page.clock.fast_forward(700)

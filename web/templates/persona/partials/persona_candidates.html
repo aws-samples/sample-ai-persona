@@ -1,5 +1,5 @@
-<!-- ペルソナ候補一覧表示パーシャル -->
-{# gender_label / country_name は各ルーターで templates.env.globals に登録済み #}
+<!-- Persona candidate list partial -->
+{# gender_label / country_name are registered in templates.env.globals by each router. #}
 <div class="bg-white rounded-lg shadow-md p-6 mb-6">
     <h2 class="text-xl font-semibold text-gray-900 mb-4">生成されたペルソナ候補</h2>
     <p class="text-sm text-gray-600 mb-4">保存したいペルソナを選択してください（複数選択可）</p>
@@ -96,7 +96,7 @@
 </div>
 
 <script>
-// チェックボックスの状態を監視
+// Watch the checkbox state
 function initPersonaSelection() {
     const form = document.getElementById('save-personas-form');
     if (!form) return;
@@ -111,7 +111,7 @@ function initPersonaSelection() {
         selectedCount.textContent = checked.length;
         saveBtn.disabled = checked.length === 0;
         
-        // 選択されたIDをカンマ区切りで設定
+        // Set the selected IDs as a comma-separated value
         personaIdsInput.value = checked.map(cb => cb.value).join(',');
     }
     
@@ -122,10 +122,10 @@ function initPersonaSelection() {
     updateSelection();
 }
 
-// 初回ロード時
+// On first load
 document.addEventListener('DOMContentLoaded', initPersonaSelection);
 
-// htmxで動的に読み込まれた場合
+// When loaded dynamically by htmx
 document.body.addEventListener('htmx:afterSwap', function(event) {
     if (event.detail.target.id === 'generation-result' || 
         event.detail.elt.id === 'save-personas-form' ||
@@ -134,7 +134,7 @@ document.body.addEventListener('htmx:afterSwap', function(event) {
     }
 });
 
-// 即時実行（htmxで読み込まれた直後の場合）
+// Run immediately (right after htmx loads it)
 initPersonaSelection();
 </script>
 {% include "persona/partials/thinking_log.html" %}

@@ -1,4 +1,4 @@
-"""DuckDBQueryBackend の access allowlist・ローカル実行・soft timeout テスト。"""
+"""Tests for DuckDBQueryBackend access allowlist, local execution and soft timeout."""
 
 import os
 import threading
@@ -63,7 +63,7 @@ class TestAccessAllowlist:
 
     def test_default_roots_include_tmp_and_datasets(self):
         b = DuckDBQueryBackend(bucket_name="b")
-        # /tmp と datasets/ の realpath が許可されていること
+        # the realpaths of /tmp and datasets/ are allowed
         assert os.path.realpath("/tmp") in b._allowed_local_roots
         assert os.path.realpath("datasets") in b._allowed_local_roots
 
@@ -75,7 +75,7 @@ class TestLocalExecution:
         backend = DuckDBQueryBackend(
             bucket_name="b", allowed_local_roots=[str(tmp_path)]
         )
-        # ローカルパスでは LOAD httpfs を呼ばない（未導入環境でも成功する）。
+        # LOAD httpfs is not called for local paths (so it works where it is not installed)
         columns, rows = backend.execute(
             f"local://{csv}",
             "SELECT region, sum(amount) AS m0 FROM dataset GROUP BY region ORDER BY region",
@@ -102,17 +102,17 @@ class TestLocalExecution:
         assert rows == [[10]]
 
     def test_numeric_first_row_treated_as_header(self, tmp_path):
-        """header=true 固定で、全数値の先頭行もヘッダー扱いになること。
+        """With header=true fixed, an all-numeric first row is still treated as the header.
 
-        header 未指定だと DuckBD はヘッダー無しと誤判定し column0.. を割り当てて
-        スキーマ解析（csv.reader）由来の allowlist 列名と乖離する（#3）。
+        Without it, DuckDB wrongly decides there is no header and assigns column0.., which
+        diverges from the allowlist column names taken from schema analysis (csv.reader).
         """
         csv = tmp_path / "data.csv"
         csv.write_text("1001,100,5\n1002,200,6\n")
         backend = DuckDBQueryBackend(
             bucket_name="b", allowed_local_roots=[str(tmp_path)]
         )
-        # csv.reader が採る列名（先頭行）で SELECT できる＝両者の列名が一致する。
+        # SELECT works with the column names csv.reader takes (the first row), so both sets of names match
         columns, rows = backend.execute(
             f"local://{csv}", 'SELECT "1001" FROM dataset', [], timeout=10.0
         )
@@ -121,7 +121,7 @@ class TestLocalExecution:
 
 
 class _FakeConn:
-    """execute が block し、interrupt で解放される擬似 DuckDB 接続。"""
+    """A fake DuckDB connection whose execute blocks and is released by interrupt."""
 
     def __init__(self, release_event, started_event):
         self._release = release_event
@@ -131,7 +131,7 @@ class _FakeConn:
     def execute(self, sql, params=None):
         if sql.strip().upper().startswith("SELECT"):
             self._started.set()
-            # interrupt（release_event）まで block
+            # block until interrupt (release_event)
             self._release.wait(timeout=5.0)
             raise RuntimeError("interrupted")
         return self
@@ -172,9 +172,9 @@ class TestSoftTimeout:
                 )
             elapsed = time.monotonic() - start
 
-        # request は有界時間で戻る（timeout + join grace 程度）。
+        # the request returns in bounded time (about timeout + join grace)
         assert elapsed < 3.0
-        # watchdog が interrupt を呼び、worker が終了して connection を close する。
+        # the watchdog calls interrupt, the worker ends and the connection is closed
         release.wait(timeout=2.0)
         deadline = time.monotonic() + 2.0
         while not fake.closed and time.monotonic() < deadline:
@@ -199,7 +199,7 @@ class TestSoftTimeout:
                 backend.execute(
                     f"local://{csv}", "SELECT * FROM dataset", [], timeout=0.3
                 )
-            # worker が終了して Semaphore を解放するまで待つ。
+            # wait until the worker ends and releases the Semaphore
             deadline = time.monotonic() + 3.0
             acquired = False
             while time.monotonic() < deadline:
@@ -210,10 +210,10 @@ class TestSoftTimeout:
             assert acquired is True
 
     def test_semaphore_released_when_thread_start_fails(self, tmp_path):
-        """thread.start() が失敗しても Semaphore スロットをリークしないこと。
+        """A failure of thread.start() must not leak the Semaphore slot.
 
-        acquired_by_worker を start() より前に立てると、worker の finally が走らず
-        外側 finally も解放をスキップしてスロットが永久に失われる（回帰防止）。
+        If acquired_by_worker is set before start(), the worker's finally never runs and the
+        outer finally skips the release, so the slot is lost for good (regression guard).
         """
         csv = tmp_path / "d.csv"
         csv.write_text("c\n1\n")
@@ -231,7 +231,7 @@ class TestSoftTimeout:
                 backend.execute(
                     f"local://{csv}", "SELECT * FROM dataset", [], timeout=1.0
                 )
-        # スロットが解放され、後続の acquire が即成功すること。
+        # the slot is released, so a later acquire succeeds immediately
         assert backend._sem.acquire(timeout=0.1) is True
         backend._sem.release()
 
@@ -240,7 +240,7 @@ class TestDefaultS3Prefixes:
     """The default allowlist covers every place a registered dataset lives."""
 
     def test_persona_dedicated_dataset_accepted(self):
-        # 行動データの専用データセットは PersonaManager がこの接頭辞に写す（U5、BR6.1）
+        # PersonaManager maps the dedicated dataset of behavior data onto this prefix
         from src.managers.persona_manager import DEDICATED_DATASET_PREFIX
 
         b = DuckDBQueryBackend(bucket_name="b")

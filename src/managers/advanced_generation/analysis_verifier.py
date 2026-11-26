@@ -1,16 +1,16 @@
-"""Checks of an analysis result against the tool outputs (BR8.1〜BR8.3, contract C8).
+"""Checks of an analysis result against the tool outputs.
 
 Only ``AdvancedPersonaGenerationManager`` uses this, so it is a module of that
 Manager's package. It is a pure decision: no model, no Service.
 
-- BR8.1: a segment's ``size`` must appear in the output of a tool call the
+- A segment's ``size`` must appear in the output of a tool call the
   segment rests on (its definition's ``tool_call_id`` and its evidence's
   locations), and its ``share`` must equal ``size / population`` at three
   decimals. Otherwise the segment is *unverified*: its values are not shown,
   the generation goes on.
-- BR8.2: the sizes of the non-overlapping segments must not add up to more
+- The sizes of the non-overlapping segments must not add up to more
   than the population; for ``cluster`` they must add up to it exactly.
-- BR8.3: every persona must stand for one of the segments.
+- Every persona must stand for one of the segments.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from ...models.analysis import (
 from ...models.errors import ErrorCode
 
 _SHARE_DIGITS = 3
-#: The key items a document-only persona must rest on (U4 BR27.2).
+# The key items a document-only persona must rest on.
 _KEY_KINDS = frozenset({EvidenceKind.VALUE, EvidenceKind.PAIN, EvidenceKind.GOAL})
 
 
@@ -72,7 +72,7 @@ def _as_int(value: Any) -> Iterator[int]:
 
 
 def _numbers(value: Any) -> Iterator[int]:
-    """The integers of a tool output that count people (BR8.1, review of U6).
+    """The integers of a tool output that count people.
 
     A size is backed only by a value that is a count: a cell of a ``count`` /
     ``count(column)`` column, or a value under a key such as ``size`` or
@@ -121,7 +121,7 @@ def _fail(reason: str, unverified: Iterable[str] = ()) -> VerificationResult:
 
 
 class AnalysisVerifier:
-    """The contract checks of BR8.1〜BR8.3."""
+    """The contract checks of segment sizes, sums and persona references."""
 
     @staticmethod
     def verify(
@@ -135,7 +135,7 @@ class AnalysisVerifier:
         populations: Optional[Mapping[str, int]] = None,
         emitted: Optional[Mapping[str, EmittedResult]] = None,
     ) -> VerificationResult:
-        """Check the result (BR8.1〜BR8.3; U6 BR36.3, BR37.5).
+        """Check the result.
 
         Args:
             method: The method that ran.
@@ -143,12 +143,13 @@ class AnalysisVerifier:
             evidence: Evidence from the analysis agent.
             persona_segment_ids: The segment each synthesized persona names.
             outputs: Tool call ID -> structured tool output.
-            population: U1: ``PrepareReport.rows_read`` of the one table.
-            populations: U6: table alias -> people (``rows_read``); a segment
-                without ``source`` rests on the first table (BR37.2).
-            emitted: U6: ``run_code`` call ID -> the recounted result. Its
+            population: ``PrepareReport.rows_read`` of the one table.
+            populations: Table alias -> people (``rows_read``) when several
+                tables are used; a segment without ``source`` rests on the
+                first table.
+            emitted: ``run_code`` call ID -> the recounted result. Its
                 segments must match the same ``segment_key`` exactly and use
-                its population (BR36.3); the sum checks run per population.
+                its population; the sum checks run per population.
         """
         tables = dict(populations or {"": int(population or 0)})
         runs = dict(emitted or {})
@@ -228,7 +229,7 @@ class AnalysisVerifier:
         persona_evidence_ids: Sequence[Sequence[str]],
         evidence: Sequence[Evidence],
     ) -> VerificationResult:
-        """Documents only: every persona rests on checked document evidence (BR27.2).
+        """Documents only: every persona rests on checked document evidence.
 
         Each persona's ``evidence_ids`` must point at checked document evidence
         of the kinds ``value``, ``pain`` and ``goal`` (one or more of each).

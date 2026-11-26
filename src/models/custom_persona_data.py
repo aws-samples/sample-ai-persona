@@ -1,15 +1,15 @@
 """
-Custom persona data (an organization asset) and how a survey points to it (U7).
+Custom persona data (an organization asset) and how a survey points to it.
 
 ``CustomPersonaData`` is the registration record of one imported persona file
-(``CustomPersonaData`` table, entities.md). The file itself lives in S3 under a
-key made from the ID, never from the name (BR4.3, NFR1.82). It has no owner;
-``shared_group_ids`` is its usage scope and an empty scope means admin only
-(BR5.1). Names are unique in the table: a reservation item whose ``id`` is
-``name#{name}`` is written in the same transaction as the record (BR4.4).
+(``CustomPersonaData`` table). The file itself lives in S3 under a
+key made from the ID, never from the name. It has no owner;
+``shared_group_ids`` is its usage scope and an empty scope means admin only.
+Names are unique in the table: a reservation item whose ``id`` is
+``name#{name}`` is written in the same transaction as the record.
 
 ``PersonaDataRef`` is the ``datasource`` string of a survey: ``nemotron`` or
-``custom:{id}`` (BR4.3).
+``custom:{id}``.
 """
 
 from dataclasses import dataclass, field, replace
@@ -20,9 +20,9 @@ import uuid
 from .errors import CodedError, ErrorCode
 from .uploaded_file import is_uuid
 
-#: Longest name after stripping (BR4.4).
+#: Longest name after stripping.
 NAME_MAX_LENGTH = 100
-#: ``id`` prefix of a name reservation item (BR4.4, NFR1.74).
+#: ``id`` prefix of a name reservation item.
 NAME_RESERVATION_PREFIX = "name#"
 #: S3 prefix of the imported files.
 CUSTOM_FILE_PREFIX = "persona-dataset/custom/"
@@ -33,7 +33,7 @@ CUSTOM_PREFIX = "custom:"
 
 
 def normalize_name(name: Optional[str]) -> str:
-    """Strip ``name`` and check its length (BR4.4).
+    """Strip ``name`` and check its length.
 
     Raises:
         CodedError: ``CUSTOM_PERSONA_DATA_NAME_INVALID`` when it is blank or
@@ -55,12 +55,12 @@ def reservation_id(name: str) -> str:
 
 
 def is_name_reservation(item_id: Optional[str]) -> bool:
-    """Whether ``item_id`` is a name reservation, not a record (NFR1.74)."""
+    """Whether ``item_id`` is a name reservation, not a record."""
     return bool(item_id) and str(item_id).startswith(NAME_RESERVATION_PREFIX)
 
 
 def custom_file_key(data_id: str) -> str:
-    """The S3 key of the imported file of ``data_id`` (BR4.3)."""
+    """The S3 key of the imported file of ``data_id``."""
     return f"{CUSTOM_FILE_PREFIX}{data_id}.parquet"
 
 
@@ -98,7 +98,7 @@ class ExtraColumn:
 
 @dataclass(frozen=True)
 class CustomPersonaData:
-    """The registration record of imported persona data (entities.md).
+    """The registration record of imported persona data.
 
     Attributes:
         id: UUID, new for every registration.
@@ -139,7 +139,7 @@ class CustomPersonaData:
         shared_group_ids: frozenset[str] = frozenset(),
         now: Optional[datetime] = None,
     ) -> "CustomPersonaData":
-        """A new record with a new ID (BR4.3, BR4.5).
+        """A new record with a new ID.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NAME_INVALID``.
@@ -161,7 +161,7 @@ class CustomPersonaData:
         )
 
     def renamed(self, name: str) -> "CustomPersonaData":
-        """Return a copy with a new name (BR4.4).
+        """Return a copy with a new name.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NAME_INVALID``.
@@ -173,7 +173,7 @@ class CustomPersonaData:
         return [column.to_dict() for column in self.extra_columns]
 
     def to_dict(self) -> dict[str, Any]:
-        """The item to store (an empty scope is not stored, contract C8)."""
+        """The item to store (an empty scope is not stored)."""
         data: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
@@ -218,7 +218,7 @@ class CustomPersonaData:
 
 @dataclass(frozen=True)
 class PersonaDataListing:
-    """What the persona data screen lists for one user (BR4.1, BR4.2).
+    """What the persona data screen lists for one user.
 
     Attributes:
         custom: The custom data the user may use (every record for admins).
@@ -233,7 +233,7 @@ class PersonaDataListing:
 
 @dataclass(frozen=True)
 class PersonaDataRef:
-    """Which persona data a survey uses: ``nemotron`` or ``custom:{id}`` (BR4.3)."""
+    """Which persona data a survey uses: ``nemotron`` or ``custom:{id}``."""
 
     custom_id: Optional[str] = None
 

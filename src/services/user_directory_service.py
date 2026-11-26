@@ -1,11 +1,11 @@
 """
-Cognito ``ListUsers`` for the owner-name copy (BR5.1, Q3 of Functional Design).
+Cognito ``ListUsers`` for the owner-name copy.
 
 Only ``sub``, ``name`` and whether the user is enabled are kept; e-mail
-addresses are never requested (NFR2.7, security-requirements.md). The copy is
-for display only (BR5.3).
+addresses are never requested. The copy is
+for display only.
 
-Limits (``performance-design.md`` §3, same as ``CognitoGroupsService``):
+Limits (same as ``CognitoGroupsService``):
 
 - The whole listing, across every page, gets :data:`LIST_USERS_TIMEOUT_SECONDS`.
   A page is only requested when one page's worst case still fits.

@@ -1,5 +1,5 @@
 """
-Cognito communication (v1.0.0 U1 / U8).
+Cognito communication.
 
 One Service unit for the login calls to Amazon Cognito, so the two clients can
 share the circuit breaker without one Service importing another

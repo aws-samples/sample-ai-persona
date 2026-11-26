@@ -1,7 +1,8 @@
-"""AgentCore Memory 呼び出しのリトライ（src/services/memory/retry.py）。
+"""Retry of AgentCore Memory calls (src/services/memory/retry.py).
 
-一時的なエラーの判定、指数バックオフの遅延、デコレータのリトライ回数と送出する例外を確かめる。
-time.sleep と random.random は差し替え、実時間を待たない。
+Covers transient-error detection, exponential backoff delays, and the decorator's
+retry count and raised exception. time.sleep and random.random are replaced so
+the tests never wait in real time.
 """
 
 from typing import Any
@@ -221,12 +222,12 @@ def test_explicit_retryable_exceptions_replace_automatic_detection(sleeps):
     class Retryable(Exception):
         pass
 
-    # Retryable は自動判定では一時的エラーではないが、明示指定でリトライされる
+    # Retryable is not transient by auto-detection, but it is retried when named explicitly
     func = _Flaky([Retryable()])
     assert with_retry(max_retries=1, retryable_exceptions=(Retryable,))(func)() == "ok"
     assert func.calls == 2
 
-    # 明示指定があると、自動判定で一時的とされるエラーもリトライしない
+    # With an explicit list, errors that auto-detection would call transient are not retried
     throttled = _Flaky([_client_error("ThrottlingException")])
     with pytest.raises(ClientError):
         with_retry(max_retries=3, retryable_exceptions=(Retryable,))(throttled)()

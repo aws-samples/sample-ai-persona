@@ -1,32 +1,33 @@
 import { ClosedStageParameters, DeploymentMode, InferenceScope } from '../parameters';
 
 /**
- * DeploymentProfile（U1 閉域、ADR-002、BR1.1〜BR1.8）。
+ * DeploymentProfile.
  *
- * Stage のモード（public / closed）と閉域のパラメータから、Stage ごとの設定（ResolvedProfile）を
- * 作る純粋な関数を置く。CDK の構成部品には依存しない（test/deployment-profile.test.ts だけで
- * 確かめられる）。Data・App スタックと構成部品は ResolvedProfile だけを見て組み立てを変える。
- * 値の誤りは、どのパラメータの何が誤りかを示す Error で synth を止める。
+ * Pure functions that build the per-Stage settings (ResolvedProfile) from the Stage mode
+ * (public / closed) and the closed-network parameters. They do not depend on CDK constructs, so
+ * test/deployment-profile.test.ts alone can verify them. The Data and App stacks and the
+ * constructs vary their output by looking only at ResolvedProfile. An invalid value stops synth
+ * with an Error naming the parameter and what is wrong.
  */
 
-/** アプリのログイン方式（環境変数 AUTH_MODE）。 */
+/** The app's login method (environment variable AUTH_MODE). */
 export type AuthMode = 'oidc' | 'admin_api';
 
-/** インターフェイス型エンドポイントを置く AZ の数（閉域対応 U2 BR2.1）。 */
+/** Number of AZs that host the interface endpoints. */
 export type EndpointAzCount = 1 | 2;
 
-/** 既定の AZ の数（BR2.1）。closedDevParameter だけ 1 にする（BR2.2）。 */
+/** Default AZ count; only closedDevParameter uses 1. */
 export const DEFAULT_ENDPOINT_AZ_COUNT: EndpointAzCount = 2;
 
-/** 検査済みの Resolver Inbound Endpoint の設定（閉域対応 U2 BR3.1〜BR3.3）。 */
+/** Validated settings of the Resolver inbound endpoint. */
 export interface ResolverSettings {
-  /** 社内 DNS の CIDR（1 つ以上の IPv4 CIDR。接頭辞の長さ 0 は含まない）。 */
+  /** CIDRs of the internal DNS (one or more IPv4 CIDRs; a prefix length of 0 is not allowed). */
   readonly allowedCidrs: readonly string[];
 }
 
 /**
- * 閉域のネットワークと入口の設定（検査済みの ClosedStageParameters、entities.md の
- * ClosedNetworkSettings）。ClosedNetwork と AppStack はこれだけを見る。
+ * Network and entry-point settings of the closed Stage (validated ClosedStageParameters).
+ * ClosedNetwork and AppStack look only at this.
  */
 export interface ClosedNetworkSettings {
   readonly vpcCidr: string;
@@ -34,50 +35,49 @@ export interface ClosedNetworkSettings {
   readonly domainName: string;
   readonly allowedCidrs: readonly string[];
   readonly createTestEnvironment: boolean;
-  /** 閉域対応 U2（BR2.1）。 */
   readonly endpointAzCount: EndpointAzCount;
-  /** Resolver を作るときだけある（閉域対応 U2 BR3.1）。 */
+  /** Present only when a Resolver is created. */
   readonly resolver?: ResolverSettings;
 }
 
 export interface ResolvedProfile {
   readonly deploymentMode: DeploymentMode;
   readonly authMode: AuthMode;
-  /** Cognito の Managed Login のドメインを作るか（closed では作らない）。 */
+  /** Whether to create the Cognito Managed Login domain (never in closed). */
   readonly createCognitoDomain: boolean;
-  /** closed の APP_BASE_URL（https://<FQDN>）。public は CloudFront のドメインから AppStack が作る。 */
+  /** APP_BASE_URL of closed (https://<FQDN>). For public, AppStack derives it from the CloudFront domain. */
   readonly appBaseUrl?: string;
-  /** closed のときだけある。 */
+  /** Present only in closed. */
   readonly closedNetwork?: ClosedNetworkSettings;
   /**
-   * closed のタスクにだけ足す機能ごとの値（U3 閉域、BR5.1）。アプリには「閉域かどうか」を
-   * 渡さず、この値で Nemotron の入手先と Data Agent の可否を変える（ADR-002）。
+   * Per-feature values added only to the closed task. The app is not told whether it runs
+   * closed; these values switch the Nemotron source and whether the Data Agent is allowed.
    */
   readonly closedFeatureEnvironment?: Readonly<Record<string, string>>;
-  /** 推論の範囲（U5、BR1.1）。jp のときだけタスクに INFERENCE_SCOPE=jp を渡す（BR1.7）。 */
+  /** Inference scope. INFERENCE_SCOPE=jp is passed to the task only for jp. */
   readonly inferenceScope: InferenceScope;
-  /** タスクに渡す 3 つのモデル ID（明示した値か、範囲の既定。BR1.5、BR1.6）。 */
+  /** The three model IDs passed to the task (explicit values, or the scope's defaults). */
   readonly modelIds: Readonly<ModelIds>;
-  /** パラメータで明示したモデル ID だけ（BedrockArns が呼ぶ権限を足す、BR2.3）。 */
+  /** Only the model IDs given explicitly in parameters (BedrockArns adds permission to call them). */
   readonly explicitModelIds: Readonly<Partial<ModelIds>>;
 }
 
-/** タスクに渡す 3 つのモデル ID（AppParameter の名前のまま）。 */
+/** The three model IDs passed to the task (named as in AppParameter). */
 export interface ModelIds {
-  /** ペルソナの生成・インサイト・レポート（BEDROCK_MODEL_ID）。 */
+  /** Persona generation, insights and reports (BEDROCK_MODEL_ID). */
   bedrockModelId: string;
-  /** 議論・インタビューの既定（AGENT_MODEL_ID）。 */
+  /** Default for discussions and interviews (AGENT_MODEL_ID). */
   agentModelId: string;
-  /** アンケートの回答（SURVEY_MODEL_ID。Step Functions のステートマシンが呼ぶ）。 */
+  /** Survey answers (SURVEY_MODEL_ID; invoked by the Step Functions state machine). */
   surveyModelId: string;
 }
 
 const MODEL_ID_NAMES: readonly (keyof ModelIds)[] = ['bedrockModelId', 'agentModelId', 'surveyModelId'];
 
 /**
- * 範囲ごとの既定のモデル ID（U5 BR1.6 と計画の「設計からの変更」）。src/models/model_registry.py の
- * SCOPE_DEFAULTS と同じ値（BR4.6、FR2.3。pytest と jest の両方に同じ値を書いて固定する）。
- * アンケートは Step Functions のオンデマンド推論で Haiku 5.5 を使う（FR2.1）。
+ * Default model IDs per scope. Same values as SCOPE_DEFAULTS in src/models/model_registry.py
+ * (both pytest and jest pin the same values). The survey uses Haiku 5.5 through Step Functions
+ * on-demand inference.
  */
 export const SCOPE_DEFAULTS: Readonly<Record<InferenceScope, Readonly<ModelIds>>> = Object.freeze({
   global: Object.freeze({
@@ -93,8 +93,8 @@ export const SCOPE_DEFAULTS: Readonly<Record<InferenceScope, Readonly<ModelIds>>
 });
 
 /**
- * 追加のモデル（Bedrock Mantle 経由で米国のリージョンを呼ぶ）の ID。ModelRegistry の
- * requires_mantle のモデルと同じ（BR4.6）。jp では明示もできない（BR1.4）。
+ * IDs of the additional models (called in a US region through Bedrock Mantle). Same as the
+ * requires_mantle models in ModelRegistry. They cannot be given explicitly under jp either.
  */
 export const ADDITIONAL_MODEL_IDS: readonly string[] = Object.freeze([
   'openai.gpt-5.6-terra',
@@ -102,39 +102,38 @@ export const ADDITIONAL_MODEL_IDS: readonly string[] = Object.freeze([
   'google.gemma-4-31b',
 ]);
 
-/** 国内の推論プロファイルを呼べるリージョン（jp の Stack はこのどちらかに置く、BR1.3）。 */
+/** Regions that can call the domestic inference profiles (a jp Stack must be in one of them). */
 export const JP_REGIONS: readonly string[] = Object.freeze(['ap-northeast-1', 'ap-northeast-3']);
 
 export interface DeploymentProfileInput {
-  /** Stage を作る側が決めたモード（コンテキストの値ではない）。 */
+  /** Mode chosen by whoever creates the Stage (not a context value). */
   deploymentMode: string;
-  /** Stage のリージョン（証明書の ARN のリージョンと照らす）。 */
+  /** Stage region (checked against the region of the certificate ARN). */
   region: string;
   closed?: ClosedStageParameters;
   enableMcpGateway?: boolean;
-  /** 追加のモデル（Mantle 系）。閉域では true にできない（U3 BR5.4）。 */
+  /** Additional (Mantle) models. Cannot be true in closed. */
   enableAdditionalPersonaModels?: boolean;
-  /** Data Agent の Runtime ARN。閉域では渡せない（U3 BR5.5）。 */
+  /** Runtime ARN of the Data Agent. Cannot be given in closed. */
   dataAgentRuntimeArn?: string;
-  /** 推論の範囲（コンテキスト inferenceScope か AppParameter.inferenceScope。U5 BR1.1）。省略は global。 */
+  /** Inference scope (context inferenceScope or AppParameter.inferenceScope). global when omitted. */
   inferenceScope?: string;
-  /** 明示したモデル ID（省略・空・空白は範囲の既定、BR1.5）。 */
+  /** Explicit model ID (omitted, empty or blank means the scope's default). */
   bedrockModelId?: string;
   agentModelId?: string;
   surveyModelId?: string;
 }
 
 /**
- * 高度な生成（ベータ、U1、NFR3.4）の Code Interpreter の実行ロール。
- * - `none`: 実行ロールを付けない（executionRoleArn を省く）。セッションの中のコードは AWS の
- *   認証情報を持たない。持ち込みは署名付き URL なので認証情報は要らない
- * - `empty`: 許可のポリシーを持たない実行ロール（信頼は bedrock-agentcore.amazonaws.com、
- *   aws:SourceAccount の条件つき）。`none` でセッションが開かないときの切り替え先
- *   （infrastructure-specification.md「決めたこと」）
+ * Execution role of the Code Interpreter for advanced generation (beta).
+ * - `none`: no execution role (executionRoleArn is omitted). Code inside the session has no
+ *   AWS credentials; files are brought in through presigned URLs, so none are needed.
+ * - `empty`: an execution role with no permission policy (trusts bedrock-agentcore.amazonaws.com,
+ *   with an aws:SourceAccount condition). Switch to it if sessions do not open with `none`.
  */
 export type CodeInterpreterExecutionRole = 'none' | 'empty';
 
-/** 公開の Stage の Code Interpreter の実行ロール（既定は付けない）。切り替えるときはここを変える。 */
+/** Code Interpreter execution role of the public Stage (none by default). Change it here to switch. */
 export const CODE_INTERPRETER_EXECUTION_ROLE: CodeInterpreterExecutionRole = 'none';
 
 /** The Nemotron key the app has always used (src/models/nemotron_dataset.py). */
@@ -158,7 +157,7 @@ const MCP_GATEWAY_ERROR =
   'MCP Gateway は後続リリースで提供（enableMcpGateway=true は v1.0.0 では使えません）';
 
 /**
- * Resolve the per-Stage settings from the mode and the closed-network parameters (BR1.3〜BR1.8).
+ * Resolve the per-Stage settings from the mode and the closed-network parameters.
  *
  * Throws an Error that names the offending parameter when a value is invalid.
  */
@@ -190,7 +189,7 @@ export function resolveDeploymentProfile(input: DeploymentProfileInput): Resolve
     );
   }
   const closedNetwork = validateClosedParameters(closed, region);
-  // U3 の検査（閉域で追加のモデルを止める）を先に通す。jp の追加のモデルの ID の検査はその後
+  // Run the closed-feature check (rejects additional models) first; the jp additional-model ID check comes after
   const closedFeatureEnvironment = resolveClosedFeatures(input, closed);
   return {
     deploymentMode: 'closed',
@@ -204,7 +203,7 @@ export function resolveDeploymentProfile(input: DeploymentProfileInput): Resolve
 }
 
 /**
- * The inference scope (U5, BR1.1〜BR1.3): trimmed and case-insensitive, `global` when omitted.
+ * The inference scope: trimmed and case-insensitive, `global` when omitted.
  * Throws for values other than global and jp, and for jp outside the two domestic regions.
  */
 function resolveInferenceScope(value: string | undefined, region: string): InferenceScope {
@@ -222,7 +221,7 @@ function resolveInferenceScope(value: string | undefined, region: string): Infer
 }
 
 /**
- * The three model IDs (U5, BR1.4〜BR1.6): an explicit (non-blank) value is used as is, an omitted
+ * The three model IDs: an explicit (non-blank) value is used as is, an omitted
  * one is the scope's default. Under jp, an explicit additional (Mantle) model ID is an error.
  */
 function resolveInference(
@@ -251,8 +250,8 @@ function resolveInference(
 }
 
 /**
- * The per-feature values of the closed task (U3, BR5.1, BR5.3〜BR5.5), and the file delivery
- * mode `ASSET_DELIVERY=proxy` (U4, BR5.1).
+ * The per-feature values of the closed task, and the file delivery
+ * mode `ASSET_DELIVERY=proxy`.
  *
  * Throws when the closed Stage is given a feature that needs the internet (additional models,
  * the data agent) or a Nemotron key the app cannot use.
@@ -278,17 +277,17 @@ function resolveClosedFeatures(
     NEMOTRON_SOURCE: 's3',
     NEMOTRON_DATASET_KEY: key,
     DATA_AGENT_ALLOWED: 'false',
-    // 閉域対応 U4（BR5.1）: 5 か所のファイルをアプリ経由で流す。閉域で presigned を選ぶ入力は作らない
+    // Files in 5 places go through the app; there is no input to choose presigned URLs in closed
     ASSET_DELIVERY: 'proxy',
-    // 高度な生成（ベータ、U1、FR2.5、BR1.4）: 閉域では Code Interpreter・CORS を作らないため止める
+    // Advanced generation (beta) is off: closed creates neither the Code Interpreter nor CORS
     ENABLE_ADVANCED_GENERATION: 'false',
   });
 }
 
 /**
- * Why `key` cannot be the Nemotron Parquet key, or undefined when it can (BR5.3).
+ * Why `key` cannot be the Nemotron Parquet key, or undefined when it can.
  *
- * The same rules as the app's start-up check (src/models/nemotron_dataset.py, BR1.4).
+ * The same rules as the app's start-up check (src/models/nemotron_dataset.py).
  */
 export function nemotronDatasetKeyProblem(key: string): string | undefined {
   if (!KEY_CHARACTERS.test(key)) {
@@ -314,7 +313,7 @@ export function nemotronDatasetKeyProblem(key: string): string | undefined {
 }
 
 /**
- * Whether the closed Stage should be built (BR1.1): true when both the certificate ARN and the
+ * Whether the closed Stage should be built: true when both the certificate ARN and the
  * FQDN are given, false when neither is. Throws when only one of them is given.
  */
 export function closedStageRequested(
@@ -361,13 +360,13 @@ export function mergeClosedStageContext(
       base.createTestEnvironment,
     ),
     vpcCidr: text('closedVpcCidr', base.vpcCidr),
-    // U3: only when given (the profile falls back to the default key)
+    // Only when given (the profile falls back to the default key)
     ...(nemotronDatasetKey !== undefined && nemotronDatasetKey !== null
       ? { nemotronDatasetKey: String(nemotronDatasetKey).trim() }
       : base.nemotronDatasetKey !== undefined
         ? { nemotronDatasetKey: base.nemotronDatasetKey }
         : {}),
-    // U2: only when given or set in parameters.ts (the profile applies the defaults)
+    // Only when given or set in parameters.ts (the profile applies the defaults)
     ...(isGiven(endpointAzCount)
       ? { endpointAzCount: parseAzCount('closedEndpointAzCount', endpointAzCount) }
       : base.endpointAzCount !== undefined
@@ -393,7 +392,7 @@ function isGiven(value: unknown): boolean {
 }
 
 /**
- * The endpoint AZ count from a context string (`"1"` or `"2"`, BR2.1). Throws with the parameter
+ * The endpoint AZ count from a context string (`"1"` or `"2"`). Throws with the parameter
  * name and the value received for anything else (`"0"`, `"3"`, `"two"`, empty).
  */
 function parseAzCount(name: string, value: unknown): number {
@@ -450,7 +449,7 @@ function validateClosedParameters(closed: ClosedStageParameters, region: string)
   });
 }
 
-/** BR2.1: 1 or 2, 2 when omitted. */
+/** 1 or 2, 2 when omitted. */
 function validateAzCount(count: number | undefined): EndpointAzCount {
   if (count === undefined) {
     return DEFAULT_ENDPOINT_AZ_COUNT;
@@ -462,7 +461,7 @@ function validateAzCount(count: number | undefined): EndpointAzCount {
 }
 
 /**
- * BR3.1〜BR3.3: the Resolver settings when it is requested, undefined when it is not.
+ * The Resolver settings when it is requested, undefined when it is not.
  * Throws when it is requested without CIDRs, when CIDRs are given without the request,
  * and for a CIDR that is not IPv4 or whose prefix length is 0.
  */
@@ -499,7 +498,7 @@ function requireIpv4Cidrs(
     if (!isIpv4Cidr(cidr)) {
       throw new Error(`${name} の "${cidr}" は IPv4 の CIDR（例 10.0.0.0/16）ではない`);
     }
-    // 接頭辞は数で比べる（"/00" も 0）
+    // Compare the prefix as a number ("/00" is also 0)
     if (options.rejectZeroPrefix && Number(cidr.split('/')[1]) === 0) {
       throw new Error(`${name} の "${cidr}" は使えない: 接頭辞の長さ /0 はどこからでも受け入れる`);
     }
@@ -509,7 +508,7 @@ function requireIpv4Cidrs(
 const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const MAX_DOMAIN_LENGTH = 253;
 
-/** BR1.6: a bare FQDN (no scheme, path, upper case or trailing dot; two labels or more). */
+/** A bare FQDN (no scheme, path, upper case or trailing dot; two labels or more). */
 function validateDomainName(domainName: string): void {
   const fail = (reason: string) => {
     throw new Error(`closedDomainName の "${domainName}" は FQDN として使えない: ${reason}`);
@@ -541,7 +540,7 @@ function validateDomainName(domainName: string): void {
 
 const ACM_CERTIFICATE_ARN = /^arn:aws(-cn|-us-gov)?:acm:([a-z0-9-]+):(\d{12}):certificate\/[A-Za-z0-9-]+$/;
 
-/** BR1.6: an ACM certificate ARN in the Stage's region. */
+/** An ACM certificate ARN in the Stage's region. */
 function validateCertificateArn(certificateArn: string, region: string): void {
   const match = ACM_CERTIFICATE_ARN.exec(certificateArn);
   if (!match) {

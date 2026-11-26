@@ -1,11 +1,9 @@
-"""Survey and organization-asset screens of U7 (marker ``ui``, Playwright + axe-core).
+"""Survey and organization-asset screens (marker ``ui``, Playwright + axe-core).
 
-M6  テンプレート・結果の一覧のタブ（キーボードだけで切り替える）
-M10 組織資産の利用範囲のダイアログ（部署の選択・外すときの注意・削除されたグループ・Escape）
-    カスタムデータの取り込みの利用範囲の欄（既定は admin のみ）
-    member のペルソナ元データの画面（管理の操作がない）
-
-BR3.2、BR4.1、BR5.2、NFR6.20〜NFR6.22、AC5.3.3。
+Covers the template / result list tabs (keyboard-only switching), the usage-scope
+dialog for organization assets (department selection, warning on removal,
+deleted groups, Escape), the usage-scope field of custom data import (admin only
+by default), and the member's persona source data screen (no management actions).
 """
 
 from datetime import datetime
@@ -88,7 +86,7 @@ def survey_lists() -> Generator[None]:
 
 
 # =============================================================================
-# M6: 一覧のタブ（キーボードだけ）
+# List tabs (keyboard only)
 # =============================================================================
 
 
@@ -141,13 +139,13 @@ def test_tabs_switch_with_the_keyboard_only(
 
     selected = ui.page.locator("[role=tab][aria-selected=true]")
     assert selected.get_attribute("data-tab") == "shared"
-    # 共有されたものには変える操作を出さない
+    # Shared items do not show change actions
     assert ui.page.locator(f"#{panel} [data-dialog-open='share-dialog']").count() == 0
     ui.check_a11y()
 
 
 # =============================================================================
-# M10: 利用範囲のダイアログ
+# Usage-scope dialog
 # =============================================================================
 
 SCOPE_URL = "/settings/datasets/d1/scope"
@@ -207,7 +205,7 @@ def _warning(ui: UiHarness) -> Any:
 def test_choose_departments_and_save(ui: UiHarness) -> None:
     from web.asset_scope_views import saved_response
 
-    # サーバーが返すのと同じ通知（一覧の読み直しと、閉じる）
+    # The same notification the server returns (reload the list and close)
     saved = {"HX-Trigger": saved_response("#dataset-list").headers["HX-Trigger"]}
     ui.respond("/settings/datasets", body=_dataset_list(["営業部", "企画部"]))
     _open_scope(ui, _scope_dialog(frozenset({"sales"})))
@@ -215,7 +213,7 @@ def test_choose_departments_and_save(ui: UiHarness) -> None:
 
     _option(ui, "企画部").check()
     assert not _warning(ui).is_visible()
-    # 保存（同じ URL への POST）は、閉じて一覧を読み直す応答にする
+    # Save (POST to the same URL) responds by closing and reloading the list
     ui.respond(SCOPE_URL, body="", headers=saved)
     ui.page.click("[data-testid='asset-scope-save']")
     ui.page.wait_for_selector("#asset-scope-dialog", state="detached")
@@ -234,7 +232,7 @@ def test_unchecking_an_initial_department_warns_before_saving(ui: UiHarness) -> 
 
     assert _warning(ui).is_visible()
     assert _warning(ui).get_attribute("role") == "alert"
-    # 戻すと注意は消える
+    # Reverting clears the warning
     _option(ui, "営業部").check()
     ui.settle()
     assert not _warning(ui).is_visible()
@@ -269,7 +267,7 @@ def test_escape_closes_and_returns_focus(ui: UiHarness) -> None:
 
 
 # =============================================================================
-# カスタムデータの取り込み（利用範囲の欄、既定は admin のみ）
+# Custom data import (usage-scope field, admin only by default)
 # =============================================================================
 
 
@@ -287,7 +285,7 @@ def test_import_form_has_a_scope_field_defaulting_to_admin_only(ui: UiHarness) -
         suggested_extra=[],
         scope_choices=DEPARTMENTS,
     )
-    # 実画面と同じく、カード（h2）の中にマッピングの見出し（h3）が来る
+    # As on the real screen, the mapping heading (h3) sits inside the card (h2)
     ui.load_component(
         "fragment.html",
         container_id="custom-upload-result",
@@ -306,8 +304,8 @@ def test_import_form_has_a_scope_field_defaulting_to_admin_only(ui: UiHarness) -
 
 
 # =============================================================================
-# 待ちと取れなかった件数の表示（frontend-components.md、FR3.3、FR5.3、BR2.5、
-# BR4.4、NFR4.9b、FR4.1）。Jinja と画面の取得だけで確かめる（ブラウザは使わない）
+# Waiting state and the count of items that could not be fetched. Checked with
+# Jinja and screen fetches only (no browser).
 # =============================================================================
 
 BLOCKED_AT = datetime(2026, 10, 30, 1, 0)
@@ -356,7 +354,7 @@ def test_list_keeps_the_other_labels():
 
 
 def test_list_never_shows_an_order_or_a_start_time():
-    """BR2.5: 待ちの間は順番も予定時刻も出さない。"""
+    """While waiting, neither the queue position nor the expected time is shown."""
     html = render_page(
         "survey/partials/result_list.html",
         listing=_listing([_with(_survey("s1", "待ち"), status="queued")], ListTab.MINE),
@@ -395,7 +393,7 @@ def test_detail_of_a_blocked_survey_says_it_cannot_start(screen_client):
 
 
 def test_detail_shows_how_many_answers_are_missing(screen_client):
-    """FR5.3・BR4.4: 取れなかった件数があれば結果の上に出す。"""
+    """If some items could not be fetched, the count is shown above the result."""
     survey = _with(_survey("s1", "完了"), failed_count=3)
     html = _detail_html(screen_client, survey)
     note = html.split('data-testid="survey-failed-count"', 1)[1].split("</", 1)[0]
@@ -411,7 +409,7 @@ def test_detail_without_missing_answers_has_no_note(screen_client, failed_count)
 
 
 def test_start_form_minimum_is_ten():
-    """FR4.1: 件数の下限は 10。画面の数値は定数から描画し、直書きしない。"""
+    """The minimum count is 10; the screen value is rendered from the constant, not hardcoded."""
     from pathlib import Path
 
     from src.models.survey import MIN_SURVEY_PERSONAS
@@ -428,7 +426,7 @@ def test_start_form_minimum_is_ten():
 
 @pytest.mark.parametrize(("count", "warned"), [(9, True), (10, False)])
 def test_filter_preview_warns_below_ten(count, warned):
-    """FR4.1: 対象の人数の注意は、下限の 10 名を下回るときだけ出す。"""
+    """The target-size warning appears only below the 10-person minimum."""
     from src.models.survey import MIN_SURVEY_PERSONAS
     from web.main import templates
 
@@ -444,7 +442,7 @@ def test_filter_preview_warns_below_ten(count, warned):
 
 
 # =============================================================================
-# member のペルソナ元データの画面
+# Member persona source data screen
 # =============================================================================
 
 
@@ -489,7 +487,7 @@ def test_member_persona_data_screen_has_no_management(
 
 
 # =============================================================================
-# テンプレートの画像の複数アップロード
+# Multiple image upload for templates
 # =============================================================================
 
 _STUB_UPLOAD = """() => {
@@ -526,7 +524,7 @@ def _template_form(ui: UiHarness, screen_client: Any) -> None:
 def test_template_form_names_each_uploaded_image_apart(
     ui: UiHarness, screen_client: Any
 ) -> None:
-    """同じファイル名を続けて選んでも、仮の名前は重ならない（空のまま送らない）。"""
+    """Selecting the same file name repeatedly never yields colliding temporary names (nothing is sent empty)."""
     _template_form(ui, screen_client)
     result = ui.page.evaluate(
         _UPLOAD, [["image.png", "image/png", 10], ["image.png", "image/png", 10]]
@@ -538,7 +536,7 @@ def test_template_form_names_each_uploaded_image_apart(
 def test_template_form_keeps_to_the_limit_and_says_what_it_left_out(
     ui: UiHarness, screen_client: Any
 ) -> None:
-    """形式の違うファイルは枠を使わず、枠を超えた分は件数を知らせる。"""
+    """Files of the wrong format use no slot, and the overflow beyond the limit is reported as a count."""
     from src.managers.survey_template_manager import MAX_TEMPLATE_IMAGES
 
     _template_form(ui, screen_client)
@@ -556,7 +554,7 @@ def test_template_form_keeps_to_the_limit_and_says_what_it_left_out(
 def test_template_form_ignores_files_added_while_uploading(
     ui: UiHarness, screen_client: Any
 ) -> None:
-    """上げている間の追加は受けない（枠を超えて並ばない）。"""
+    """Additions during an upload are rejected (nothing queues beyond the limit)."""
     from src.managers.survey_template_manager import MAX_TEMPLATE_IMAGES
 
     _template_form(ui, screen_client)

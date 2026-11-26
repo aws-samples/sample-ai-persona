@@ -1,4 +1,4 @@
-"""Checks of the component-test harness itself (WF10, NFR6.2, NFR7.2).
+"""Checks of the component-test harness itself .
 
 If the built CSS is not loaded, every axe-core and visibility check that
 follows is meaningless, so these run first and fail loudly.
@@ -14,7 +14,7 @@ def test_built_css_is_loaded(ui: UiHarness) -> None:
     ui.load_component("harness.html")
 
     sheets = ui.page.evaluate("Array.from(document.styleSheets).map(s => s.href || '')")
-    # URL には中身のハッシュ（?v=...）が付く（web/static_assets.py）
+    # The URL carries a content hash (?v=...) (web/static_assets.py)
     assert any(
         href.split("?")[0].endswith("/static/css/tailwind.css") for href in sheets
     ), sheets

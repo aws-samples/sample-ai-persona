@@ -1,4 +1,4 @@
-"""List tabs and list reload (C4, WF5, NFR4.10, NFR6.2-NFR6.5, NFR6.11, NFR6.12, B8-B10)."""
+"""List tabs and list reload."""
 
 import json
 from typing import Any
@@ -220,7 +220,7 @@ def _history_cache(ui: UiHarness) -> str | None:
 def test_switching_tabs_keeps_no_page_snapshot_in_local_storage(
     ui: UiHarness,
 ) -> None:
-    """Lists must not survive a sign-out in htmx's history cache (U4 review P1)."""
+    """Lists must not survive a sign-out in htmx's history cache."""
     ui.respond("/items?tab=shared", body=_rows("shared"))
     _load(ui)
 
@@ -234,7 +234,7 @@ def test_switching_tabs_keeps_no_page_snapshot_in_local_storage(
 def test_going_back_reloads_the_whole_page_instead_of_a_fragment(
     ui: UiHarness,
 ) -> None:
-    """With no history cache, Back must reload the full page (U4 review P2).
+    """With no history cache, Back must reload the full page.
 
     Otherwise htmx asks the server again with HX-Request set, and routes that
     answer HX-Request with a fragment (e.g. /discussion/results) replace the

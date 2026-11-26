@@ -1,10 +1,7 @@
-"""ログインの URL（/login、/auth/callback、POST /signout）の API テスト。
+"""API tests for the login URLs (/login, /auth/callback, POST /signout).
 
-約束 C11、US1.1（AC1.1.1、AC1.1.3）、US1.3（AC1.3.1、AC1.3.3）、BR1.2〜BR1.5、
-BR1.13、BR1.22、NFR3.3、NFR3.5。
-
-テストのアプリは AUTH_MODE=local で動く。oidc の振る舞いは、AuthManager を
-oidc 用のもの（OidcService はモック）に差し替えて確かめる。
+The test app runs with AUTH_MODE=local. The oidc behavior is verified by
+swapping in an oidc AuthManager (OidcService is mocked).
 """
 
 import json
@@ -61,7 +58,7 @@ def _oidc_mock() -> Mock:
 
 @pytest.fixture
 def oidc_manager(monkeypatch) -> tuple[AuthManager, Mock]:
-    """AuthManager を oidc の振る舞いに差し替える。"""
+    """Swap the AuthManager for one with oidc behavior."""
     from web.routers import auth
 
     oidc = _oidc_mock()
@@ -82,7 +79,7 @@ def oidc_manager(monkeypatch) -> tuple[AuthManager, Mock]:
 
 @pytest.fixture
 def browser(test_app) -> Any:
-    """Cookie を持たないブラウザ（リダイレクトは追わない）。"""
+    """A browser without cookies (redirects are not followed)."""
     with TestClient(test_app, follow_redirects=False) as c:
         yield c
 
@@ -110,7 +107,7 @@ class TestLoginPage:
         cookies = _set_cookies(response)
         assert any(c.startswith("login_tx=") for c in cookies)
         assert not any(c.startswith("session_id=") for c in cookies)
-        # 途中の状態は署名付き Cookie の中にあり、平文の state をそのまま出さない
+        # The in-progress state lives in a signed cookie; the plain state value is never exposed.
         assert all("verifier-1" not in c for c in cookies)
 
     def test_expired_reason_shows_the_relogin_page(self, browser, oidc_manager):
@@ -140,7 +137,7 @@ class TestLoginPage:
         cookie = _session_cookie_header(response).lower()
         assert "httponly" in cookie
         assert "samesite=lax" in cookie
-        assert "secure" not in cookie  # local の http では付けない
+        assert "secure" not in cookie  # Not set over plain http on local.
 
     def test_external_next_falls_back_to_root(self, browser):
         response = browser.get("/login", params={"next": "https://evil.example.com"})
@@ -148,7 +145,7 @@ class TestLoginPage:
 
 
 class TestClosedNetworkUrlsOutsideAdminApi:
-    """U8: M2・M3 の URL は admin_api だけ。oidc・local の振る舞いは変わらない。"""
+    """The M2 and M3 URLs exist only under admin_api; oidc and local behavior is unchanged."""
 
     def test_oidc_new_password_page_goes_to_login(self, browser, oidc_manager):
         response = browser.get("/auth/new-password")
@@ -262,8 +259,7 @@ class TestCallback:
             params={"code": "SECRET-CODE-VALUE", "state": "SECRET-STATE-VALUE"},
         )
 
-        # httpx のロガーはテスト側のクライアントが要求の URL を出すもので、
-        # アプリのログではないため除く
+        # Drop httpx logger records: they come from the test client logging request URLs, not from the app.
         app_logs = "\n".join(
             record.getMessage()
             for record in caplog.records
@@ -327,7 +323,7 @@ class TestSignout:
 
     def test_oidc_signout_goes_to_cognito_logout(self, oidc_manager, test_app):
         manager, oidc = oidc_manager
-        # oidc の session_id は Secure のため、https のクライアントで確かめる
+        # The oidc session_id cookie is Secure, so verify it with an https client.
         with TestClient(
             test_app, base_url="https://testserver", follow_redirects=False
         ) as secure_browser:

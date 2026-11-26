@@ -1,8 +1,8 @@
 #!/bin/bash
-# Tailwind CSS ビルドスクリプト
-# 使い方:
-#   ビルド:     ./scripts/build-css.sh
-#   ウォッチ:   ./scripts/build-css.sh --watch
+# Tailwind CSS build script
+# Usage:
+#   Build:  ./scripts/build-css.sh
+#   Watch:  ./scripts/build-css.sh --watch
 #   minify:     ./scripts/build-css.sh --minify
 
 set -e

@@ -1,9 +1,9 @@
-"""Make a large made-up interview record for the documents manual E2E (NFR1.15).
+"""Make a large made-up interview record for the documents manual E2E.
 
 The text is built from a fixed vocabulary (made-up speakers and answers; no
 real data). Each part starts with a heading, and every line names a speaker
 with attributes (age band, gender, job) so the evidence can be matched with
-table segments (BR28.1). Lines carry the labels 価値 / 不満 / 目標 / 行動.
+table segments. Lines carry the labels 価値 / 不満 / 目標 / 行動.
 
 Formats: ``md`` (``#`` headings), ``txt`` (the same text without the marks
 read as headings by Markdown) and ``docx`` (Word headings ``Heading1``). The

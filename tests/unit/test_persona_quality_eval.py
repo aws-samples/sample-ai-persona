@@ -1,4 +1,4 @@
-"""The pure parts of the persona quality evaluation (U6 addendum)."""
+"""The pure parts of the persona quality evaluation."""
 
 from __future__ import annotations
 

@@ -1,8 +1,9 @@
-"""PersonaBindingStore（紐付けの読み書き）の結合テスト。moto を使う。
+"""Integration tests (moto) for PersonaBindingStore, which reads and writes bindings.
 
-BR2.2・BR2.5（ペルソナ ID と紐付け先の組での削除）、BR2.9（KB は固定キーの上書き 1 回）、
-BR3.1（persona_id での全件削除、未処理分の再試行）、NFR2.9（Query をページの最後まで、
-Scan を呼ばない）、NFR1.35、TargetIndex で引いた紐付け先ごとの削除。
+Covers: deletion by the pair of persona ID and binding target; a KB binding is one
+overwrite of a fixed key; deleting everything by persona_id with a retry of unprocessed
+items; Query runs to the last page and never calls Scan; and deletion per target found
+through TargetIndex.
 """
 
 from datetime import datetime, timezone
@@ -166,7 +167,7 @@ class TestDelete:
 
 
 class TestDeleteForTarget:
-    """データセット・KB を消したときに、その紐付けを TargetIndex で引いて消す。"""
+    """When a dataset or KB is deleted, its bindings are found through TargetIndex and deleted."""
 
     def test_deletes_every_binding_to_the_target(self, store):
         store.put(_dataset("p1", "d1"))
@@ -181,7 +182,7 @@ class TestDeleteForTarget:
         assert [b.target_id for b in store.list_for_persona("p3")] == ["other"]
 
     def test_keeps_a_binding_of_the_other_kind_with_the_same_id(self, store):
-        """target_id はデータセットと KB で同じ名前空間。種類の違う紐付けは消さない。"""
+        """target_id shares one namespace across datasets and KBs. Bindings of another kind are not deleted."""
         store.put(_dataset("p1", "x"))
         store.put(PersonaBinding.for_kb("p2", "x", now=NOW))
 

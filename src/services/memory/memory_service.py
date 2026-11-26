@@ -1,13 +1,6 @@
 """
 Memory Service Implementation
-AgentCore Memoryと連携する中核サービス
-
-Requirements:
-    - 1.1: AgentCore Memory接続（memory_id, region設定）
-    - 1.2: 接続検証
-    - 1.3: 接続失敗時のエラーハンドリング
-    - 1.4: 環境変数による設定
-    - 10.4: リトライロジック（指数バックオフ）
+Core service that works with AgentCore Memory
 """
 
 import logging
@@ -37,8 +30,8 @@ def _error_code(error: ClientError) -> str:
     return code
 
 
-#: The client used only by :meth:`MemoryService.delete_all` (U5,
-#: performance-design.md §2): short timeouts and no botocore retry, so one call
+#: The client used only by :meth:`MemoryService.delete_all`:
+#: short timeouts and no botocore retry, so one call
 #: never takes longer than :data:`CALL_BUDGET_SECONDS`. ``delete_all`` retries
 #: by itself, inside the deadline.
 #: ``total_max_attempts`` counts the first call, so 1 means botocore never
@@ -64,36 +57,30 @@ class _DeleteStopped(Exception):
 
 
 class MemoryConnectionError(Exception):
-    """AgentCore Memory接続エラー"""
+    """AgentCore Memory connection error."""
 
     pass
 
 
 class MemoryServiceError(Exception):
-    """Memory Service関連のエラー"""
+    """Errors raised by the Memory Service."""
 
     pass
 
 
 class MemoryService:
     """
-    AgentCore Memoryと連携する中核サービス
+    Core service that works with AgentCore Memory
 
-    Strategy Patternを使用して、異なる記憶戦略を動的に切り替え可能。
-    デフォルトではSummaryStrategyを使用し、SemanticStrategyも併用可能。
+    Uses the Strategy pattern so different memory strategies can be swapped dynamically.
+    SummaryStrategy is the default and SemanticStrategy can be used alongside it.
 
     Attributes:
-        memory_id: AgentCore MemoryリソースID
-        region: AWSリージョン
-        _strategy: 現在の記憶戦略（プライマリ）
-        _semantic_strategy: Semantic戦略（オプション）
-        _enabled: サービスが有効かどうか
-
-    Requirements:
-        - 1.1: AgentCore Memory接続
-        - 1.2: 接続検証
-        - 1.3: エラーハンドリング
-        - 1.4: 設定可能なmemory_id
+        memory_id: AgentCore Memory resource ID
+        region: AWS region
+        _strategy: Current memory strategy (primary)
+        _semantic_strategy: Semantic strategy (optional)
+        _enabled: Whether the service is enabled
     """
 
     def __init__(
@@ -106,21 +93,21 @@ class MemoryService:
         boto3_session: Any = None,
     ):
         """
-        MemoryServiceを初期化
+        Initialize MemoryService
 
         Args:
-            memory_id: AgentCore MemoryリソースID
-            region: AWSリージョン（デフォルト: us-east-1）
-            strategy: 使用する記憶戦略（デフォルト: SummaryStrategy）
-            validate_connection: 初期化時に接続を検証するか
+            memory_id: AgentCore Memory resource ID
+            region: AWS region (default: us-east-1)
+            strategy: Memory strategy to use (default: SummaryStrategy)
+            validate_connection: Whether to validate the connection at initialization
             delete_client: Pre-built ``bedrock-agentcore`` client for
                 :meth:`delete_all` (tests); built lazily otherwise
             boto3_session: Session the deletion client is built from (the
                 same credentials and region as the memory client)
 
         Raises:
-            MemoryConnectionError: 接続検証に失敗した場合
-            ValueError: memory_idが空の場合
+            MemoryConnectionError: If connection validation fails
+            ValueError: If memory_id is empty
         """
         if not memory_id:
             raise ValueError("memory_id is required")
@@ -133,16 +120,16 @@ class MemoryService:
         self._deletion_client = delete_client
         self._boto3_session = boto3_session
 
-        # 戦略を設定（デフォルトはSummaryStrategy）
+        # Set the strategy (SummaryStrategy by default)
         if strategy:
             self._strategy = strategy
         else:
             self._init_default_strategy()
 
-        # Semantic戦略も初期化（設定されている場合）
+        # Also initialize the Semantic strategy (if configured)
         self._init_semantic_strategy()
 
-        # 接続検証
+        # Validate the connection
         if validate_connection:
             self._validate_connection()
 
@@ -155,7 +142,7 @@ class MemoryService:
         )
 
     def _init_default_strategy(self) -> None:
-        """デフォルトの記憶戦略（SummaryStrategy）を初期化"""
+        """Initialize the default memory strategy (SummaryStrategy)."""
         try:
             self._strategy = SummaryStrategy(
                 memory_id=self.memory_id, region=self.region
@@ -167,8 +154,8 @@ class MemoryService:
             ) from e
 
     def _init_semantic_strategy(self) -> None:
-        """Semantic戦略を初期化（設定されている場合）"""
-        # 起動時に GetMemory で引いた ID は共有の config にだけある（環境変数にはない）
+        """Initialize the Semantic strategy (if configured)."""
+        # The ID looked up with GetMemory at startup lives only in the shared config (not in environment variables)
         from src.config import config
 
         if not config.SEMANTIC_MEMORY_STRATEGY_ID:
@@ -187,18 +174,18 @@ class MemoryService:
             )
         except Exception as e:
             logger.warning("Failed to initialize semantic strategy: %s", e)
-            # Semantic戦略の初期化失敗はサービス全体を停止させない
+            # A Semantic strategy initialization failure must not stop the whole service
             self._semantic_strategy = None
 
     def _validate_connection(self) -> None:
         """
-        AgentCore Memoryへの接続を検証
+        Validate the connection to AgentCore Memory
 
         Raises:
-            MemoryConnectionError: 接続検証に失敗した場合
+            MemoryConnectionError: If connection validation fails
         """
         try:
-            # 戦略が初期化されていることを確認
+            # Check that the strategy is initialized
             if not self._strategy:
                 raise MemoryConnectionError("Memory strategy not initialized")
 
@@ -210,14 +197,14 @@ class MemoryService:
             ) from e
 
     def _ensure_strategy(self) -> MemoryStrategy:
-        """戦略が設定されていることを確認し、戦略を返す"""
+        """Check that a strategy is set and return it."""
         if not self._strategy:
             raise MemoryServiceError("Memory strategy not configured")
         return self._strategy
 
     @property
     def is_semantic_enabled(self) -> bool:
-        """Semantic戦略が有効かどうかを返す"""
+        """Return whether the Semantic strategy is enabled."""
         return self._semantic_strategy is not None
 
     @with_retry(
@@ -230,18 +217,18 @@ class MemoryService:
         metadata: Optional[dict[str, Any]] = None,
     ) -> str:
         """
-        Semantic戦略で直接LTMに知識を保存する。
+        Save knowledge directly to LTM with the Semantic strategy.
 
         Args:
-            actor_id: ペルソナID
-            content: 保存するコンテンツ
-            metadata: 追加メタデータ
+            actor_id: Persona ID
+            content: Content to save
+            metadata: Additional metadata
 
         Returns:
-            保存された記憶のID
+            ID of the saved memory
 
         Raises:
-            MemoryServiceError: Semantic戦略が未設定、または保存失敗時
+            MemoryServiceError: If the Semantic strategy is not configured or saving fails
         """
         if not self._semantic_strategy:
             raise MemoryServiceError(
@@ -269,22 +256,22 @@ class MemoryService:
     )
     def delete_memory(self, actor_id: str, memory_id: str) -> bool:
         """
-        記憶を削除（Summary戦略とSemantic戦略の両方を試行）
+        Delete a memory (tries both the Summary and Semantic strategies)
 
         Args:
-            actor_id: ペルソナID
-            memory_id: 削除する記憶のID
+            actor_id: Persona ID
+            memory_id: ID of the memory to delete
 
         Returns:
-            削除に成功した場合True
+            True if deletion succeeded
 
         Raises:
-            MemoryServiceError: 削除に失敗した場合
+            MemoryServiceError: If deletion fails
         """
         strategy = self._ensure_strategy()
 
         try:
-            # まずSummary戦略で削除を試行
+            # Try the Summary strategy first
             result = strategy.delete(actor_id=actor_id, memory_id=memory_id)
 
             if result:
@@ -295,7 +282,7 @@ class MemoryService:
                 )
                 return True
 
-            # Summary戦略で見つからない場合、Semantic戦略で試行
+            # If not found in the Summary strategy, try the Semantic strategy
             if self._semantic_strategy:
                 result = self._semantic_strategy.delete(
                     actor_id=actor_id, memory_id=memory_id
@@ -322,7 +309,7 @@ class MemoryService:
                 f"Failed to delete memory after retries: {e.last_exception}"
             ) from e
         except MemoryOperationError:
-            # リトライ対象のエラーは再送出
+            # Re-raise errors that are retry targets
             raise
         except Exception as e:
             logger.error("Unexpected error deleting memory: %s", e)
@@ -333,24 +320,24 @@ class MemoryService:
     )
     def list_memories(self, actor_id: str) -> List[MemoryEntry]:
         """
-        ペルソナの全記憶を取得（Summary + Semantic戦略の両方から）
+        Get all memories of a persona (from both the Summary and Semantic strategies)
 
         Args:
-            actor_id: ペルソナID
+            actor_id: Persona ID
 
         Returns:
-            ペルソナに関連する全ての記憶エントリのリスト
+            List of all memory entries related to the persona
 
         Raises:
-            MemoryServiceError: 取得に失敗した場合
+            MemoryServiceError: If retrieval fails
         """
         strategy = self._ensure_strategy()
         all_memories: List[MemoryEntry] = []
 
         try:
-            # Summary戦略から記憶を取得
+            # Get memories from the Summary strategy
             summary_memories = strategy.list_all(actor_id=actor_id)
-            # 戦略タイプをメタデータに追加
+            # Add the strategy type to the metadata
             for memory in summary_memories:
                 if memory.metadata is None:
                     memory.metadata = {}
@@ -374,7 +361,7 @@ class MemoryService:
             logger.error("Unexpected error listing summary memories: %s", e)
             raise MemoryServiceError(f"Failed to list memories: {e}") from e
 
-        # Semantic戦略から記憶を取得（設定されている場合）
+        # Get memories from the Semantic strategy (if configured)
         if self._semantic_strategy:
             try:
                 semantic_memories = self._semantic_strategy.list_all(actor_id=actor_id)
@@ -387,7 +374,7 @@ class MemoryService:
                 )
 
             except Exception as e:
-                # Semantic戦略のエラーはログに記録するが、処理は継続
+                # Log Semantic strategy errors but continue processing
                 logger.warning(
                     "Failed to list semantic memories for actor=%s: %s", actor_id, e
                 )
@@ -399,7 +386,7 @@ class MemoryService:
         return all_memories
 
     # ------------------------------------------------------------------
-    # Deleting one record of an actor (U5, R-01, BR4.1, NFR1.23)
+    # Deleting one record of an actor
     # ------------------------------------------------------------------
 
     def delete_owned_memory(self, actor_id: str, memory_id: str) -> bool:
@@ -473,7 +460,7 @@ class MemoryService:
             ) from e
 
     # ------------------------------------------------------------------
-    # Deleting every memory of an actor (U5, BR3.2, NFR2.11)
+    # Deleting every memory of an actor
     # ------------------------------------------------------------------
 
     def _delete_client(self) -> Any:

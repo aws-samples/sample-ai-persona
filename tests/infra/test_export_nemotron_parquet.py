@@ -1,7 +1,7 @@
-"""scripts/export_nemotron_parquet.py のテスト（閉域対応 U3 BR6.1）。
+"""Tests for scripts/export_nemotron_parquet.py.
 
-Hugging Face の取得（SurveyBatchService.download_nemotron_dataset）はモックにし、
-tmp_path に書く。S3 と AWS には触れない。
+The Hugging Face download (SurveyBatchService.download_nemotron_dataset) is mocked
+and output goes to tmp_path. Neither S3 nor AWS is touched.
 """
 
 import hashlib

@@ -1,26 +1,27 @@
-"""Router層が例外の内容をレスポンスに書いていないことの静的検査（Issue #112）。
+"""Static check that routers never write exception content into responses (Issue #112).
 
-#103 で「Routerに固定文言を直書きする」慣習を確立したが、規律を人間が守る形
-だったため #111 で再発した。本テストは web/routers/ の全モジュールをASTで走査し、
-`except ... as e:` で捕捉した例外変数がログ以外の文脈で参照されていないことを
-機械的に検査する。これにより CodeQL の `py/stack-trace-exposure` を待たずに
-リポジトリ内で再発を検知できる。
+The convention of hardcoding fixed text in routers (#103) relied on human
+discipline, and the problem recurred (#111). This test scans every module under
+web/routers/ with the AST and mechanically checks that an exception variable
+captured by `except ... as e:` is not referenced outside logging. That detects a
+recurrence inside the repository without waiting for CodeQL's
+`py/stack-trace-exposure`.
 
-許可される参照先:
-- `logger.*(...)` の引数（診断情報はログへ）
-- `raise ... from e`（例外チェーンの維持）
-- `user_message_for(e)`（エラーコード→文言カタログの参照）
+Allowed references:
+- arguments of `logger.*(...)` (diagnostics go to the log)
+- `raise ... from e` (keeps the exception chain)
+- `user_message_for(e)` (looks up the catalog by error code)
 - `toast_response(e)` / `is_transient(e)` / `error_kind_of(e)`
-  （`web/error_messages.py` の公開API。いずれも `code` / `context` のみを読み、
-  例外メッセージをレスポンスに載せない）
-- `isinstance(e, ...)` / `type(e)`（型による分岐）
+  (public API of `web/error_messages.py`; they read only `code` / `context`
+  and never put the exception message in the response)
+- `isinstance(e, ...)` / `type(e)` (branching by type)
 
-ユーザー向け文言は `web/error_messages.py` の公開API経由で取得すること。
-詳細は `docs/note/exception-message-design.md` を参照。
+Get user-facing text through the public API of `web/error_messages.py`. See
+`docs/note/exception-message-design.md` for details.
 
-検出結果が `_BASELINE` と完全一致することを検査するラチェット方式をとる。
-移行が完了したため baseline は空であり、漏出が1箇所でも入れば失敗する。
-段階的な移行が再び必要になった場合のみ baseline に列挙する。
+The detected result must match `_BASELINE` exactly (a ratchet). The migration is
+done, so the baseline is empty and any single leak fails the test. List entries
+in the baseline only if a gradual migration is needed again.
 """
 
 import ast
@@ -36,10 +37,9 @@ from src.models.errors import CodedError, ErrorCode
 
 _ROUTERS_DIR = Path(__file__).parent.parent.parent / "web" / "routers"
 
-# 例外変数を渡してよい関数。ログ出力・型分岐と、web/error_messages.py の
-# 公開API（例外メッセージをレスポンスに載せないことが保証されているもの）のみ。
-# ここに関数を追加する場合は、その関数が str(exc) をレスポンスへ流さないことを
-# 確認すること。
+# Functions that may be passed an exception variable: logging, type branching, and the
+# public API of web/error_messages.py (guaranteed not to put exception text in the response).
+# When adding a function here, confirm that it never passes str(exc) into the response.
 _ALLOWED_CALLS = frozenset(
     {
         "user_message_for",
@@ -47,34 +47,34 @@ _ALLOWED_CALLS = frozenset(
         "is_transient",
         "is_correctable",
         "error_kind_of",
-        # context["field"] の安定キーのみを返す。例外メッセージには触らない
-        # （TestFieldOfDoesNotLeak で直接検証している）。
+        # Returns only the stable key context["field"]; never touches the exception message
+        # (verified directly in TestFieldOfDoesNotLeak).
         "field_of",
-        # U8: PASSWORD_POLICY_NOT_MET の context["rules"] の既知の条件キーだけを返す
-        # （tests/unit/test_error_messages.py TestPasswordRuleLabels で検証）
+        # Returns only the known rule keys of context["rules"] for PASSWORD_POLICY_NOT_MET
+        # (verified in tests/unit/test_error_messages.py TestPasswordRuleLabels)
         "missed_password_rules",
-        # 高度な生成 U1: 文言・コード・区分だけを JSON にする（例外の文は載せない。
-        # tests/unit/test_error_messages.py TestJsonErrorResponse で直接検証している）
+        # Turns only the message, code and kind into JSON (no exception text;
+        # verified directly in tests/unit/test_error_messages.py TestJsonErrorResponse)
         "json_error_response",
         "error_payload",
         "isinstance",
         "type",
-        # web/routers/interview.py 限定のローカルヘルパー。isinstance と
-        # error_kind_of/is_correctable（いずれも上記で許可済み）のみで
-        # error_type 文字列を導出し、例外メッセージには触らない。
+        # Local helper limited to web/routers/interview.py. It derives the error_type string
+        # using only isinstance and error_kind_of/is_correctable (both allowed above),
+        # and never touches the exception message.
         "_error_type_for",
-        # web/auth_middleware.py の未ログインの応答。exc.code だけを読み、本文は
-        # カタログの文言とコードに限る（TestAuthErrorBodies で直接検証している）。
+        # Unauthenticated response from web/auth_middleware.py. It reads only exc.code, and the body is
+        # limited to catalog text and the code (verified directly in TestAuthErrorBodies).
         "unauthorized_response",
     }
 )
 
-# 既知の漏出箇所（module -> 関数名の集合）。Issue #112 の移行で空になった。
-# 関数名で管理するのは、無関係な編集で baseline がずれないため。新たに漏出を
-# 追加する場合はここに列挙するのではなく user_message_for() を使うこと。
+# Known leak sites (module -> set of function names). Emptied by the Issue #112 migration.
+# Keyed by function name so unrelated edits do not shift the baseline. To add a new
+# leak, use user_message_for() instead of listing it here.
 _BASELINE: dict[str, set[str]] = {}
 
-# traceback を文字列化しているモジュール。同様に空を維持する。
+# Modules that stringify a traceback. Kept empty likewise.
 _TRACEBACK_BASELINE: set[str] = set()
 
 
@@ -82,8 +82,8 @@ def _router_modules() -> list[Path]:
     return sorted(p for p in _ROUTERS_DIR.glob("*.py") if p.name != "__init__.py")
 
 
-#: Router の前で応答を作る部品（v1.0.0 U1 のログインの入口・CSRF・アクセスログ）。
-#: 例外変数の参照と traceback の使用を Router と同じ規則で検査する。
+#: Components that build responses ahead of the routers (login entry, CSRF, access log).
+#: Exception-variable references and traceback use are checked with the same rules as routers.
 _ENTRY_MODULES = [
     _ROUTERS_DIR.parent / "auth_middleware.py",
     _ROUTERS_DIR.parent / "middleware.py",
@@ -96,7 +96,7 @@ def _exposure_modules() -> list[Path]:
 
 
 class _ExposureVisitor(ast.NodeVisitor):
-    """`except ... as e` の例外変数が許可外の文脈で参照される箇所を集める。"""
+    """Collect places where the exception variable of `except ... as e` is referenced in a disallowed context."""
 
     def __init__(self) -> None:
         self.violations: list[tuple[int, str]] = []
@@ -115,7 +115,7 @@ class _ExposureVisitor(ast.NodeVisitor):
 
     @property
     def offending_scopes(self) -> set[str]:
-        """違反を含む最外側の関数名（ネストした内部関数は外側の名前に丸める）。"""
+        """Name of the outermost function containing a violation (nested inner functions roll up to the outer name)."""
         return {scope for _, scope in self.violations}
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
@@ -129,7 +129,7 @@ class _ExposureVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         if self._is_logger_call(node.func) or self._is_allowed_call(node.func):
-            # 引数内の例外参照は許可するが、ネストした except は追う必要がある。
+            # References inside arguments are allowed, but a nested except must still be followed.
             for child in ast.walk(node):
                 if isinstance(child, ast.ExceptHandler):
                     self.visit_ExceptHandler(child)
@@ -137,7 +137,7 @@ class _ExposureVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Raise(self, node: ast.Raise) -> None:
-        # `raise X from e` の cause 位置は例外チェーンの維持なので許可する。
+        # The cause position of `raise X from e` keeps the exception chain, so it is allowed.
         if node.exc is not None:
             self.visit(node.exc)
 
@@ -164,9 +164,9 @@ class _ExposureVisitor(ast.NodeVisitor):
 
 @pytest.mark.parametrize("path", _exposure_modules(), ids=lambda p: p.name)
 def test_router_does_not_reference_exception_outside_logging(path: Path) -> None:
-    """例外変数がログ・文言カタログ以外から参照されていないこと。
+    """The exception variable is referenced only by logging and the message catalog.
 
-    検出結果が `_BASELINE` と完全一致することを検査する（ラチェット方式）。
+    The detected result must match `_BASELINE` exactly (a ratchet).
     """
     visitor = _ExposureVisitor()
     visitor.visit(ast.parse(path.read_text(encoding="utf-8")))
@@ -189,7 +189,7 @@ def test_router_does_not_reference_exception_outside_logging(path: Path) -> None
 
 @pytest.mark.parametrize("path", _exposure_modules(), ids=lambda p: p.name)
 def test_router_does_not_import_traceback(path: Path) -> None:
-    """Router がスタックトレースを文字列化する経路を持たないこと。"""
+    """Routers have no path that stringifies a stack trace."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported = {
         alias.name.split(".")[0]
@@ -216,14 +216,14 @@ def test_router_does_not_import_traceback(path: Path) -> None:
 
 
 def test_baseline_has_no_stale_modules() -> None:
-    """_BASELINE に存在しないモジュール名が残っていないこと。"""
+    """No module name that is absent from _BASELINE remains."""
     known = {p.name for p in _exposure_modules()}
     assert not set(_BASELINE) - known
     assert not _TRACEBACK_BASELINE - known
 
 
 class TestVisitorItself:
-    """検査ロジック自体の妥当性。"""
+    """The checking logic itself is sound."""
 
     @staticmethod
     def _scan(source: str) -> _ExposureVisitor:
@@ -257,7 +257,7 @@ def handler():
         assert visitor.offending_scopes == {"handler"}
 
     def test_attribute_access_is_flagged(self):
-        """FileUploadError.user_message のようなプロパティ経由の漏出。"""
+        """A leak through a property such as FileUploadError.user_message."""
         visitor = self._scan("""
 def handler():
     try:
@@ -278,7 +278,7 @@ def handler():
         assert visitor.offending_scopes == {"handler"}
 
     def test_helper_function_call_is_flagged(self):
-        """Router内ヘルパーへの委譲も漏出経路として検出する。"""
+        """Delegation to a helper inside a router is also detected as a leak path."""
         visitor = self._scan("""
 def handler():
     try:
@@ -302,37 +302,38 @@ def outer():
 
 
 class TestRequestValidationErrorHandling:
-    """422（RequestValidationError）がカタログ相当の文言を返すことの検査。
+    """A 422 (RequestValidationError) returns catalog-equivalent text.
 
-    Form(...) の必須パラメータ欠落などは FastAPI/Pydantic が Router に入る前に
-    検出するため、上のAST検査（`except ... as e` を対象とする）では捕捉できない
-    経路である。グローバルハンドラで塞いでいることを実リクエストで検証する。
+    A missing required Form(...) parameter and the like is detected by
+    FastAPI/Pydantic before reaching a router, so the AST check above (which
+    targets `except ... as e`) cannot catch it. Verify with real requests that
+    the global handler covers this path.
     """
 
     def test_htmx_request_gets_toast_not_partial(self, client):
-        """htmx 経路ではトーストで通知し、本文を返さないこと。
+        """On the htmx path, notify with a toast and return no body.
 
-        このハンドラは全フォーム共通で発火元の hx-target を知らない。
-        パーシャルHTMLを返すとペルソナ編集などで本体コンテナへスワップされ、
-        フォームと入力値が消える（#117 原因B）。DOMを書き換えず入力を保持
-        できるトーストにする。
+        This handler is shared by all forms and does not know the originating
+        hx-target. Returning partial HTML would be swapped into the main container
+        (e.g. persona edit) and wipe the form and its input. Use a toast, which
+        keeps the input and leaves the DOM alone.
         """
         response = client.put(
             "/persona/some-id", data={"age": "30"}, headers={"HX-Request": "true"}
         )
 
         assert response.status_code == 422
-        # 本文は返さない（スワップされる本文が存在しない）
+        # No body is returned (there is no body to swap in)
         assert response.text == ""
-        # 文言は HX-Trigger のトーストで届く
+        # The message arrives as an HX-Trigger toast
         payload = json.loads(response.headers["HX-Trigger"])
         assert "入力内容を確認してください" in payload["showToast"]["message"]
 
     def test_json_client_response_is_not_a_toast(self, test_app, login_as):
-        """JSON APIクライアント向けには標準422応答（JSON本文）を維持する。
+        """JSON API clients keep the standard 422 response (JSON body).
 
-        `client` フィクスチャは HX-Request を常に付けるため、ここでは付けない
-        ログイン済みのクライアントを用意する（CSRFは X-Requested-With で通す）。
+        The `client` fixture always sends HX-Request, so prepare a logged-in client
+        that does not (CSRF passes via X-Requested-With).
         """
         from fastapi.testclient import TestClient
 
@@ -347,7 +348,7 @@ class TestRequestValidationErrorHandling:
         assert "HX-Trigger" not in response.headers
 
     def test_htmx_response_does_not_echo_user_input(self, client):
-        """`exc.errors()` の `input` に載る利用者入力を転写しないこと。"""
+        """User input carried in `input` of `exc.errors()` is not echoed."""
         payload = "<img src=x onerror=alert(1)>"
         response = client.put(
             "/persona/some-id",
@@ -356,13 +357,13 @@ class TestRequestValidationErrorHandling:
         )
 
         assert response.status_code == 422
-        # 本文にもヘッダー（トースト文言）にも利用者入力を載せない
+        # No user input appears in either the body or the header (toast text)
         assert payload not in response.text
         assert payload not in response.headers.get("HX-Trigger", "")
         assert "onerror" not in response.headers.get("HX-Trigger", "")
 
     def test_htmx_response_does_not_expose_validation_internals(self, client):
-        """Pydanticの内部表現（type/loc/msg）を本文にもヘッダーにも出さないこと。"""
+        """Pydantic's internal representation (type/loc/msg) appears in neither the body nor the header."""
         response = client.put(
             "/persona/some-id", data={}, headers={"HX-Request": "true"}
         )
@@ -383,28 +384,28 @@ class TestRequestValidationErrorHandling:
         ],
     )
     def test_form_endpoints_across_routers(self, client, method, path, data):
-        """Form(...) を使う各Routerで一貫してトースト文言が返ること。"""
+        """Every router that uses Form(...) returns toast text consistently."""
         response = getattr(client, method)(
             path, data=data, headers={"HX-Request": "true"}
         )
 
-        # 422 以外（例: 先にCSRFや別の検証で弾かれる）なら本テストの対象外
+        # Anything other than 422 (e.g. rejected earlier by CSRF or other validation) is out of scope here
         if response.status_code == 422:
-            # HX-Trigger は latin-1 制約で \uXXXX エスケープされるので parse する
+            # HX-Trigger is escaped as \uXXXX because of the latin-1 limit, so parse it
             trigger = response.headers.get("HX-Trigger", "")
             message = json.loads(trigger)["showToast"]["message"] if trigger else ""
             assert "入力内容を確認してください" in message
-            # 内部表現は本文にもヘッダーにも出さない
+            # Internal representations appear in neither the body nor the header
             assert "Field required" not in response.text
             assert "Field required" not in trigger
 
 
 class TestTransientErrorsUseToast:
-    """TRANSIENT は画面を書き換えずトーストで通知すること（#117 ステップ2）。
+    """TRANSIENT notifies with a toast without rewriting the screen.
 
-    VALIDATION と TRANSIENT は同じ Manager 例外型で送出されるため、Router の
-    ``except`` 節は型で区別できない。`ErrorKind` による分岐が実際に効いている
-    ことを実リクエストで検証する。
+    VALIDATION and TRANSIENT are raised as the same Manager exception type, so a
+    router's ``except`` clause cannot tell them apart by type. Verify with real
+    requests that branching on `ErrorKind` actually works.
     """
 
     _FORM = {
@@ -419,12 +420,12 @@ class TestTransientErrorsUseToast:
 
     @staticmethod
     def _manager_raising(exc):
-        """update_persona が `exc` を送出する Manager のモックを返す。
+        """Return a Manager mock whose update_persona raises `exc`.
 
-        Manager クラスではなく Router の `get_*_manager()` を差し替えるのは、
-        実インスタンスの生成（AWS認証を要する）を避けるため。CI には認証情報が
-        ないので、クラスメソッドを patch すると生成時に PersonaStoreError になり
-        意図した経路に到達しない。
+        Replace the router's `get_*_manager()` rather than the Manager class to
+        avoid building a real instance (which needs AWS credentials). CI has no
+        credentials, so patching the class method would raise PersonaStoreError at
+        construction and never reach the intended path.
         """
         manager = Mock()
         manager.update_persona.side_effect = exc
@@ -432,7 +433,7 @@ class TestTransientErrorsUseToast:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_transient_returns_empty_body_with_toast(self, mock_get_manager, client):
-        """入力フォームを消さないため本文を返さない。"""
+        """No body is returned, so the input form is not wiped."""
         mock_get_manager.return_value = self._manager_raising(
             PersonaManagerError(
                 "persona update failed (PersonaStoreError)",
@@ -448,7 +449,7 @@ class TestTransientErrorsUseToast:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_validation_still_returns_partial_html(self, mock_get_manager, client):
-        """入力を直せば解決するものは本文で返す（トーストにしない）。"""
+        """Errors fixed by correcting the input return a body (not a toast)."""
         mock_get_manager.return_value = self._manager_raising(
             PersonaManagerError(
                 "name is blank",
@@ -461,7 +462,7 @@ class TestTransientErrorsUseToast:
 
         assert "HX-Trigger" not in response.headers
         assert "ペルソナ名が設定されていません" in response.text
-        # 本文を返す以上、htmx がスワップできる印が必要
+        # Since a body is returned, a mark that lets htmx swap it is required
         assert response.headers.get("X-Render-Response") == "true"
 
     @patch("web.routers.persona.get_persona_manager")
@@ -485,10 +486,11 @@ class TestTransientErrorsUseToast:
 
     @patch("web.routers.survey.get_execution_manager")
     def test_survey_create_transient_returns_toast(self, mock_get_manager, client):
-        """件数取得のS3/DuckDB障害（TRANSIENT）はトーストで通知し入力を保持する。
+        """An S3/DuckDB failure while counting (TRANSIENT) notifies with a toast and keeps the input.
 
-        緩めるフィルタが無い状態でインラインエラーに置換すると、再試行で直る
-        のに設定をやり直させることになる（Issue #118）。
+        Replacing the screen with an inline error when there is no filter to loosen
+        would make the user redo the settings even though a retry would work
+        (Issue #118).
         """
         from src.managers.survey_execution_manager import SurveyExecutionError
 
@@ -503,14 +505,14 @@ class TestTransientErrorsUseToast:
             "/survey/execute", data=self._SURVEY_FORM, headers={"HX-Request": "true"}
         )
 
-        # 本文を返さず HX-Trigger でトースト通知（画面を書き換えない）
+        # No body; notify with an HX-Trigger toast (the screen is not rewritten)
         assert response.text == ""
         payload = json.loads(response.headers["HX-Trigger"])
         assert "showToast" in payload
 
     @patch("web.routers.survey.get_execution_manager")
     def test_survey_create_config_error_stays_inline(self, mock_get_manager, client):
-        """CONFIG（データセット未DL等）は領域置換で案内する（トーストにしない）。"""
+        """CONFIG (e.g. dataset not downloaded) is explained by replacing the region (no toast)."""
         from src.managers.survey_execution_manager import (
             SurveyExecutionManagerError,
         )
@@ -531,7 +533,7 @@ class TestTransientErrorsUseToast:
 
     @patch("web.routers.survey.get_execution_manager")
     def test_survey_create_transient_does_not_leak(self, mock_get_manager, client):
-        """トースト経路でも例外文（S3パス等）を漏らさない。"""
+        """The toast path also does not leak exception text (such as S3 paths)."""
         from src.managers.survey_execution_manager import SurveyExecutionError
 
         secret = "s3://prod-bucket/secret.parquet"
@@ -550,21 +552,22 @@ class TestTransientErrorsUseToast:
 
 
 class TestGenericExceptionsDoNotReplaceContent:
-    """変更系の `except Exception` がエラーパーシャルを返さないこと（#117 ステップ2）。
+    """A mutating `except Exception` does not return an error partial.
 
-    コードを持たない未知の例外は `ErrorKind.TRANSIENT` に落ちる。これを本文で
-    返すと `hx-target`（本体コンテンツや一覧）がエラー表示に置換され、利用者の
-    入力・選択がすべて失われる。加えて htmx 1.9.10 は非2xx本文をスワップしない
-    ため、置換されないかわりに**文言そのものが画面に届かない**。どちらの結末も
-    不適切なので、変更系（POST/PUT/DELETE）の総称ハンドラは `toast_response()`
-    を使う。
+    An unknown exception without a code falls to `ErrorKind.TRANSIENT`. Returning
+    it as a body would replace the `hx-target` (main content or list) with the
+    error display and lose all of the user's input and selections. Also, htmx
+    1.9.10 does not swap non-2xx bodies, so instead of being replaced **the text
+    itself never reaches the screen**. Both outcomes are bad, so the generic
+    handler of mutating requests (POST/PUT/DELETE) uses `toast_response()`.
 
-    AST で機械的に検査するのは、Router を追加した際に同じ失敗が再発するのを
-    防ぐため（`_ExposureVisitor` と同じ「構造で保証する」方針）。
+    The AST check exists to prevent the same failure from recurring when a
+    router is added (the same "guarantee by structure" approach as
+    `_ExposureVisitor`).
     """
 
-    #: 2xx で返しているものは htmx がスワップするので文言は届く。置換の是非は
-    #: 別の設計判断なので、この検査の対象は「届かない」非2xx に限る。
+    #: Responses returned as 2xx are swapped by htmx, so the message arrives. Whether to replace them
+    #: is a separate design decision, so this check covers only non-2xx responses, which do not arrive.
     _MUTATING = frozenset({"post", "put", "delete", "patch"})
 
     def _violations(self) -> list[str]:
@@ -632,7 +635,7 @@ class TestGenericExceptionsDoNotReplaceContent:
         )
 
     def test_visitor_detects_a_reintroduced_partial(self, tmp_path):
-        """検査が実際に機能することを確認する（常に空を返していないこと）。"""
+        """Confirm the check actually works (it does not always return empty)."""
         module = tmp_path / "leaky.py"
         module.write_text(
             "@router.post('/x')\n"
@@ -652,31 +655,31 @@ class TestGenericExceptionsDoNotReplaceContent:
 
 
 class TestErrorPartialsReachTheScreen:
-    """非2xxで返すエラーパーシャルが画面に届くこと（#117 ステップ3）。
+    """Error partials returned with a non-2xx status reach the screen.
 
-    htmx 1.9.10 は ``status>=200 && status<400 && status!==204`` 以外の本文を
-    スワップしない。したがって 4xx/5xx でエラーパーシャルを返しても、文言は
-    生成されているのにDOMへ反映されず、`app.js` の汎用フォールバック
-    （「エラーが発生しました。再度お試しください。」）だけが表示される。
-    #112 で84件の文言カタログを整備したにもかかわらず、その半数が画面に
-    到達していなかった原因がこれである。
+    htmx 1.9.10 does not swap bodies unless ``status>=200 && status<400 &&
+    status!==204``. So even if a 4xx/5xx error partial is returned, the text is
+    generated but never applied to the DOM, and only the generic fallback of
+    `app.js` is shown. This is why
+    half of the 84-entry catalog built in #112 never reached the screen.
 
-    サーバーが ``X-Render-Response: true``（``mark_renderable()``）を付けた
-    応答のみクライアントがスワップする。この検査は「非2xxでエラーパーシャルを
-    返すなら印が付いている」ことをASTで保証し、Routerを追加した際に同じ失敗が
-    再発するのを防ぐ。#112 の `str(e)` 露出検査と同じ「構造で保証する」方針。
+    Only responses that the server marks with ``X-Render-Response: true``
+    (``mark_renderable()``) are swapped by the client. This check guarantees via
+    the AST that an error partial returned with non-2xx carries the mark, so the
+    same failure does not recur when a router is added (the same "guarantee by
+    structure" approach as the `str(e)` exposure check of #112).
 
-    ステータスコードで一律にスワップを許可しない理由は Issue #117 の原因B
-    （汎用パーシャルが本体コンテンツを置換してフォームごと消える）を参照。
+    For why swapping is not allowed by status code alone, see the cause in Issue
+    #117 (a generic partial replaces the main content and wipes the whole form).
     """
 
     def _unreachable(self, modules: list[Path] | None = None) -> list[str]:
-        """非2xxで返すエラーパーシャルのうち、印が付いていない箇所を集める。"""
+        """Collect the non-2xx error partials that lack the mark."""
         found = []
         for path in modules if modules is not None else _router_modules():
             tree = ast.parse(path.read_text(encoding="utf-8"))
 
-            # mark_renderable(...) の引数として渡されている呼び出しの位置
+            # Position of calls passed as the argument of mark_renderable(...)
             marked = {
                 (arg.lineno, arg.col_offset)
                 for node in ast.walk(tree)
@@ -714,7 +717,7 @@ class TestErrorPartialsReachTheScreen:
                     ),
                     200,
                 )
-                # 2xx は htmx がそのままスワップするので印は不要
+                # 2xx is swapped by htmx as is, so no mark is needed
                 if 200 <= status < 300:
                     continue
                 if (node.lineno, node.col_offset) in marked:
@@ -730,7 +733,7 @@ class TestErrorPartialsReachTheScreen:
         )
 
     def test_check_detects_an_unmarked_partial(self, tmp_path):
-        """検査が実際に機能することを確認する（常に空を返していないこと）。"""
+        """Confirm the check actually works (it does not always return empty)."""
         module = tmp_path / "unmarked.py"
         module.write_text(
             "async def handler(request):\n"
@@ -753,7 +756,7 @@ class TestErrorPartialsReachTheScreen:
         assert self._unreachable([module]) == []
 
     def test_2xx_partial_needs_no_mark(self, tmp_path):
-        """2xx は htmx がスワップするので印を強制しない。"""
+        """2xx is swapped by htmx, so the mark is not enforced."""
         module = tmp_path / "ok.py"
         module.write_text(
             "async def handler(request):\n"
@@ -765,17 +768,17 @@ class TestErrorPartialsReachTheScreen:
 
 
 class TestErrorTemplatesAreConsolidated:
-    """エラー表示テンプレートが統合された状態を保つこと（#117 ステップ5）。
+    """Keep the error display templates consolidated.
 
-    以前は5種に分裂し、変数名も `error` と `message` が混在していた。
-    Router が「どれを返すか」を個別に判断する根拠がなく、`message` を
-    渡しているのに `{{ error }}` を描画するテンプレート（settings.py の
-    7箇所）では**エラー枠が空で表示される**バグも生じていた。
+    They used to be split into five kinds, with `error` and `message` variable
+    names mixed. Routers had no basis for choosing one individually, and
+    templates that render `{{ error }}` while receiving `message` (seven places
+    in settings.py) **showed an empty error box**.
     """
 
     _TEMPLATES_DIR = Path(__file__).parent.parent.parent / "web" / "templates"
 
-    #: 統合で廃止したテンプレート。復活したら気づけるようにする
+    #: Templates removed in the consolidation. Notice if one comes back.
     _REMOVED = (
         "partials/error.html",
         "survey/partials/error_message.html",
@@ -804,7 +807,7 @@ class TestErrorTemplatesAreConsolidated:
         assert offenders == [], offenders
 
     def test_error_partials_use_the_error_variable(self):
-        """変数名が `error` に統一されていること（`message` 混在の再発防止）。"""
+        """The variable name is unified to `error` (prevents `message` creeping back)."""
         for name in ("partials/error_inline.html", "partials/error_banner.html"):
             body = (self._TEMPLATES_DIR / name).read_text(encoding="utf-8")
             assert "{{ error }}" in body, f"{name} が error を描画していない"
@@ -812,7 +815,7 @@ class TestErrorTemplatesAreConsolidated:
 
     @staticmethod
     def _render(name: str, **ctx: object) -> str:
-        """テンプレートを実際に描画する（注釈ではなく出力を検証するため）。"""
+        """Render the template for real (to verify the output, not annotations)."""
         from jinja2 import Environment, FileSystemLoader
 
         env = Environment(
@@ -823,9 +826,9 @@ class TestErrorTemplatesAreConsolidated:
         return env.get_template(name).render(**ctx)
 
     def test_inline_template_has_no_reload_prompt(self):
-        """入力を直せば解決するエラーで「更新」を促してはならない。
+        """An error fixed by correcting the input must not prompt "refresh".
 
-        更新すると直そうとしている入力が破棄されるため。
+        Refreshing discards the input the user is trying to fix.
         """
         out = self._render("partials/error_inline.html", error="入力が長すぎます")
 
@@ -834,14 +837,14 @@ class TestErrorTemplatesAreConsolidated:
         assert "ページを更新" not in out
 
     def test_banner_template_offers_recovery(self):
-        """領域置換型は再試行の導線を持つこと。"""
+        """A region-replacing error offers a way to retry."""
         out = self._render("partials/error_banner.html", error="見つかりません")
 
         assert "見つかりません" in out
         assert "location.reload" in out
 
     def test_banner_template_can_show_a_back_link(self):
-        """NOT_FOUND では復帰リンクを出せること。"""
+        """NOT_FOUND can show a return link."""
         out = self._render(
             "partials/error_banner.html",
             error="ペルソナが見つかりません",
@@ -853,10 +856,10 @@ class TestErrorTemplatesAreConsolidated:
         assert "ペルソナ一覧へ" in out
 
     def test_dom_coupled_templates_keep_their_contracts(self):
-        """DOM契約を持つ2種は統合せず、契約を維持していること。
+        """The two kinds with a DOM contract are not merged, and the contract is kept.
 
-        htmx のスワップ先IDや領域クリアの契約を共通テンプレートへ寄せると
-        差し替えが壊れるため、外側は各テンプレートに残す設計にしている。
+        Moving the htmx swap-target ID and region-clearing contract into a shared
+        template would break replacement, so the outer part stays in each template.
         """
         deleted = self._render(
             "persona/partials/memory_delete_error.html",
@@ -874,10 +877,10 @@ class TestErrorTemplatesAreConsolidated:
 
 
 class TestHtmxHandlersAreNotDuplicated:
-    """htmx ハンドラが二重登録されていないこと（#117 ステップ5）。
+    """htmx handlers are not registered twice.
 
-    base.html と app.js の両方に afterSwap / beforeRequest / afterRequest を
-    登録していたため、fade-in が二重に適用されていた。
+    afterSwap / beforeRequest / afterRequest were registered in both base.html
+    and app.js, so the fade-in was applied twice.
     """
 
     def test_base_html_does_not_register_htmx_handlers(self):
@@ -897,12 +900,12 @@ class TestHtmxHandlersAreNotDuplicated:
 
 
 class TestHttpExceptionRendersHtmlPage:
-    """`HTTPException` をブラウザに生JSONで返さないこと（#117）。
+    """`HTTPException` is not returned to the browser as raw JSON.
 
-    フルページ表示のエンドポイント（`GET /persona/{id}` 等）が
-    `raise HTTPException(404, ...)` すると、FastAPI の既定ハンドラが
-    `{"detail": "..."}` を返し**生のJSONがブラウザに表示される**。
-    NOT_FOUND の表示（文言 + 復帰リンク）がこの経路だけ抜けていた。
+    When a full-page endpoint (`GET /persona/{id}` etc.) does
+    `raise HTTPException(404, ...)`, FastAPI's default handler returns
+    `{"detail": "..."}` and **raw JSON is shown in the browser**. Only this path
+    missed the NOT_FOUND display (text plus a return link).
     """
 
     _BROWSER = {"accept": "text/html,application/xhtml+xml"}
@@ -912,7 +915,7 @@ class TestHttpExceptionRendersHtmlPage:
         from fastapi.testclient import TestClient
 
         mgr = Mock()
-        # 読めない・存在しないペルソナ（U4 から詳細は判定を通す）
+        # A persona that cannot be read or does not exist (detail goes through the access decision)
         mgr.get_persona_detail.side_effect = CodedError(
             "not readable", code=ErrorCode.PERSONA_NOT_FOUND
         )
@@ -924,10 +927,10 @@ class TestHttpExceptionRendersHtmlPage:
 
         assert response.status_code == 404
         assert "text/html" in response.headers["content-type"]
-        # 生のJSONを返していないこと
+        # Raw JSON is not returned
         assert not response.text.strip().startswith("{")
         assert '"detail"' not in response.text
-        # 理由を区別しない 1 つの画面（M11）と復帰リンクが出ること。資源別の文言は出さない
+        # A single screen that does not distinguish the reason, plus a return link. No per-resource wording.
         assert "<h1" in response.text and "ページが見つかりません" in response.text
         assert "ペルソナが見つかりません" not in response.text
         assert 'href="/persona/management"' in response.text
@@ -938,7 +941,7 @@ class TestHttpExceptionRendersHtmlPage:
 
         from src.models.errors import CodedError, ErrorCode
 
-        # U6: 読めない・存在しない議論は Manager が DISCUSSION_NOT_FOUND を送出する
+        # The Manager raises DISCUSSION_NOT_FOUND for a discussion that cannot be read or does not exist
         mgr = Mock()
         mgr.get_discussion.side_effect = CodedError(
             "discussion not found", code=ErrorCode.DISCUSSION_NOT_FOUND
@@ -956,18 +959,18 @@ class TestHttpExceptionRendersHtmlPage:
         assert 'href="/discussion/results"' in response.text
 
     def test_json_api_keeps_json_response(self, test_app, login_as):
-        """`/api/*` はJSONクライアント向けなので既定の挙動を維持する。"""
+        """`/api/*` is for JSON clients, so the default behavior is kept."""
         from fastapi.testclient import TestClient
 
         with TestClient(test_app, follow_redirects=False) as browser:
             login_as(browser)
-            # Accept に text/html を含めてもJSONを返すこと
+            # JSON is returned even when Accept includes text/html
             response = browser.get("/api/personas/nope", headers=self._BROWSER)
 
         assert "application/json" in response.headers["content-type"]
 
     def test_htmx_request_is_not_given_a_full_page(self, test_app, login_as):
-        """htmx 経路はパーシャルを返す設計なので、フルページに差し替えない。"""
+        """The htmx path returns a partial by design, so it is not replaced with a full page."""
         from fastapi.testclient import TestClient
 
         with TestClient(test_app, follow_redirects=False) as hx:
@@ -977,11 +980,11 @@ class TestHttpExceptionRendersHtmlPage:
                 headers={"HX-Request": "true", **self._BROWSER},
             )
 
-        # base.html を継承したフルページ（ナビ・フッター）を返していないこと
+        # A full page extending base.html (nav, footer) is not returned
         assert "<footer" not in response.text
 
     def test_error_page_does_not_leak_exception_details(self, test_app, login_as):
-        """内部エラー（500）で例外の内容を画面に出さないこと。"""
+        """An internal error (500) does not show exception content on screen."""
         from fastapi.testclient import TestClient
 
         secret = "arn:aws:dynamodb:ap-northeast-1:999999999999:table/prod"
@@ -999,11 +1002,11 @@ class TestHttpExceptionRendersHtmlPage:
 
 
 class TestToastIsVisibleRegardlessOfScroll:
-    """トーストが画面右上に固定表示されること（#117）。
+    """The toast is pinned to the top right of the screen.
 
-    TRANSIENT と 422 はトーストが唯一の通知手段なので、スクロール位置に
-    依存せず必ず見える必要がある。従来は `main` の先頭にインライン挿入して
-    いたため、長いフォームを下にスクロールした状態では視認できなかった。
+    For TRANSIENT and 422 the toast is the only notification, so it must be
+    visible regardless of scroll position. It used to be inserted inline at the
+    top of `main`, so it was not visible when a long form was scrolled down.
     """
 
     _ROOT = Path(__file__).parent.parent.parent
@@ -1012,7 +1015,7 @@ class TestToastIsVisibleRegardlessOfScroll:
         base = (self._ROOT / "web" / "templates" / "base.html").read_text(
             encoding="utf-8"
         )
-        # id="flash-messages" を含む要素のクラスを取り出す
+        # Extract the class of the element that contains id="flash-messages"
         import re
 
         m = re.search(r'id="flash-messages"[^>]*', base, re.DOTALL)
@@ -1020,16 +1023,16 @@ class TestToastIsVisibleRegardlessOfScroll:
         tag = m.group(0)
         for cls in ("fixed", "z-toast"):
             assert cls in tag, f"{cls} が無い（スクロールで見えなくなる）"
-        # 読み上げ領域は種類ごとの 2 つの入れ物（U3 WF4）。外側には重ねない
+        # The live region is two containers, one per kind. Do not nest them.
         assert "aria-live" not in tag, "外側の aria-live は二重の読み上げになる"
         assert re.search(r'id="toast-status"[^>]*role="status"', base)
         assert re.search(r'id="toast-alert"[^>]*role="alert"', base)
 
     def test_required_classes_exist_in_built_css(self):
-        """ビルド済みCSSに必要なユーティリティが含まれていること。
+        """The built CSS contains the needed utilities.
 
-        `web/static/css/tailwind.css` はビルド成果物をコミットしているため、
-        テンプレート側でクラスを足しても再ビルドを忘れると効かない。
+        `web/static/css/tailwind.css` is a committed build artifact, so adding a
+        class in a template has no effect if the rebuild is forgotten.
         """
         import re
 
@@ -1055,9 +1058,9 @@ class TestToastIsVisibleRegardlessOfScroll:
         )
 
     def test_toast_element_accepts_clicks(self):
-        """コンテナは pointer-events-none なので、トースト自身で戻すこと。
+        """The container is pointer-events-none, so restore it on the toast itself.
 
-        戻さないと閉じるボタンが押せない。
+        Otherwise the close button cannot be clicked.
         """
         app_js = (self._ROOT / "web" / "static" / "js" / "app.js").read_text(
             encoding="utf-8"
@@ -1067,25 +1070,25 @@ class TestToastIsVisibleRegardlessOfScroll:
 
 @pytest.mark.api
 class TestPersistedFailuresDoNotLeak:
-    """永続化した失敗理由が例外文でないこと（Issue #118）。
+    """The persisted failure reason is not exception text (Issue #118).
 
-    アンケートの実行は進行役（Web タスクのバックグラウンド）が進めるため、失敗は
-    起点となったリクエストには返らない。理由はDBに保存され、後続のGETで別の
-    リクエストとして描画される。したがって Router の `except` を検査する
-    `test_router_does_not_reference_exception_outside_logging` では捕捉できず、
-    `str(e)` を保存すると S3 パス・ロールARN・botocore の例外文がそのまま
-    画面に出る経路になる。
+    A survey run is driven by the runner (a web background task), so a failure
+    is not returned to the originating request. The reason is saved in the DB
+    and rendered by a later GET as a separate request. A router `except` check
+    such as `test_router_does_not_reference_exception_outside_logging` cannot
+    catch it, and saving `str(e)` would put S3 paths, role ARNs and botocore
+    exception text straight on screen.
 
-    ここではモデル側とテンプレート側の両方を機械的に検査する。
+    Check both the model side and the template side mechanically.
     """
 
     _ROOT = Path(__file__).parent.parent.parent
 
-    #: 例外文を保存していた（廃止した）フィールド名。
+    #: Field names that used to store exception text (now removed).
     _LEAKY_FIELD = "error_message"
 
     def test_survey_model_has_no_message_field(self):
-        """`Survey` が例外文の保存先を持たないこと。"""
+        """`Survey` has no place to store exception text."""
         from src.models.survey import Survey
 
         fields = {f.name for f in dataclasses.fields(Survey)}
@@ -1096,7 +1099,7 @@ class TestPersistedFailuresDoNotLeak:
         assert {"error_code", "error_context"} <= fields
 
     def test_job_model_keeps_a_code_not_the_text(self):
-        """U6 BR8.3: `Job` は失敗を `error_code` で持ち、例外文の保存先を持たないこと。"""
+        """`Job` keeps a failure as `error_code` and has no place to store exception text."""
         from src.models.job import Job
 
         fields = {f.name for f in dataclasses.fields(Job)}
@@ -1104,7 +1107,7 @@ class TestPersistedFailuresDoNotLeak:
         assert "error" not in fields and self._LEAKY_FIELD not in fields
 
     def test_job_manager_saves_the_code(self):
-        """`JobManager` が失敗の保存に例外文（str(e)）を渡していないこと。"""
+        """`JobManager` does not pass exception text (str(e)) when saving a failure."""
         path = self._ROOT / "src" / "managers" / "job_manager.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
         calls = [
@@ -1119,7 +1122,7 @@ class TestPersistedFailuresDoNotLeak:
             assert not any(_stringifies_something(arg) for arg in call.args)
 
     def test_old_job_records_drop_the_text(self):
-        """旧レコードの `error`（例外文）は読み出しで捨て、コードだけにすること。"""
+        """The `error` (exception text) of an old record is dropped on read, leaving only the code."""
         from src.models.job import Job
 
         job = Job.from_dict(
@@ -1135,7 +1138,7 @@ class TestPersistedFailuresDoNotLeak:
         assert "secret" not in repr(job)
 
     def test_managers_do_not_store_exception_text(self):
-        """Manager層が例外文をモデルのフィールドへ代入していないこと。"""
+        """The Manager layer does not assign exception text to a model field."""
         offenders: list[str] = []
         managers = self._ROOT / "src" / "managers"
         for path in sorted(managers.rglob("*.py")):
@@ -1143,7 +1146,7 @@ class TestPersistedFailuresDoNotLeak:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Assign):
                     continue
-                # 右辺が str(...) / f"{e}" のように例外を文字列化しているか
+                # Whether the right-hand side stringifies an exception, e.g. str(...) or f"{e}"
                 if not _stringifies_something(node.value):
                     continue
                 for target in node.targets:
@@ -1159,7 +1162,7 @@ class TestPersistedFailuresDoNotLeak:
         )
 
     def test_templates_do_not_render_stored_exception_text(self):
-        """テンプレートが `*.error_message` を描画していないこと。"""
+        """Templates do not render `*.error_message`."""
         offenders: list[str] = []
         for path in sorted((self._ROOT / "web" / "templates").rglob("*.html")):
             src = path.read_text(encoding="utf-8")
@@ -1172,7 +1175,7 @@ class TestPersistedFailuresDoNotLeak:
         )
 
     def test_stored_code_resolves_to_catalog_wording(self):
-        """保存形式（文字列）から文言が解決できること。"""
+        """Text can be resolved from the stored form (a string)."""
         from web.error_messages import FALLBACK_MESSAGE, user_message_for_code
 
         message = user_message_for_code(
@@ -1183,14 +1186,14 @@ class TestPersistedFailuresDoNotLeak:
         assert "30" in message and "100" in message
 
     def test_unknown_stored_code_falls_back(self):
-        """別リビジョンが書いたコードでも生テキストが出ないこと。"""
+        """No raw text appears even for a code written by another revision."""
         from web.error_messages import FALLBACK_MESSAGE, user_message_for_code
 
         assert user_message_for_code("code_from_the_future") == FALLBACK_MESSAGE
         assert user_message_for_code(None) == FALLBACK_MESSAGE
 
     def test_legacy_records_discard_stored_message(self):
-        """#118 以前のレコードを読んでも例外文が復活しないこと。"""
+        """Reading records from before #118 does not bring exception text back."""
         from src.models.survey import Survey
 
         survey = Survey.from_dict(
@@ -1211,9 +1214,9 @@ class TestPersistedFailuresDoNotLeak:
 
 
 class TestAuthErrorBodies:
-    """v1.0.0 U1 のログインのエラー（401・403・503）の本文に内部の値が出ないこと。
+    """The body of login errors (401, 403, 503) shows no internal values.
 
-    本文は {detail, error_code} だけで、detail はカタログの文言（約束 C5、C12）。
+    The body is only {detail, error_code}, and detail is catalog text.
     """
 
     _ALLOWED_KEYS = {"detail", "error_code"}
@@ -1270,11 +1273,11 @@ class TestAuthErrorBodies:
 
 
 class TestAuthzErrorBodies:
-    """v1.0.0 U2 のコードの API の本文に、内部の値・例外文・ID が出ないこと（NFR3.6）。
+    """The body of the code API shows no internal values, exception text or IDs.
 
-    本文は {detail, error_code} だけで、detail はカタログの文言（約束 C5、C13）。
-    ACCESS_DENIED の状態コードと本文は ``tests/api/test_exception_handlers.py`` が
-    種類ごとに確かめる。
+    The body is only {detail, error_code}, and detail is catalog text.
+    The ACCESS_DENIED status code and body are checked per kind by
+    ``tests/api/test_exception_handlers.py``.
     """
 
     _ALLOWED_KEYS = {"detail", "error_code"}
@@ -1385,7 +1388,7 @@ class TestAuthzErrorBodies:
 
 
 def _stringifies_something(node: ast.AST) -> bool:
-    """`str(...)` または f-string による文字列化か。"""
+    """Whether this is stringification via `str(...)` or an f-string."""
     if isinstance(node, ast.JoinedStr):
         return any(isinstance(v, ast.FormattedValue) for v in node.values)
     return (

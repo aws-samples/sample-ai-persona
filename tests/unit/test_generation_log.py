@@ -29,7 +29,7 @@ SAMPLE_CONTEXT = {
 
 
 class TestPersonaGenerationLogModel:
-    """Persona モデルの generation_log / generation_context テスト"""
+    """Persona model generation_log / generation_context tests."""
 
     def test_create_new_defaults_to_none(self):
         persona = Persona.create_new(
@@ -75,7 +75,7 @@ class TestPersonaGenerationLogModel:
         assert d["generation_context"] == SAMPLE_CONTEXT
 
     def test_from_dict_without_log_fields(self):
-        """既存ペルソナ（フィールドなし）からの復元"""
+        """Restoring from an existing persona (no such fields)."""
         d = {
             "id": "test-id",
             "name": "テスト",
@@ -110,7 +110,7 @@ class TestPersonaGenerationLogModel:
 
 
 class TestPersonaStoreGenerationLog:
-    """PersonaStore が書く項目・読み戻す値での generation_log のテスト"""
+    """generation_log tests using the fields PersonaStore writes and the values it reads back."""
 
     @staticmethod
     def _written(persona: Persona) -> dict:
@@ -169,7 +169,7 @@ class TestPersonaStoreGenerationLog:
 
 
 class TestAdvancedDocumentLogFields:
-    """U4 NFR6.13, NFR6.14, NFR7.3: the document events keep counts only."""
+    """The document events keep counts only."""
 
     def test_document_events_drop_names_and_text(self, capsys) -> None:
         from src.managers.shared.advanced_generation_log import log_advanced_event
@@ -218,7 +218,7 @@ class TestAdvancedDocumentLogFields:
 
 
 class TestAdvancedControlLogFields:
-    """U5 NFR6.16〜NFR6.18, NFR3.29, NFR3.30: no instruction text, no session ID."""
+    """No instruction text, no session ID."""
 
     def test_control_events_keep_their_fields_only(self, capsys) -> None:
         from src.managers.shared.advanced_generation_log import log_advanced_event
@@ -279,7 +279,7 @@ class TestAdvancedControlLogFields:
 
 
 class TestAdvancedDetailedAnalysisLogFields:
-    """U6 NFR6.19〜NFR6.21, NFR3.36: counts and codes, never code or output."""
+    """Counts and codes, never code or output."""
 
     _SECRET = {"code": "CODE-SECRET", "stdout": "OUT-SECRET", "error": "ERR-SECRET"}
 

@@ -1,7 +1,7 @@
 """
-ペルソナアイコン画像URLの表示ヘルパー
+Display helper for persona icon image URLs
 
-テンプレートのグローバル関数として登録する純粋な表示ヘルパー（ビジネスロジックなし）。
+A pure display helper registered as a template global function (no business logic).
 """
 
 from pathlib import PurePosixPath

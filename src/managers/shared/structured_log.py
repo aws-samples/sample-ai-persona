@@ -1,9 +1,8 @@
-"""
-Structured auth / access log lines (NFR8.1, NFR8.2, NFR3.3).
+"""Structured auth / access log lines.
 
 Every auth event goes through :func:`log_event`, which writes exactly one JSON
 object per line to standard output (ECS ships stdout to CloudWatch Logs, where
-the metric filters of ``infrastructure-specification.md`` match ``$.event``).
+the metric filters match ``$.event``).
 
 Values whose field name is in :data:`FORBIDDEN_FIELDS` are dropped here, in
 one place, so that tokens, session ids, authorization codes, PKCE verifiers,

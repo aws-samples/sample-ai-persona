@@ -1,9 +1,9 @@
-"""Evaluation of how the analysis picks its method with the real models (U6 NFR9.13).
+"""Evaluation of how the analysis picks its method with the real models.
 
 Not a pass/fail test: four cases run through the running app against the dev
 stack (as ``test_advanced_generation.py``), with the AI detailed analysis on
 and the plan confirmation checked, and what was chosen is printed. The aim is
-three of the four as expected; the result is written into ``code-summary.md``
+three of the four as expected; the result is recorded
 by hand.
 
     uv run pytest tests/e2e/test_method_selection_eval.py -m e2e -s
@@ -15,7 +15,7 @@ Cases (made-up data in ``tests/e2e/data``):
 3. rfm: customers and purchases, "good and drifting customers" -> RFM
 4. no common column: customers and the survey sample -> no join
 
-U6 addendum: a case is as expected when any of these holds (not a word in the
+A case is as expected when any of these holds (not a word in the
 code, which a variable name could hold): the plan's steps hold the expected
 kind (the plan card), the expected playbook was read (the record), or a
 successful AI-written block calls the expected function (read with ``ast``).

@@ -1,39 +1,40 @@
 """
-ペルソナの性別（gender）の許容値と表示名マッピング。
+Allowed gender values and their display-name mapping.
 
-gender は固定の選択肢（3値）の自前 enum。
-バリデーション・テンプレート表示・生成プロンプトから共通参照する。
+gender is a custom enum with a fixed set of choices (three values), shared by
+validation, template display and generation prompts.
 
-国（country）は ISO 3166 ベースで全世界対応するため、外部ライブラリ pycountry を
-ラップした src/services/country_service.py で扱う（Models は標準ライブラリのみに保つ）。
+Country is ISO 3166 based and worldwide, so it is handled by
+src/services/country_service.py, which wraps the pycountry library (Models
+stay standard-library only).
 """
 
 from __future__ import annotations
 
-# 性別の許容値（保存値）と日本語表示名のマッピング
+# Mapping from allowed gender values (as stored) to Japanese display names
 GENDER_LABELS: dict[str, str] = {
     "male": "男性",
     "female": "女性",
     "other": "その他",
 }
 
-# 性別の許容値の集合
+# Set of allowed gender values
 VALID_GENDERS: frozenset[str] = frozenset(GENDER_LABELS.keys())
 
 
 def gender_label(value: str | None) -> str:
-    """性別コードを日本語表示名へ変換する。未知の値はそのまま返す。"""
+    """Convert a gender code to its Japanese display name. Unknown values are returned as is."""
     if not value:
         return ""
     return GENDER_LABELS.get(value, value)
 
 
 def sanitize_gender(value: str | None) -> str | None:
-    """AI生成された性別値を検証し、許容値でなければ None を返す。
+    """Validate an AI-generated gender value and return None if it is not allowed.
 
-    生成プロンプトは固定値を要求するが、LLMが規格外（例: "M"）を返すことが
-    あるため、保存前に正規化する。これによりバッチ生成が1件の不正値で
-    全滅することを防ぐ。
+    The generation prompt asks for fixed values, but the LLM may return
+    something off-spec (e.g. "M"), so the value is normalized before saving.
+    This keeps one invalid value from failing a whole batch generation.
     """
     if value in VALID_GENDERS:
         return value

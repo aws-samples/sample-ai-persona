@@ -1,4 +1,4 @@
-"""Features of a segment come from what the library counted (U6 addendum)."""
+"""Features of a segment come from what the library counted."""
 
 from __future__ import annotations
 

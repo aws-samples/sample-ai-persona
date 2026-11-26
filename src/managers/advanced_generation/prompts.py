@@ -1,9 +1,9 @@
-"""Instructions, prompts and the persona schema of the advanced generation (U1).
+"""Instructions, prompts and the persona schema of the advanced generation.
 
 The prompts depend on the method and the phase (business logic), so they live
 with the Manager (``architecture.md``: the Service only builds the agents and
 wraps the data). Data is never written into these texts: it goes to the
-Service as ``data`` blocks, which it wraps as untrusted (BR5.6).
+Service as ``data`` blocks, which it wraps as untrusted.
 """
 
 from __future__ import annotations
@@ -118,7 +118,7 @@ _METHOD_GUIDE = {
 }
 
 
-#: U6 addendum: how each step runs, in the order the plan lists them.
+#: How each step runs, in the order the plan lists them.
 _STEP_GUIDE: dict[AnalysisStepKind, str] = {
     AnalysisStepKind(method.value): text for method, text in _METHOD_GUIDE.items()
 }
@@ -155,7 +155,7 @@ def planning_prompt(
 ) -> str:
     """The planning request (asked again once when the reason is missing).
 
-    U6 addendum: the guide's step candidates and their reasons are listed
+    The guide's step candidates and their reasons are listed
     (fixed words, never the data).
     """
     prompt = f"作るペルソナの数は {persona_count} 人です。分析の計画を作ってください。"
@@ -171,7 +171,7 @@ def planning_prompt(
     return prompt
 
 
-#: U6 (BR37.2): several tables are named source_1〜source_3.
+#: Several tables are named source_1 to source_3.
 _TABLES_NOTE = (
     "\n表は複数あり、source_1・source_2・source_3 の名前で指します（tables に"
     "行数があります）。analyze_dataset・cluster_segments・profile_dataset には "
@@ -179,7 +179,7 @@ _TABLES_NOTE = (
     "にその表の名前を書いてください。手法の目安は guide_table の表で判断します。"
 )
 
-#: U6 (BR36, BR36.5, BR39): only when run_code is given.
+#: Only when run_code is given.
 _DETAILED_NOTE = (
     "\n値が欠けている人（例: アンケートに答えていない人）の欠損を、平均などで補完して"
     "層の名前や特徴にしないでください。欠けたままにして、その指標の平均から外します。"
@@ -211,7 +211,7 @@ _DETAILED_NOTE = (
 )
 
 
-#: The user-confirmed reading of the tables (U6 addendum); both agents get it.
+#: The user-confirmed reading of the tables; both agents get it.
 READING_NOTE = (
     "\ndata_reading は、利用者が確かめた表の読み取りです。kind が people なら 1 人 1 行、"
     "history なら 1 人に複数行（注文や履歴）の表です。person_id は人を指す列、"
@@ -220,7 +220,7 @@ READING_NOTE = (
 
 
 def analysis_instructions(*, detailed: bool = False, tables: int = 1) -> str:
-    """The analysis agent's instructions, with the U6 notes when they apply."""
+    """The analysis agent's instructions, with the multi-table / run_code notes when they apply."""
     return (
         ANALYSIS_INSTRUCTIONS
         + (_TABLES_NOTE if tables > 1 else "")
@@ -231,9 +231,9 @@ def analysis_instructions(*, detailed: bool = False, tables: int = 1) -> str:
 def analysis_prompt(
     plan: AnalysisPlan, persona_count: int, *, joins: Sequence[JoinPlan] = ()
 ) -> str:
-    """The analysis request for the planned steps (BR5.2〜BR5.4, U6 BR37.4).
+    """The analysis request for the planned steps.
 
-    U6 addendum: a plan of one step is the request of its method as before;
+    A plan of one step is the request of its method as before;
     with more steps each step's guide is listed in order. The join playbook
     is named only when a step is ``join``.
     """
@@ -285,11 +285,11 @@ def synthesis_prompt(
     has_documents: bool = False,
     full_text: bool = False,
 ) -> str:
-    """The synthesis request (exactly ``persona_count`` personas, BR5.5).
+    """The synthesis request (exactly ``persona_count`` personas).
 
-    U4: with documents the request names where the evidence comes from: the
+    With documents the request names where the evidence comes from: the
     whole texts (``full_text``, returned as ``document_evidence``) or the
-    checked evidence list (BR25.3, BR26.3).
+    checked evidence list.
     """
     lines = [f"ペルソナをちょうど {persona_count} 人書いてください。"]
     if has_table:
@@ -328,7 +328,7 @@ def synthesis_prompt(
 
 _QUOTE_HINT = "1 つの引用は 200 字までにしてください。"
 
-#: Added to the planning instructions when documents are used (U4 BR25.3).
+#: Added to the planning instructions when documents are used.
 DOCUMENT_PLANNING_NOTE = (
     '\n文書（source="document" のデータ）や、文書から取り出した根拠の一覧'
     "（document_evidence）が渡されることがあります。表がなく文書だけのときは profile は"
@@ -336,7 +336,7 @@ DOCUMENT_PLANNING_NOTE = (
     "書いてください。"
 )
 
-#: Added to the synthesis instructions when documents are used (U4 BR25.3).
+#: Added to the synthesis instructions when documents are used.
 DOCUMENT_SYNTHESIS_NOTE = (
     "\n\n# 文書の根拠\n"
     "- 文書の発言や記述は、引用（quote）で示された範囲の事実として使い、"
@@ -357,7 +357,7 @@ EVIDENCE_INSTRUCTIONS = (
 
 
 def evidence_prompt(purpose: str, max_items: int, max_quote_chars: int) -> str:
-    """The extraction request for one chunk (BR26.1)."""
+    """The extraction request for one chunk."""
     lines = [
         f"この部分から根拠を最大 {max_items} 件取り出してください。",
         f"1 つの quote は {max_quote_chars} 字までにしてください。",
@@ -380,12 +380,12 @@ ASSIGNMENT_INSTRUCTIONS = (
 
 
 def assignment_prompt() -> str:
-    """The request of the assignment step before the synthesis (BR28.1)."""
+    """The request of the assignment step before the synthesis."""
     return "document_evidence のすべての根拠について、対応する層を選んでください。"
 
 
 class SpeakerAttributeOutput(BaseModel):
-    """One attribute of a speaker written in the document (BR28.1)."""
+    """One attribute of a speaker written in the document."""
 
     name: str = Field(description="属性の名前（例: 年代）")
     value: str = Field(description="文書に書かれた値（例: 30代）")
@@ -407,13 +407,13 @@ class EvidenceItemOutput(BaseModel):
 
 
 class EvidenceExtraction(BaseModel):
-    """What the extraction agent returns for one chunk (BR26.1)."""
+    """What the extraction agent returns for one chunk."""
 
     items: list[EvidenceItemOutput] = Field(default_factory=list)
 
 
 class EvidenceAssignmentItem(BaseModel):
-    """The segment chosen for one piece of document evidence (BR28.1)."""
+    """The segment chosen for one piece of document evidence."""
 
     evidence_id: str
     segment_id: Optional[str] = Field(
@@ -429,7 +429,7 @@ class EvidenceAssignmentOutput(BaseModel):
 
 
 class DocumentEvidenceOutput(BaseModel):
-    """Evidence the full-text synthesis quotes from a document (BR25.3)."""
+    """Evidence the full-text synthesis quotes from a document."""
 
     id: str = Field(description="この根拠の id（evidence_ids から参照する）")
     document_index: int = Field(description="引用した文書の document_index")
@@ -474,7 +474,7 @@ class AdvancedPersonaOutput(BaseModel):
 
 
 class AdvancedPersonaListOutput(BaseModel):
-    """What the synthesis agent returns (U4: and the quoted document evidence)."""
+    """What the synthesis agent returns (and the quoted document evidence)."""
 
     personas: list[AdvancedPersonaOutput]
     document_evidence: list[DocumentEvidenceOutput] = Field(

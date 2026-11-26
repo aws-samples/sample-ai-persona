@@ -1,4 +1,4 @@
-"""エラーコード + 文言カタログ方式の契約テスト（Issue #112）"""
+"""Contract tests for the error code + message catalog."""
 
 import json
 import string
@@ -9,7 +9,7 @@ from src.models.errors import CodedError, ErrorCode, ErrorKind
 from web import error_messages
 from web.error_messages import FALLBACK_MESSAGE, user_message_for
 
-# 補間キーの上位集合。どのテンプレートでも補間が成立するようにまとめて渡す。
+# Superset of interpolation keys, passed together so any template interpolates.
 _SAMPLE_CONTEXT: dict[str, object] = {
     "max_reports": 3,
     "min_length": 5,
@@ -22,7 +22,7 @@ _SAMPLE_CONTEXT: dict[str, object] = {
 
 
 class TestCatalogCoverage:
-    """カタログの網羅性。コード追加時の登録漏れを検知する。"""
+    """Catalog coverage. Detects codes added without registration."""
 
     def test_every_code_has_wording(self):
         missing = [
@@ -54,17 +54,17 @@ class TestCatalogCoverage:
         assert not failed, f"文言に解決できないコード: {failed}"
 
     def test_unknown_is_not_catalogued(self):
-        """UNKNOWN は「コード未設定」を表す番兵であり文言を持たない。"""
+        """UNKNOWN is the sentinel for "no code set" and has no message."""
         assert ErrorCode.UNKNOWN not in error_messages._CATALOG
 
     def test_no_wording_duplication(self):
-        """同一文言が複数コードに割り当てられていないこと（コード分割の妥当性）。"""
+        """No identical message is assigned to several codes (validity of the code split)."""
         wordings = list(error_messages._CATALOG.values())
         assert len(wordings) == len(set(wordings))
 
 
 class TestResolution:
-    """例外 → 文言の解決。"""
+    """Exception to message resolution."""
 
     def test_coded_exception_resolves_to_catalog_wording(self):
         class _Err(CodedError):
@@ -76,7 +76,7 @@ class TestResolution:
         )
 
     def test_code_passed_to_constructor_wins(self):
-        """1つの例外型が複数コードを出すケース（FileUploadError等）。"""
+        """One exception type that emits several codes (FileUploadError etc.)."""
         exc = CodedError("boom", code=ErrorCode.REPORT_CAPACITY_EXCEEDED)
         assert (
             user_message_for(exc)
@@ -108,7 +108,7 @@ class TestResolution:
         assert user_message_for(exc, default="別の文言") != "別の文言"
 
     def test_non_errorcode_code_attribute_falls_back(self):
-        """code 属性に ErrorCode 以外が入っていても文言を返さない。"""
+        """No message is returned when the code attribute is not an ErrorCode."""
 
         class _Weird(Exception):
             code = "generation_capacity_exceeded"
@@ -117,11 +117,11 @@ class TestResolution:
 
 
 class TestInterpolation:
-    """context によるテンプレート補間（i18n拡張の前提）。"""
+    """Template interpolation by context (prerequisite for i18n)."""
 
     @pytest.fixture
     def dummy_code(self, monkeypatch):
-        """カタログにテンプレート付きのダミーコードを注入する。"""
+        """Inject a dummy code with a template into the catalog."""
         code = ErrorCode.REPORT_CAPACITY_EXCEEDED
         monkeypatch.setitem(
             error_messages._CATALOG,
@@ -157,14 +157,14 @@ class TestInterpolation:
         )
 
     def test_context_defaults_to_empty_dict(self):
-        """context 未指定でも属性は存在し、変更しても他インスタンスに影響しない。"""
+        """The attribute exists without context, and changing it does not affect other instances."""
         first, second = CodedError("a"), CodedError("b")
         first.context["x"] = 1
         assert second.context == {}
 
 
 class TestNoMessageLeakage:
-    """例外メッセージがレスポンスに到達しないことの回帰テスト（#111の再発防止）。"""
+    """Regression test that exception messages do not reach the response."""
 
     def test_exception_message_never_appears_in_wording(self):
         secret = "Traceback: bedrock-runtime.ap-northeast-1.amazonaws.com timed out"
@@ -176,7 +176,7 @@ class TestNoMessageLeakage:
         assert secret not in user_message_for(Exception(secret))
 
     def test_context_is_not_dumped_wholesale(self):
-        """補間で使われないcontext値（ID等）が文言に混ざらないこと。"""
+        """Context values not used in interpolation (IDs etc.) do not leak into the message."""
         exc = CodedError(
             "not found",
             code=ErrorCode.GENERATION_CAPACITY_EXCEEDED,
@@ -186,7 +186,7 @@ class TestNoMessageLeakage:
 
 
 class TestJsonErrorResponse:
-    """JSON を読む画面のスクリプト向けのエラーの本文（高度な生成 U1、契約 C1）。"""
+    """Error bodies for scripts of screens that read JSON."""
 
     def test_body_has_the_wording_code_and_kind_only(self):
         secret = "arn:aws:s3:::bucket/sources/owner/file failed"
@@ -240,12 +240,11 @@ class TestJsonErrorResponse:
 
 
 class TestActionableWordingPreserved:
-    """対処方法を含む文言が総称文言に劣化していないことの回帰テスト。
+    """Regression test that messages with remedies do not degrade to generic ones.
 
-    コード未付与の例外は `default` にフォールバックするため、Manager 側で
-    コードを付け忘れると「〜に失敗しました」だけが表示され、ユーザーが
-    次に何をすればよいか分からなくなる。実際に一度その劣化を起こしたため、
-    ユーザーが行動できる文言については解決後の文字列を直接検証する。
+    An exception without a code falls back to `default`, so a Manager that forgets the code
+    shows only "... failed" and the user cannot tell what to do next. This degradation
+    happened once, so messages the user can act on are checked on the resolved string.
     """
 
     def test_report_limit_tells_user_to_delete_one(self):
@@ -302,7 +301,7 @@ class TestActionableWordingPreserved:
         ],
     )
     def test_actionable_codes_never_fall_back_to_default(self, code):
-        """これらのコードは必ずカタログ文言を返し、default に落ちてはならない。"""
+        """These codes always return the catalog message and never fall to default."""
         sentinel = "SENTINEL_GENERIC_FAILURE"
         exc = CodedError("diagnostic detail", code=code, context=_SAMPLE_CONTEXT)
         assert user_message_for(exc, default=sentinel) != sentinel
@@ -313,7 +312,7 @@ def _toast(code: ErrorCode) -> dict[str, str]:
     return json.loads(response.headers["HX-Trigger"])["showToast"]
 
 
-#: 「ページが見つかりません」にそろえるコード（U3 functional-spec.md WF8、約束 C5）
+#: Codes unified to the "page not found" message
 _RESOURCE_NOT_FOUND = {
     ErrorCode.PERSONA_NOT_FOUND,
     ErrorCode.DISCUSSION_NOT_FOUND,
@@ -324,13 +323,13 @@ _RESOURCE_NOT_FOUND = {
     ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
     ErrorCode.DATASET_NOT_FOUND,
     ErrorCode.JOB_NOT_FOUND,
-    # U5: アップロードファイルと KB の紐付け（security-design.md §5）
+    # Upload files and KB bindings
     ErrorCode.FILE_NOT_FOUND,
     ErrorCode.KB_BINDING_NOT_FOUND,
-    # U7: 利用範囲の外のカスタムペルソナデータと、admin だけの設定（NFR1.79）
+    # Custom persona data outside the usage scope, and admin-only settings
     ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
     ErrorCode.SETTINGS_NOT_FOUND,
-    # 高度な生成 U1: 他人のアップロード・ファイル・生成（functional-spec.md §5）
+    # Advanced generation: uploads, files and generations of other users
     ErrorCode.UPLOAD_NOT_FOUND,
     ErrorCode.GENERATION_SOURCE_NOT_FOUND,
     ErrorCode.GENERATION_NOT_FOUND,
@@ -338,7 +337,7 @@ _RESOURCE_NOT_FOUND = {
 
 
 class TestNotFoundToastWording:
-    """NFR1.9: the htmx toast for a missing resource does not reveal its kind."""
+    """The htmx toast for a missing resource does not reveal its kind."""
 
     def test_every_not_found_code_is_classified_exactly_once(self):
         unified = error_messages.UNIFIED_NOT_FOUND_TOAST_CODES
@@ -377,7 +376,7 @@ class TestNotFoundToastWording:
 
 
 class TestSharingWording:
-    """共有のコード（U4）がカタログの文言を返し、上限を補間すること。"""
+    """Shared codes return the catalog message and interpolate the limit."""
 
     def test_target_limit_is_interpolated(self):
         message = user_message_for(
@@ -395,7 +394,7 @@ class TestSharingWording:
 
 
 class TestPersonaU5Wording:
-    """U5 のコードがカタログの文言を返し、上限を補間すること。"""
+    """Upload and KB binding codes return the catalog message and interpolate the limit."""
 
     def test_attach_limit_is_interpolated(self):
         message = user_message_for(
@@ -413,23 +412,23 @@ class TestPersonaU5Wording:
 
 
 class TestDiscussionInterviewWording:
-    """U6 のコードがカタログの文言を返すこと（BR2.7、NFR1.59、NFR1.60）。"""
+    """Discussion and interview session codes return the catalog message."""
 
     def test_concurrent_update_tells_a_reply_is_in_progress(self):
-        """NFR Requirements の決定: 「応答の途中です」の趣旨で、入力を残すトースト。"""
+        """A toast that keeps the input, meaning "a response is in progress"."""
         message = user_message_for(CodedError(code=ErrorCode.CONCURRENT_UPDATE))
         assert "応答の途中" in message
         assert _toast(ErrorCode.CONCURRENT_UPDATE)["type"] == "error"
 
 
 class TestSurveyOrgAssetWording:
-    """U7 のコードがカタログの文言を返すこと（BR3.1、BR4.4、NFR2.25）。"""
+    """Custom persona data codes return the catalog message."""
 
     @pytest.mark.parametrize(
         "name", ["SETTINGS_NOT_FOUND", "CUSTOM_PERSONA_DATA_NOT_FOUND"]
     )
     def test_hidden_and_unusable_toast_like_a_missing_page(self, name):
-        """存在を知らせない（NFR1.79）: トーストは「ページが見つかりません」。"""
+        """Existence is not revealed: the toast says "page not found"."""
         code = ErrorCode[name]
         assert code in error_messages.UNIFIED_NOT_FOUND_TOAST_CODES
         assert _toast(code)["message"] == error_messages.NOT_FOUND_TOAST_MESSAGE
@@ -445,10 +444,10 @@ class TestSurveyOrgAssetWording:
 
 
 class TestClosedNetworkLoginWording:
-    """U8 のログインのコード（M2・M3）がカタログの文言を返すこと。"""
+    """Login codes of the closed-network setup return the catalog message."""
 
     def test_login_failure_wording_does_not_depend_on_the_reason(self):
-        """BR1.4: 理由（context）が違っても文言は同じ。"""
+        """The message is the same even when the reason (context) differs."""
         code = ErrorCode["LOGIN_FAILED"]
         plain = user_message_for(CodedError(code=code))
         with_reason = user_message_for(
@@ -458,7 +457,7 @@ class TestClosedNetworkLoginWording:
 
 
 class TestPasswordRuleLabels:
-    """M3 の条件の一覧の文言（条件のキー → 表示）は 1 か所に置く。"""
+    """Wording of the condition list (condition key to display) is kept in one place."""
 
     def _policy(self, **overrides: object):
         from src.models.password_policy import PasswordPolicy
@@ -521,7 +520,7 @@ class TestPasswordRuleLabels:
 
 
 class TestSurveyOnDemandWording:
-    """オンデマンド推論のコードがカタログの文言を返すこと（functional-spec.md 3 章）。"""
+    """On-demand inference codes return the catalog message."""
 
     def test_too_many_failed_answers_shows_the_counts(self):
         code = ErrorCode["SURVEY_TOO_MANY_FAILED_ANSWERS"]
@@ -533,14 +532,14 @@ class TestSurveyOnDemandWording:
         assert message != error_messages.FALLBACK_MESSAGE
 
     def test_stored_batch_codes_still_resolve(self):
-        """切り替え前のエラーの記録も文言を引ける（FR11.2）。"""
+        """Error records from before the switch can also look up their message."""
         for value in ("survey_batch_job_failed", "survey_batch_job_timed_out"):
             message = error_messages.user_message_for_code(value, None)
             assert message != error_messages.FALLBACK_MESSAGE
 
 
 class TestTableAnalysisDepthWording:
-    """U3 (BR16.2, BR17.1, BR18.1): row numbers, sizes and the new code."""
+    """Table analysis depth: row numbers, sizes and the new code."""
 
     @staticmethod
     def _message(code: ErrorCode, **context: object) -> str:
@@ -610,7 +609,7 @@ class TestTableAnalysisDepthWording:
 
 
 class TestDocumentWording:
-    """U4 (BR21.2, BR22, BR24.4, BR25.1): the four new codes and their values."""
+    """The four new codes and their values."""
 
     @staticmethod
     def _message(code: ErrorCode, **context: object) -> str:
@@ -677,7 +676,7 @@ class TestDocumentWording:
 
 
 class TestGenerationControlWording:
-    """U5 (functional-spec.md §5, BR29.5, BR29.7, BR30.2, BR33.1)."""
+    """Wording of generation control messages."""
 
     @staticmethod
     def _message(code: ErrorCode, **context: object) -> str:
@@ -716,7 +715,7 @@ class TestGenerationControlWording:
 
 
 class TestSettingsAndTablesWordingU6:
-    """U6 (functional-spec.md §4, BR34.4, BR37.1, NFR5.54)."""
+    """Wording of settings and table messages."""
 
     @staticmethod
     def _message(code: ErrorCode, **context: object) -> str:
@@ -743,7 +742,7 @@ class TestSettingsAndTablesWordingU6:
         assert message != self._message(code, total_chars=10, max_chars=5)
 
     def test_a_vanished_department_tells_the_cause_and_the_count(self):
-        """BR34.3: not the generic 「入力内容を確認してください」."""
+        """Not the generic "check your input" message."""
         code = ErrorCode["REQUEST_INVALID"]
         message = self._message(
             code, field="department_groups", reason="vanished_departments", count=2

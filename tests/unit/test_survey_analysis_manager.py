@@ -1,8 +1,7 @@
-"""SurveyAnalysisManager のユニットテスト（U7）。
+"""Unit tests for SurveyAnalysisManager.
 
-BR2.4、BR2.5、BR2.7、BR2.11、NFR1.67〜NFR1.69、NFR2.22、NFR2.25。DynamoDB と S3 は
-moto、ResourceLookup・ResourceSharing・AccessPolicy・ResultCsvCache は本物
-（tests/unit/survey_world.py）、AI はモック。
+DynamoDB and S3 are moto; ResourceLookup, ResourceSharing, AccessPolicy and
+ResultCsvCache are real (tests/unit/survey_world.py); the AI is a mock.
 """
 
 from unittest.mock import Mock
@@ -46,7 +45,7 @@ def sample_template() -> SurveyTemplate:
 
 
 def _make_csv_bytes(template: SurveyTemplate) -> bytes:
-    """テスト用CSVバイト列を生成"""
+    """Build CSV bytes for tests."""
     q_mc = template.questions[0]
     q_scale = template.questions[1]
     q_free = template.questions[2]
@@ -98,7 +97,7 @@ def _survey(world: SurveyWorld, template: SurveyTemplate, owner: str = "a", **kw
 
 
 # =============================================================================
-# 判定のあとでだけ CSV を読む（BR2.4、BR2.5、NFR1.67、NFR1.68）
+# The CSV is read only after the decision
 # =============================================================================
 
 
@@ -117,7 +116,7 @@ class TestVisualAnalysis:
     ):
         survey = _survey(survey_world, sample_template)
         survey_world.share(SURVEY, survey.id, "sales")
-        # テンプレートは保存されていない（共有もされていない）が、写しで分析が出る
+        # The template is not stored (nor shared), but the copy still yields an analysis
         assert survey_world.template_store.get(sample_template.id) is None
         result = am.get_visual_analysis(MEMBER_B, survey.id)
         assert result.multiple_choice_charts[0]["question_text"] == "好きな色は？"
@@ -209,7 +208,7 @@ class TestPersonaStatistics:
 
 
 # =============================================================================
-# インサイトレポート（BR2.11、NFR1.69、NFR2.25）
+# Insight report
 # =============================================================================
 
 
@@ -228,7 +227,7 @@ class TestInsightReport:
         assert stored.insight_report.content == "# 本文"
         assert stored.owner_sub == "a"
         assert stored.shared_group_ids == frozenset({"sales"})
-        # 統計の要約は写しの質問から作る（BR2.7）
+        # The statistics summary is built from the questions in the copy
         questions = batch.generate_statistical_summary.call_args.args[1]
         assert [q["text"] for q in questions][0] == "好きな色は？"
 
@@ -290,7 +289,7 @@ class TestInsightReport:
 
 
 # =============================================================================
-# 計算だけの部品（今のまま）
+# Calculation-only helpers (unchanged)
 # =============================================================================
 
 
@@ -331,7 +330,7 @@ class TestComputeVisualAnalysis:
 
 
 class TestBlankAnswers:
-    """BR4.6・FR5.5: 取れなかった人の空欄は設問ごとの集計から外し、行は属性の集計に残す。"""
+    """Blanks for people who could not be fetched drop out of the per-question tally; the row stays in the attribute tally."""
 
     @pytest.fixture
     def rows(self, sample_template: SurveyTemplate) -> list[dict[str, str]]:
@@ -386,7 +385,7 @@ class TestBlankAnswers:
         assert stats.sex_distribution == {"男性": 2, "女性": 2}
 
     def test_blank_rows_in_a_real_csv(self, am, survey_world, sample_template):
-        """parse_results_csv は空欄の行を捨てない（属性の集計に残す）。"""
+        """parse_results_csv does not drop blank rows (they stay in the attribute tally)."""
         from src.managers.shared.file_utils import parse_results_csv
 
         q_mc = sample_template.questions[0]

@@ -1,8 +1,8 @@
 """
-紐付けデータのプレビューの SQL の組み立て（U5 で DatasetManager から PersonaManager へ移した）
+Building the SQL for the bound-data preview (moved from DatasetManager to PersonaManager).
 
-判定（BR2.6）は tests/unit/test_persona_manager_bindings.py が確かめる。ここでは、
-binding_keys から作る WHERE 句とその安全確認を確かめる（今の動きのまま）。
+The access decision is covered by tests/unit/test_persona_manager_bindings.py. These tests cover
+the WHERE clause built from binding_keys and its safety checks (current behavior).
 """
 
 from dataclasses import replace
@@ -54,7 +54,7 @@ class TestPreviewSql:
             world.manager().preview_binding_data(A, persona.id, dataset.id)
 
     def test_unsafe_column_name_rejected(self, world, setup):
-        """SQLインジェクションを含むカラム名が拒否される"""
+        """Column names containing SQL injection are rejected."""
         persona, dataset = setup
         world.datasets[dataset.id] = replace(
             dataset,
@@ -87,7 +87,7 @@ class TestPreviewSql:
         assert call.kwargs["params"] == ["U123"]
 
     def test_empty_binding_keys(self, world, setup):
-        """binding_keysが空の場合、フィルタなしで全件取得"""
+        """An empty binding_keys fetches all rows without a filter."""
         persona, dataset = setup
         _bind(world, persona, dataset, {})
         world.preview.execute_dataset_preview.return_value = (0, ["user_id"], [])

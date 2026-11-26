@@ -1,11 +1,12 @@
 import { flattenPolicyValue, patternCovers, statementsAllow } from './helpers/policy-coverage';
 
 /**
- * 包含の判定（テスト用の補助、閉域対応 U2 BR1.4）の単体テスト。
+ * Unit tests for the coverage check (a test helper).
  *
- * test/closed-stage.test.ts が、タスクロールと実行ロールの文の Resource がエンドポイントの
- * ポリシーに含まれることを、この判定で確かめる。IAM と同じワイルドカードの解釈（`*` はスラッシュを
- * 含む任意の文字列、`?` は 1 文字）で、CloudFormation の参照は同じ式どうしを同じ値として比べる。
+ * test/closed-stage.test.ts uses this check to verify that the Resource of the task role's and
+ * execution role's statements is covered by the endpoint policies. It reads wildcards as IAM does
+ * (`*` matches any string including slashes, `?` one character), and compares CloudFormation
+ * references as the same value when the expressions are the same.
  */
 
 const TABLE = 'arn:aws:dynamodb:ap-northeast-1:123456789012:table/Personas';
@@ -75,7 +76,7 @@ describe('flattenPolicyValue: CloudFormation の参照どうしの一致', () =>
   });
 
   test('参照の中の文字は、エンドポイント側のワイルドカードの一部として扱わない', () => {
-    // 参照は 1 つのまとまり。'*' だけの Resource はどの参照も含む
+    // A reference is one unit. A Resource of just '*' covers any reference
     expect(patternCovers('*', flattenPolicyValue({ Ref: 'SecretA' }))).toBe(true);
     expect(patternCovers('Secret?', flattenPolicyValue({ Ref: 'SecretA' }))).toBe(false);
   });

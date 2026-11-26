@@ -1,6 +1,6 @@
-"""Small documents built inside the tests (U4, unit-test-instructions.md).
+"""Small documents built inside the tests.
 
-No library is added for them (NFR4-Q3=A): PDFs are written by hand as the
+No library is added for them: PDFs are written by hand as the
 smallest valid PDF bytes, a docx is a ZIP of the few XML parts Word needs, and
 an OLE head is its 8-byte signature.
 
@@ -133,7 +133,7 @@ def docx_bytes(blocks: Sequence[Block], *, japanese_style_ids: bool = False) -> 
     """A docx of paragraphs; ``(level, text)`` is a heading of that level.
 
     Args:
-        blocks: Paragraph texts and ``(level, text)`` headings (level 1〜3).
+        blocks: Paragraph texts and ``(level, text)`` headings (level 1 to 3).
         japanese_style_ids: Use the style IDs a Japanese Word writes
             (``"1"``, ``"2"`` ...) with the names ``heading 1`` ... .
     """

@@ -1,8 +1,8 @@
 """
-Per-task circuit breaker in front of Cognito (U1 ``reliability-design.md``,
-U8 NFR Design Q1 A, NFR9.44).
+Per-task circuit breaker in front of Cognito.
 
-Moved out of ``oidc_service.py`` so that :class:`OidcService` and
+
+Lives apart from ``oidc_service.py`` so that :class:`OidcService` and
 :class:`CognitoAuthService` share it. It raises the neutral
 :class:`CircuitOpenError` instead of a coded error; each Service turns it into
 its own code (``OIDC_UNAVAILABLE`` / ``LOGIN_UNAVAILABLE``). This module imports
@@ -33,7 +33,7 @@ class CircuitBreaker:
     60 seconds, during which calls fail immediately. After that one trial call
     is allowed (half-open); its success closes the breaker, its failure opens
     it again. Other calls during the trial fail immediately. State is local to
-    the process and resets on restart (NFR9.43).
+    the process and resets on restart.
     """
 
     def __init__(

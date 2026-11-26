@@ -9,10 +9,10 @@ import {
 } from '../lib/edge-stack';
 
 /**
- * Edge スタック（CloudFront 用 WAF、us-east-1）の検査。FR1.8、NFR4.15〜NFR4.18、NFR8.27。
+ * Checks of the Edge stack (WAF for CloudFront, us-east-1).
  *
- * U9: ログイン系の URL のレート制限（LoginRateLimit）は enableWaf: true のときに作る WebACL に
- * 足す。enableWaf: false では WebACL を作らない（2026-10-17 に任意にし、2026-11-02 に既定を有効にした）。
+ * The rate limit on login URLs (LoginRateLimit) is added to the WebACL that is created when
+ * enableWaf is true. With enableWaf: false no WebACL is created.
  */
 
 jest.setTimeout(60_000);
@@ -105,8 +105,8 @@ describe('ログイン系の URL のレート制限 LoginRateLimit（U9、NFR4.1
           FieldToMatch: { UriPath: {} },
           PositionalConstraint: 'EXACTLY',
           SearchString: path,
-          // アプリ（uvicorn）はパスのエンコードを 1 回戻してからルートを選ぶ。/%6cogin も
-          // /login として数えるため、WAF も比較の前に 1 回戻す
+          // The app (uvicorn) decodes the path once before choosing a route, so /%6cogin is
+          // counted as /login too; the WAF also decodes once before comparing
           TextTransformations: [{ Priority: 0, Type: 'URL_DECODE' }],
         },
       })),
@@ -133,7 +133,7 @@ describe('ログイン系の URL のレート制限 LoginRateLimit（U9、NFR4.1
       AWSManagedRulesCommonRuleSet: 2,
       RateLimit: 3,
     });
-    // IP 制限がなくても、ほかのルールの priority は変わらない
+    // Other rules' priorities do not change even without an IP restriction
     const withoutIp = rules(synth({ enableWaf: true }));
     expect(Object.fromEntries(withoutIp.map((r) => [r.Name, r.Priority]))).toEqual({
       LoginRateLimit: 0,

@@ -1,14 +1,10 @@
 {% from "persona/partials/advanced_labels.html" import method_label, code_kind_label, step_label, tool_label, block_summary %}
 {#
-  分析の記録のダイアログの中身（S9、BR9.1）。生成のページでは dialog() の content_url で読み込み、
-  保存したペルソナの詳細画面では中に直接描く。コードは <pre><code> で文字として出す（自動エスケープ）。
-  利用者が振り返るための表示にする: 目的の解釈 → 計画 → 実行した分析 → 使ったファイル → コード。
-  ハッシュ・チェックサム・乱数のシード・前準備の版は、保存はするが画面には出さない。
-  引数:
-    record  ... AnalysisRecord。ないとき（none）は「分析の詳細は残っていません」
-    sources ... SourceAvailability の並び（保存したペルソナの詳細だけ、U2 BR14.3）。
-                元のファイルが消えていれば「元のファイルは消えています」、U1 の記録で
-                ファイルの ID がなければ「元のファイルの記録はありません」と出す
+  Content of the analysis record dialog. On the generation page it is loaded via content_url of dialog(); on the detail screen of a saved persona it is drawn inline. Code is output as text in <pre><code> (auto-escaped).
+  The view is for the user to look back: interpretation of the purpose -> plan -> analyses run -> files used -> code. Hashes, checksums, random seeds, and the preparation version are stored but not shown.
+  Arguments:
+    record  ... AnalysisRecord. When absent (none), "分析の詳細は残っていません"
+    sources ... list of SourceAvailability (saved persona detail only). If the original file is gone, shows "元のファイルは消えています"; for older records without a file ID, shows "元のファイルの記録はありません"
 #}
 {% set judged = sources | default(none) %}
 <div data-testid="advanced-record">
@@ -40,7 +36,7 @@
         <li data-testid="advanced-record-run" class="border border-gray-200 rounded-lg p-4">
             <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">3</span>実際に行った分析</h3>
             {% if record.tool_calls %}
-            {#- 同じ定石を読み直した呼び出しは 1 つにまとめる -#}
+            {#- Calls that re-read the same playbook are merged into one. -#}
             {% set read = namespace(names=[]) %}
             <ul class="mt-2 space-y-1" data-testid="advanced-record-calls">
                 {% for call in record.tool_calls %}
@@ -83,7 +79,7 @@
     <ol class="space-y-2">
         {% for block in record.code_blocks %}
         <li>
-            {#- U6 BR38.1: 結合した列と一致の割合は、コードを開かなくても読める -#}
+            {#- The joined columns and match rate can be read without opening the code. -#}
             {% if block.get("title") %}<p class="text-xs text-gray-700 mb-1" data-testid="advanced-record-joined">{{ block.get("title") }}</p>{% endif %}
             <details data-testid="advanced-record-code">
                 <summary class="cursor-pointer text-sm" data-testid="advanced-record-code-kind" data-kind="{{ block.get('kind', 'fixed') }}">{{ loop.index }}. {{ block_summary(block) }} <span class="text-xs text-gray-600">（{{ code_kind_label(block.get("kind")) }}）</span></summary>

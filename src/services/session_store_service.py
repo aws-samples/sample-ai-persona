@@ -1,21 +1,20 @@
 """
 DynamoDB Sessions table access for ``oidc`` / ``admin_api`` LoginSessions.
 
-Timeouts and retries follow ``reliability-design.md``: connect 0.5 s, read
+Timeouts and retries: connect 0.5 s, read
 0.5 s, two attempts in botocore's ``standard`` retry mode. A healthy table
 answers in well under that; an unreachable one fails in about 2 seconds plus
 the retry back-off. Under throttling the ``standard`` mode's back-off can
-stretch one call to roughly 3 seconds; no overall deadline is applied on top
-(NFR Design review R-09).
+stretch one call to roughly 3 seconds; no overall deadline is applied on top.
 
 Every read is strongly consistent so that a token refresh written by another
-task is visible immediately (``performance-design.md``). The two write kinds
+task is visible immediately. The two write kinds
 of :mod:`src.models.login_session` map to two disjoint ``UpdateItem`` calls so
-that neither overwrites the other's attributes (BR1.10, BR1.12).
+that neither overwrites the other's attributes.
 
-U8 adds the LoginChallenge items (``challenge#`` keys, ``item_type``) of the
+It also handles the LoginChallenge items (``challenge#`` keys, ``item_type``) of the
 first password change: strong reads, a conditional ``DeleteItem`` that takes a
-challenge out exactly once, and a conditional write-back (BR2.7, NFR3.17).
+challenge out exactly once, and a conditional write-back.
 
 Failures to reach the table raise :class:`SessionStoreError`
 (``SESSION_STORE_UNAVAILABLE``). Messages never contain the session id hash.
@@ -38,7 +37,7 @@ logger = logging.getLogger(__name__)
 _KEY = "session_id_hash"
 _CONDITION_FAILED = "ConditionalCheckFailedException"
 
-#: botocore settings for the Sessions table (reliability-design.md).
+#: botocore settings for the Sessions table.
 #: ``total_max_attempts`` counts the first call, so 2 means "two attempts in
 #: total". botocore reads ``max_attempts`` as the number of *retries* and would
 #: turn ``max_attempts=2`` into three attempts.
@@ -115,7 +114,7 @@ class SessionStoreService:
     def get(self, session_id_hash: str) -> LoginSession | None:
         """Read one session with a strongly consistent ``GetItem``.
 
-        A LoginChallenge item (``item_type="challenge"``, U8 BR2.2) is never a
+        A LoginChallenge item (``item_type="challenge"``) is never a
         session and reads as absent.
         """
         data = self._read_item(session_id_hash)
@@ -123,7 +122,7 @@ class SessionStoreService:
             return None
         return LoginSession.from_dict(data)
 
-    # --- LoginChallenge (U8 BR2.2, BR2.7, NFR3.17) ------------------------------
+    # --- LoginChallenge --------------------------------------------------------
 
     @staticmethod
     def _challenge_or_none(data: dict[str, Any] | None) -> LoginChallenge | None:
@@ -182,7 +181,7 @@ class SessionStoreService:
         self._call("put_item", Item=self._values(session.to_dict()))
 
     def touch(self, session: LoginSession) -> None:
-        """Write ``last_accessed_at`` only, if the item exists (BR1.10).
+        """Write ``last_accessed_at`` only, if the item exists.
 
         ``version`` and the token attributes are left untouched. A missing
         item (logged out or expired meanwhile) is not recreated.
@@ -203,7 +202,7 @@ class SessionStoreService:
         """Write tokens, roles, departments and failure state if versions match.
 
         Returns:
-            ``False`` when another writer got there first (BR1.12).
+            ``False`` when another writer got there first.
         """
         to_set, to_remove = session.versioned_attributes()
         names: dict[str, str] = {}

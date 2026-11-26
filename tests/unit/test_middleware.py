@@ -1,4 +1,4 @@
-"""CSRFMiddleware の単体テスト（BR1.19、NFR4.2、Functional Design レビュー R-12）"""
+"""Unit tests for CSRFMiddleware."""
 
 import io
 import json
@@ -109,7 +109,7 @@ class TestCSRFMiddleware:
 
 
 class TestCSRFv1:
-    """v1.0.0 の変更: /api/ の除外をやめ、/signout は Origin で確かめる。"""
+    """/api/ is no longer exempt, and /signout is checked by Origin."""
 
     def test_api_post_without_custom_header_is_blocked(self, client):
         resp = client.post("/api/thing", json={})
@@ -128,8 +128,8 @@ class TestCSRFv1:
         "origin",
         [
             "https://evil.example.com",
-            "http://app.example.com",  # スキームが違う
-            "https://app.example.com:8443",  # ポートが違う
+            "http://app.example.com",  # different scheme
+            "https://app.example.com:8443",  # different port
             "https://app.example.com.evil.test",
             "null",
         ],

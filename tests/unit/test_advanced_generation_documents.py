@@ -1,9 +1,8 @@
-"""Pure helpers of the document part of the advanced generation (U4).
+"""Pure helpers of the document part of the advanced generation.
 
 The Manager orders the work; these functions only shape values: the progress
 wording, the joined full text, the renumbered evidence, the assignment to
-segments and the trimming before the result is written (BR24.5, BR25.2,
-BR26.1, BR27.3, BR28.1, NFR4.4, NFR5.38).
+segments and the trimming before the result is written.
 """
 
 from __future__ import annotations

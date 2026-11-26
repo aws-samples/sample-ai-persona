@@ -2,7 +2,7 @@
 Discussion Manager for AI Persona System.
 
 Runs classic discussions and owns the discussion lists, detail, export,
-delete and insight regeneration (v1.0.0 U6).
+delete and insight regeneration.
 
 Every entry point takes the signed-in user (``Principal``) and decides with
 ``AccessPolicy``; bodies, messages and reports are saved and read through the
@@ -10,17 +10,17 @@ shared ``DiscussionRecords`` component, the participants through
 ``ParticipantReader`` (``.claude/rules/architecture.md``: Managers never import
 each other).
 
-Rules (``functional-design/rules.md``):
+Rules:
 
-- BR2.8: running needs ``ai:execute``; the participants were read with the
+- Running needs ``ai:execute``; the participants were read with the
   decision (``PersonaManager.get_personas_for_use``) and are checked again right
-  before the save (BR7.1). An unreadable participant stops the run without a
+  before the save. An unreadable participant stops the run without a
   save (``PERSONA_NOT_FOUND``, the streaming run sends ``stopped``).
-- BR2.1〜BR2.3: lists are tabbed (``ResourceSharing``) and re-read strongly;
+- Lists are tabbed (``ResourceSharing``) and re-read strongly;
   search reads the newest 500 of the tab.
-- BR2.4 / BR2.5: detail and export need read; delete and regeneration need
+- Detail and export need read; delete and regeneration need
   manage (regeneration also needs ``ai:execute``).
-- BR2.6: at most 100 insights.
+- At most 100 insights.
 """
 
 import json
@@ -58,16 +58,16 @@ from .components.sharing_runtime import (
 )
 
 _DISCUSSION = ResourceType.DISCUSSION
-#: Owner label of a discussion without owner (before v1.0.0).
+#: Owner label of a discussion without owner.
 OWNER_UNKNOWN = "所有者不明"
 #: Most rows a search returns.
 SEARCH_RESULT_LIMIT = 100
-#: Lifetime of a document's presigned URL (unchanged by closed network U4).
+#: Lifetime of a document's presigned URL.
 DOCUMENT_URL_EXPIRATION_SECONDS = 3600
 
-#: 種類で絞るときに 1 回の要求で読むページの上限（1 ページ 20 件）
+#: Maximum pages read per request when filtering by kind (20 items per page)
 MODE_FILTER_MAX_PAGES = 10
-#: SSE event when a participant became unreadable (M12, BR7.5).
+#: SSE event when a participant became unreadable.
 STOPPED_EVENT = f"data: {json.dumps({'type': 'stopped'}, ensure_ascii=False)}\n\n"
 
 
@@ -82,12 +82,12 @@ def _sse(data: Dict[str, Any]) -> str:
 
 
 def discussion_parts() -> DiscussionParts:
-    """The per-task ``DiscussionRecords`` / ``ParticipantReader`` (U6)."""
+    """The per-task ``DiscussionRecords`` / ``ParticipantReader``."""
     return discussion_parts_from(service_factory)
 
 
 class DiscussionManager:
-    """Classic discussions and the discussion lists / detail / delete (U6)."""
+    """Classic discussions and the discussion lists / detail / delete."""
 
     def __init__(
         self,
@@ -105,13 +105,13 @@ class DiscussionManager:
 
         Args:
             ai_service: AI service (the singleton when omitted)
-            file_attachments: The per-task ``FileAttachments`` (U5)
-            discussion_records: The per-task ``DiscussionRecords`` (U6)
-            participants: The per-task ``ParticipantReader`` (U6)
-            resource_sharing: The per-task ``ResourceSharing`` (U6 lists)
+            file_attachments: The per-task ``FileAttachments``
+            discussion_records: The per-task ``DiscussionRecords``
+            participants: The per-task ``ParticipantReader``
+            resource_sharing: The per-task ``ResourceSharing`` (lists)
             owners: The owner-name copy (display only)
             s3_service: Holds the documents (``None`` without S3)
-            asset_delivery: Serves documents (closed network U4; built from
+            asset_delivery: Serves documents (built from
                 ``s3_service`` and ``Config.ASSET_DELIVERY`` when omitted)
         """
         self._delivery = asset_delivery
@@ -172,9 +172,9 @@ class DiscussionManager:
             return self._delivery
         return AssetDelivery(self._s3_service, config.ASSET_DELIVERY)
 
-    # =========================================================================
-    # 実行（BR2.8、BR7.1）
-    # =========================================================================
+    # ==========================================================================
+    # Running
+    # ==========================================================================
 
     def run_classic_discussion_streaming(
         self,
@@ -188,7 +188,7 @@ class DiscussionManager:
 
         ``personas`` were read with the decision; they are checked again
         right before the save. An unreadable participant ends the stream with
-        a ``stopped`` event and nothing is saved (BR7.1, M12).
+        a ``stopped`` event and nothing is saved.
 
         Yields:
             str: ``data: {...}`` lines (``message``, ``complete`` / ``stopped``).
@@ -242,7 +242,7 @@ class DiscussionManager:
         categories: Optional[List[InsightCategory]] = None,
         document_ids: Optional[List[str]] = None,
     ) -> Discussion:
-        """Run, add insights and save a classic discussion (BR2.8, BR7.1).
+        """Run, add insights and save a classic discussion.
 
         Raises:
             AccessDeniedError: The user lacks ``ai:execute``.
@@ -317,9 +317,9 @@ class DiscussionManager:
             principal, Permission.AI_EXECUTE, resource_type=_DISCUSSION
         )
 
-    # =========================================================================
-    # 一覧（BR2.1〜BR2.3）
-    # =========================================================================
+    # ==========================================================================
+    # List
+    # ==========================================================================
 
     def list_discussions(
         self,
@@ -329,10 +329,10 @@ class DiscussionManager:
         mode: Optional[str] = None,
         search: Optional[str] = None,
     ) -> TabbedList[Discussion]:
-        """One page of a tab, or a search inside the tab (BR2.1, BR2.2).
+        """One page of a tab, or a search inside the tab.
 
         ``all`` without ``resource:read_all`` is ``mine``; rows are read again
-        strongly and checked with ``can_read`` (NFR1.43).
+        strongly and checked with ``can_read``.
 
         Raises:
             CodedError: ``LOOKUP_UNAVAILABLE`` when the index or bodies cannot be read.
@@ -349,8 +349,9 @@ class DiscussionManager:
             principal, [t.resource_id for t in page.items], mode=mode
         )
         next_cursor = page.next_cursor
-        # 種類で絞ると 1 ページが空になりうるため、1 ページぶん集まるまで続きを読む。
-        # 上限に達したら、空でもカーソルを返して「もっと見る」で続きを読めるようにする
+        # Filtering by kind can leave a page empty, so keep reading until a page is filled.
+        # When the limit is reached, return the cursor even if empty so the
+        # "もっと見る" button can continue reading
         pages = 1
         while (
             mode is not None
@@ -482,14 +483,14 @@ class DiscussionManager:
             search_truncated=search_truncated,
         )
 
-    # =========================================================================
-    # 詳細・エクスポート・資料・削除（BR2.4、BR2.5、BR5.1、BR9.1）
-    # =========================================================================
+    # ==========================================================================
+    # Detail, export, documents, delete
+    # ==========================================================================
 
     def get_discussion(
         self, principal: Principal, discussion_id: str
     ) -> DiscussionView:
-        """The discussion for a reader (BR2.4).
+        """The discussion for a reader.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` (unreadable or missing).
@@ -499,13 +500,13 @@ class DiscussionManager:
     def export_discussion(
         self, principal: Principal, discussion_id: str
     ) -> tuple[str, str]:
-        """``(filename, markdown)`` of a discussion the user may read (BR9.1)."""
+        """``(filename, markdown)`` of a discussion the user may read."""
         return self._discussion_records.export_markdown(principal, discussion_id)
 
     def servable_document_ids(
         self, principal: Principal, view: DiscussionView
     ) -> List[str]:
-        """IDs of the documents the user may be served (BR5.1, NFR1.53, U4 BR4.2).
+        """IDs of the documents the user may be served.
 
         Every document is read through ``FileAttachments.readable_file`` (the
         parent discussion's readers) and must be in S3. Nothing is signed: the
@@ -527,7 +528,7 @@ class DiscussionManager:
     def deliver_document(
         self, principal: Principal, discussion_id: str, document_id: str
     ) -> DeliveryResult:
-        """Serve one document of a discussion the user may read (U4 BR3.5).
+        """Serve one document of a discussion the user may read.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` (unreadable discussion);
@@ -555,7 +556,7 @@ class DiscussionManager:
         return self._asset_delivery.deliver(handle, error_type=DiscussionManagerError)
 
     def delete_discussion(self, principal: Principal, discussion_id: str) -> bool:
-        """Delete a discussion the user manages, then clean up (BR1.5, BR2.5).
+        """Delete a discussion the user manages, then clean up.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` / ``DISCUSSION_OPERATION_FAILED``.
@@ -563,9 +564,9 @@ class DiscussionManager:
         """
         return self._discussion_records.delete(principal, discussion_id)
 
-    # =========================================================================
-    # インサイト（BR1.4、BR2.5、BR2.6）
-    # =========================================================================
+    # ==========================================================================
+    # Insights
+    # ==========================================================================
 
     def regenerate_insights(
         self,
@@ -573,7 +574,7 @@ class DiscussionManager:
         discussion_id: str,
         categories: Optional[List[InsightCategory]] = None,
     ) -> List[Insight]:
-        """Generate the insights again and save only them (BR1.4, BR2.5).
+        """Generate the insights again and save only them.
 
         Raises:
             AccessDeniedError: No ``ai:execute``, or readable but not manageable.
@@ -592,15 +593,15 @@ class DiscussionManager:
         """Refuse an insight job before it is queued (``POST /api/discussions/{id}/insights``).
 
         The job decides again when it runs (:meth:`regenerate_insights`); this
-        answers 403 / 404 to the caller at once (C12).
+        answers 403 / 404 to the caller at once.
 
         Raises:
             AccessDeniedError: No ``ai:execute``, or readable but not manageable.
             CodedError: ``DISCUSSION_NOT_FOUND``, or ``DISCUSSION_OPERATION_FAILED``
-                for a discussion before v1.0.0 (read-only; the job would fail).
+                for a discussion in the old format (read-only; the job would fail).
         """
         self._require_ai(principal)
-        # 読めなければ 404、読めるが管理できなければ 403、v1.0.0 より前の議論は断る
+        # 404 if unreadable, 403 if readable but not manageable, refuse old-format discussions
         self._discussion_records.ensure_manageable(principal, discussion_id)
 
     def _generate_insights(
@@ -631,14 +632,14 @@ class DiscussionManager:
         return insights
 
     def get_default_categories(self) -> List[Dict[str, Any]]:
-        """デフォルトインサイトカテゴリーを取得する。"""
+        """Get the default insight categories."""
         from .shared.insight_utils import get_default_insight_categories
 
         return [cat.to_dict() for cat in get_default_insight_categories()]
 
-    # =========================================================================
-    # 入力・資料
-    # =========================================================================
+    # ==========================================================================
+    # Input and documents
+    # ==========================================================================
 
     def _validate_discussion_input(self, personas: List[Persona], topic: str) -> None:
         discussion_validation.validate_personas_and_topic(
@@ -646,7 +647,7 @@ class DiscussionManager:
         )
 
     def _readable_document(self, principal: Principal, doc_id: str) -> Any:
-        """A document the user may still attach (U5, R-02)."""
+        """A document the user may still attach."""
         try:
             return self._file_attachments.attachable_file(principal, doc_id)
         except CodedError as e:
@@ -662,7 +663,7 @@ class DiscussionManager:
     def _load_documents(
         self, document_ids: Optional[List[str]], principal: Principal
     ) -> tuple[Optional[List[Dict[str, Any]]], Optional[List[DocumentRef]]]:
-        """The documents' contents for the AI and their references (U5, R-02).
+        """The documents' contents for the AI and their references.
 
         Returns:
             ``(documents_data, documents)``; ``(None, None)`` without documents.
@@ -718,7 +719,7 @@ class DiscussionManager:
         messages: List[Message],
         categories: Optional[List[InsightCategory]],
     ) -> Discussion:
-        """インサイト生成・カテゴリー保存の共通処理（100 件まで、BR2.6）。"""
+        """Common handling of insight generation and category saving (up to 100)."""
         from .shared.insight_utils import attach_insights_to_discussion
 
         return attach_insights_to_discussion(

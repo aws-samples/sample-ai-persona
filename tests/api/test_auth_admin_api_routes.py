@@ -1,12 +1,9 @@
-"""閉域構成のログイン（AUTH_MODE=admin_api）の URL の API テスト（U8）。
+"""API tests for the closed-network login URLs (AUTH_MODE=admin_api).
 
-GET/POST /login（M2）と GET/POST /auth/new-password（M3）。テストのアプリは
-AUTH_MODE=local で起動しているため、AuthManager を admin_api 用のもの
-（CognitoAuthService は Mock、ストアは MemorySessionStore）に差し替える。
-session_id は Secure のため、https のクライアントで確かめる。
-
-約束 C11、BR1.1〜BR1.4、BR2.4〜BR2.6、BR4.5、BR4.6、NFR3.15、NFR3.16、NFR4.21、
-NFR9.45、AC1.2.1〜AC1.2.5。
+GET/POST /login and GET/POST /auth/new-password. The test app runs with
+AUTH_MODE=local, so AuthManager is replaced with an admin_api one
+(CognitoAuthService is a Mock, the store is MemorySessionStore).
+session_id is Secure, so the checks use an https client.
 """
 
 import base64
@@ -244,18 +241,18 @@ class TestLoginSubmit:
         assert _session_cookies(response) == []
 
     def test_every_login_failed_reason_renders_the_same_body(self, browser, cognito):
-        """BR1.4 / NFR4.19: 理由で応答の本文が変わらない。"""
+        """The response body does not vary with the reason."""
         bodies = []
         cognito.initiate_auth.side_effect = CognitoAuthError(
             "x", code=ErrorCode.LOGIN_FAILED
         )
         bodies.append(_post_login(browser).text)
-        bodies.append(_post_login(browser, password="").text)  # 入力の誤り
+        bodies.append(_post_login(browser, password="").text)  # Invalid input
         cognito.initiate_auth.side_effect = None
         cognito.initiate_auth.return_value = CognitoChallenge(
             name="SMS_MFA", session="s" * 30, parameters={}
         )
-        bodies.append(_post_login(browser).text)  # 対応外の challenge
+        bodies.append(_post_login(browser).text)  # Unsupported challenge
 
         def normalized(body: str) -> str:
             return re.sub(r'name="csrf[^"]*" value="[^"]*"', "", body)
@@ -439,10 +436,10 @@ class TestPasswordNeverLeaks:
 
 
 # =============================================================================
-# Sessions テーブルに LoginChallenge を書けない・読めない（NFR9.45、Loop-back 1）
+# A LoginChallenge can be neither written nor read in the Sessions table
 # =============================================================================
 
-#: Cognito が返す session の目印。本物の値ではない。
+#: Marker for the session Cognito returns. Not a real value.
 COGNITO_SESSION = "cognito-session-SENTINEL-7d2e9b"
 SESSIONS_TABLE = "SessionsLoopBack"
 REGION = "ap-northeast-1"
@@ -507,7 +504,7 @@ def _cookie_texts(response: Any, browser: Any) -> list[str]:
 
 
 class TestChallengeStoreFailureLeavesNothing:
-    """NFR9.45: 503 and the Cognito session is kept nowhere (moto Sessions table)."""
+    """503 and the Cognito session is kept nowhere (moto Sessions table)."""
 
     @pytest.fixture
     def store(self, monkeypatch) -> Any:
@@ -556,13 +553,13 @@ class TestChallengeStoreFailureLeavesNothing:
         assert 'data-testid="lookup-unavailable"' in response.text
         assert "new-password-form" not in response.text
         assert response.headers.get("location") is None
-        assert store.client.put_item.call_count == 1  # 書き込みは試みた
+        assert store.client.put_item.call_count == 1  # A write was attempted
         assert _challenge_items() == []
         assert _session_cookies(response) == []
         for payload in _login_tx_payloads(response, browser):
             assert "new_password_challenge" not in payload
         self._assert_session_nowhere(response, browser, caplog, capsys.readouterr().out)
-        # Manager の例外（文・context・連鎖した原因）にも session が載らない
+        # The session is not in the Manager exception either (message, context, chained cause)
         with pytest.raises(LookupUnavailableError) as raised:
             admin_manager.login_admin_api(
                 email=EMAIL,
@@ -580,7 +577,7 @@ class TestChallengeStoreFailureLeavesNothing:
         cognito.initiate_auth.return_value = _sentinel_challenge()
         started = _post_login(browser)
         assert started.status_code == 303
-        # 対照: 書ければ challenge が 1 件あり、login_tx に challenge の ID が入る
+        # Control: when the write succeeds there is one challenge, and login_tx holds its ID
         assert len(_challenge_items()) == 1
         assert any(
             "new_password_challenge" in p for p in _login_tx_payloads(started, browser)

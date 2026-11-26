@@ -4,7 +4,7 @@
 
 {% block content %}
 <style>
-/* ペルソナアバターの色定義 */
+/* Persona avatar color definitions */
 .persona-avatar-purple { @apply bg-purple-500; }
 .persona-avatar-indigo { @apply bg-indigo-500; }
 .persona-avatar-pink { @apply bg-pink-500; }
@@ -15,7 +15,7 @@
 .persona-avatar-rose { @apply bg-rose-500; }
 </style>
 <div class="max-w-4xl mx-auto">
-    <!-- ヘッダー -->
+    <!-- Header -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <div class="flex items-center justify-between">
             <div>
@@ -37,7 +37,7 @@
         </div>
     </div>
     
-    <!-- 参加者情報 -->
+    <!-- Participant info -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 class="font-semibold text-gray-900 mb-4 flex items-center gap-2">
             {{ icon_users("w-5 h-5 text-indigo-600") }} 参加ペルソナ ({{ participants|length }}名)
@@ -70,14 +70,14 @@
         </div>
     </div>
     
-    <!-- チャットエリア -->
+    <!-- Chat area -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <div id="chat-messages" class="space-y-4 max-h-[600px] overflow-y-auto mb-4 pr-2 scroll-smooth">
-            <!-- 既存のメッセージを表示 -->
+            <!-- Show existing messages -->
             {% for message in session.messages %}
             <div class="message-item {% if message.persona_id == 'user' %}user-message{% else %}persona-message{% endif %} animate-fade-in">
                 {% if message.persona_id == 'user' %}
-                <!-- ユーザーメッセージ -->
+                <!-- User message -->
                 <div class="flex justify-end mb-4">
                     <div class="relative max-w-xs lg:max-w-md">
                         <div class="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl rounded-br-md px-4 py-3 shadow-md">
@@ -93,10 +93,10 @@
                     </div>
                 </div>
                 {% else %}
-                <!-- ペルソナメッセージ -->
+                <!-- Persona message -->
                 <div class="flex gap-3 mb-4">
                     <div class="flex-shrink-0">
-                        <!-- ペルソナアバター（DiceBear、ペルソナIDをseedに一貫生成。未読込時は頭文字フォールバック） -->
+                        <!-- Persona avatar (DiceBear, generated consistently from the persona ID as seed; falls back to the initial before loading) -->
                         <div class="persona-list-avatar ring-2 ring-white"
                              data-avatar-seed="{{ message.persona_id }}"
                              data-avatar-name="{{ message.persona_name }}"
@@ -119,7 +119,7 @@
             </div>
             {% endfor %}
             
-            <!-- 空の状態メッセージ -->
+            <!-- Empty-state message -->
             {% if not session.messages %}
             <div class="text-center py-12">
                 <div class="w-16 h-16 mx-auto mb-4 bg-purple-100 rounded-full flex items-center justify-center">
@@ -131,10 +131,10 @@
             {% endif %}
         </div>
         
-        <!-- メッセージ入力フォーム -->
+        <!-- Message input form -->
         <div class="border-t border-gray-200 pt-4">
             <form id="message-form" class="flex flex-col gap-3" onsubmit="return false;">
-                <!-- 添付ファイルプレビューエリア -->
+                <!-- Attached file preview area -->
                 <div id="file-preview-container" class="hidden">
                     <div class="flex flex-wrap gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
                         <div id="file-preview-list" class="flex flex-wrap gap-2"></div>
@@ -142,7 +142,7 @@
                 </div>
                 
                 <div class="flex gap-3">
-                    <!-- ファイル添付ボタン -->
+                    <!-- File attach button -->
                     <div class="flex-shrink-0">
                         <input type="file" 
                                id="file-input"
@@ -180,7 +180,7 @@
                 </div>
             </form>
             
-            <!-- 入力ヒント -->
+            <!-- Input hint -->
             <div class="mt-2 text-xs text-gray-500 flex items-center gap-4 flex-wrap">
                 <span>💡 具体的な質問をすると、より詳しい回答が得られます</span>
                 <span>⌘/Ctrl+Enter で送信 · Enter で改行</span>
@@ -190,7 +190,7 @@
     </div>
     
 
-    <!-- ローディング表示（改善版） -->
+    <!-- Loading display (improved) -->
     <div id="loading-indicator" class="hidden bg-white rounded-lg shadow-md p-6 text-center border-l-4 border-purple-500">
         <div class="flex items-center justify-center gap-3 text-gray-700">
             <div class="relative">
@@ -205,7 +205,7 @@
             </div>
         </div>
         
-        <!-- 参加ペルソナの状態表示 -->
+        <!-- Participating persona status -->
         <div class="mt-4 flex justify-center gap-2">
             {% for participant in participants %}
             <div class="flex items-center gap-1 bg-purple-50 px-2 py-1 rounded-full">
@@ -216,10 +216,10 @@
         </div>
     </div>
     
-    <!-- エラー表示エリア -->
+    <!-- Error display area -->
     <div id="error-container" class="hidden mb-6"></div>
     
-    <!-- 会話を続けられなくなったとき（M12、U6 BR7.5）。読み込み時に参加者を読めなければ出す -->
+    <!-- Shown when the conversation can no longer continue (participants unreadable at load time) -->
     <div id="conversation-stopped-container">
     {%- if stopped %}
     {% with kind="interview", back_label="インタビュー一覧へ" %}
@@ -227,7 +227,7 @@
     {% endwith %}
     {%- endif %}
     </div>
-    {# 送信の途中で続けられなくなったときに app.js の showConversationStopped が差し込む #}
+    {# app.js showConversationStopped inserts this when the conversation can no longer continue mid-send. #}
     <template id="conversation-stopped-template">
     {% with kind="interview", back_label="インタビュー一覧へ" %}
     {% include "discussion/partials/conversation_stopped.html" %}
@@ -235,8 +235,7 @@
     </template>
 </div>
 
-{# 保存名の入力（U3 WF3）。JavaScript から openDialog('save-name-dialog') で開き、
-   押したボタンの data-dialog-close の値（confirm / cancel、Escape・× は null）が返る #}
+{# Save-name input. Opened from JavaScript with openDialog('save-name-dialog'); the data-dialog-close value of the pressed button (confirm / cancel; null for Escape or x) is returned. #}
 {% call dialog("save-name-dialog", "インタビューセッションを保存", describedby="save-name-description") %}
     <p id="save-name-description" class="text-gray-600 text-sm mb-4">保存するセッションの名前を入力してください。この名前は議論一覧で表示されます。</p>
 
@@ -265,17 +264,17 @@
 <script>
 
 
-// グローバル変数として定義
+// Define as globals
 let messageForm, messageInput, sendButton, chatMessages, loadingIndicator, charCounter, sendButtonText, sendButtonLoading, saveButton;
 let fileInput, attachButton, filePreviewContainer, filePreviewList;
-let selectedFiles = []; // 選択されたファイルを保持
-// M12（U6）: 会話を続けられなくなった（送信と保存を無効にしたまま）
+let selectedFiles = []; // Keep the selected files
+// The conversation can no longer continue (send and save stay disabled)
 let conversationStopped = {{ 'true' if stopped else 'false' }};
 
-// 会話を続けられなくなったとき（M12）: 枠を出し、入力欄の文字を残して送信と保存を無効にする
+// When the conversation can no longer continue: show the frame, keep the input text, and disable send and save
 function stopConversation(unsentMessage, sentBubble) {
     conversationStopped = true;
-    // 送れなかった発言は会話に残さない（保存されていない）
+    // A message that could not be sent is not kept in the conversation (it was not saved)
     if (sentBubble) sentBubble.remove();
     if (unsentMessage) setMessageInput(unsentMessage);
     if (messageInput) messageInput.disabled = false;
@@ -286,41 +285,41 @@ function stopConversation(unsentMessage, sentBubble) {
     }
 }
 
-// 入力欄に文字を戻し、文字数の表示も合わせる
+// Put the text back in the input and update the character count
 function setMessageInput(text) {
     if (!messageInput) return;
     messageInput.value = text;
     messageInput.dispatchEvent(new Event('input'));
 }
 
-// 送信の失敗（SSE の error）を表示の区分ごとに扱う
+// Handle send failures (SSE error) by display category
 function handleSendFailure(data, unsentMessage, sentBubble) {
     if (data.error_type === 'conversation_stopped') {
         stopConversation(unsentMessage, sentBubble);
         return;
     }
-    // 応答中の別の送信（CONCURRENT_UPDATE）などは入力を残して知らせる
+    // For things such as another send while a response is in progress (CONCURRENT_UPDATE), keep the input and notify
     if (messageInput && unsentMessage && !messageInput.value) setMessageInput(unsentMessage);
     showDetailedError(data.message, data.error_type || 'agent_error');
 }
 
-// サポートするファイルタイプ
+// Supported file types
 const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const SUPPORTED_DOCUMENT_TYPES = ['application/pdf', 'text/plain', 'text/csv', 'text/html', 'text/markdown'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB（アップロードできる画像1枚あたりの上限。src/config.py MAX_IMAGE_SIZE と一致させること）
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB (limit per uploadable image; keep in sync with MAX_IMAGE_SIZE in src/config.py)
 
-// 参加者リストとペルソナ色マッピング
+// Participant list and persona color mapping
 const sessionParticipants = {{ session.persona_ids | tojson | safe }};
 const personaColors = ['bg-purple-500', 'bg-indigo-500', 'bg-pink-500', 'bg-emerald-500', 'bg-orange-500', 'bg-cyan-500', 'bg-amber-500', 'bg-rose-500'];
 
-// ペルソナIDから一貫した色を取得する関数
+// Get a consistent color from the persona ID
 function getPersonaColor(personaId) {
     const index = sessionParticipants.indexOf(personaId);
     return personaColors[index >= 0 ? index % personaColors.length : 0];
 }
 
-// 安全なinnerHTML代入（DOMPurifyでサニタイズ）
+// Safe innerHTML assignment (sanitized with DOMPurify)
 function safeSetInnerHTML(element, html) {
     element.innerHTML = DOMPurify.sanitize(html); // nosemgrep: insecure-document-method
 }
@@ -328,7 +327,7 @@ function safeSetInnerHTML(element, html) {
 
 
 function initializeChat() {
-    // 要素を取得
+    // Get elements
     messageForm = document.getElementById('message-form');
     messageInput = document.getElementById('message-input');
     sendButton = document.getElementById('send-button');
@@ -339,7 +338,7 @@ function initializeChat() {
     sendButtonLoading = document.getElementById('send-button-loading');
     saveButton = document.getElementById('save-session-btn');
     
-    // ファイル添付関連の要素
+    // Elements for file attachment
     fileInput = document.getElementById('file-input');
     attachButton = document.getElementById('attach-button');
     filePreviewContainer = document.getElementById('file-preview-container');
@@ -350,7 +349,7 @@ function initializeChat() {
         return;
     }
     
-    // 送信ボタンクリックイベント
+    // Send button click event
     sendButton.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopPropagation();
@@ -361,19 +360,19 @@ function initializeChat() {
         sendMessage(message);
     });
     
-    // フォーム送信を完全に無効化
+    // Disable form submit completely
     messageForm.addEventListener('submit', function(e) {
         e.preventDefault();
         e.stopPropagation();
         return false;
     });
 
-    // IME対応: compositionフラグで変換中を追跡
+    // IME support: track composition with a flag
     let isComposing = false;
     messageInput.addEventListener('compositionstart', () => { isComposing = true; });
     messageInput.addEventListener('compositionend', () => { isComposing = false; });
 
-    // Ctrl/Cmd+Enter で送信（Enterは改行としてそのまま動作）
+    // Send with Ctrl/Cmd+Enter (Enter keeps its normal newline behavior)
     messageInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !isComposing && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
@@ -381,13 +380,13 @@ function initializeChat() {
         }
     });
 
-    // textarea 自動リサイズ
+    // Auto-resize the textarea
     messageInput.addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
     
-    // ファイル添付ボタンのクリックイベント
+    // File attach button click event
     if (attachButton && fileInput) {
         attachButton.addEventListener('click', function() {
             fileInput.click();
@@ -398,7 +397,7 @@ function initializeChat() {
         });
     }
     
-    // 文字数カウンター
+    // Character counter
     if (messageInput && charCounter) {
         messageInput.addEventListener('input', function() {
             const length = this.value.length;
@@ -414,29 +413,29 @@ function initializeChat() {
         });
     }
     
-    // 保存ボタンのイベントハンドラー
+    // Save button event handler
     if (saveButton) {
         saveButton.addEventListener('click', async function() {
             await saveInterviewSession();
         });
     }
 
-    // 読み込み時に続けられないと分かっている（参加者を読めない）
+    // The conversation is known not to continue at load time (participants unreadable)
     if (conversationStopped) {
         if (sendButton) sendButton.disabled = true;
         if (saveButton) saveButton.disabled = true;
     }
 
-    // フォーカス設定
+    // Set focus
     if (messageInput) {
         messageInput.focus();
     }
 }
 
-// ファイル選択処理
+// File selection handling
 function handleFileSelection(files) {
     for (const file of files) {
-        // ファイルサイズチェック（画像はBedrockの上限に合わせて5MB）
+        // File size check (images are 5MB to match the Bedrock limit)
         const isImage = SUPPORTED_IMAGE_TYPES.includes(file.type);
         const sizeLimit = isImage ? MAX_IMAGE_SIZE : MAX_FILE_SIZE;
         if (file.size > sizeLimit) {
@@ -445,14 +444,14 @@ function handleFileSelection(files) {
             continue;
         }
         
-        // MIMEタイプチェック
+        // MIME type check
         const allSupportedTypes = [...SUPPORTED_IMAGE_TYPES, ...SUPPORTED_DOCUMENT_TYPES];
         if (!allSupportedTypes.includes(file.type)) {
             showErrorMessage(`ファイル "${file.name}" のタイプはサポートされていません`);
             continue;
         }
         
-        // 重複チェック
+        // Duplicate check
         if (selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
             continue;
         }
@@ -462,13 +461,13 @@ function handleFileSelection(files) {
     
     updateFilePreview();
     
-    // ファイル入力をリセット（同じファイルを再選択可能にする）
+    // Reset the file input (so the same file can be selected again)
     if (fileInput) {
         fileInput.value = '';
     }
 }
 
-// ファイルプレビュー更新
+// Update the file preview
 function updateFilePreview() {
     if (!filePreviewContainer || !filePreviewList) return;
     
@@ -485,7 +484,7 @@ function updateFilePreview() {
         const fileItem = document.createElement('div');
         fileItem.className = 'flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm';
         
-        // ファイルアイコンまたはサムネイル
+        // File icon or thumbnail
         let iconEl;
         if (isImage) {
             const url = URL.createObjectURL(file);
@@ -534,51 +533,51 @@ function updateFilePreview() {
     });
 }
 
-// ファイル削除
+// Remove a file
 function removeFile(index) {
     selectedFiles.splice(index, 1);
     updateFilePreview();
 }
 
-// ファイルサイズフォーマット
+// File size formatting
 function formatFileSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-// メッセージ送信処理
+// Message send handling
 async function sendMessage(message) {
     const sessionId = '{{ session.id }}';
 
-    // メッセージもファイルもない場合は送信しない
+    // Do not send when there is neither a message nor a file
     if (!message && selectedFiles.length === 0) {
         return;
     }
 
     try {
-        // UI状態を送信中に変更
+        // Switch the UI to the sending state
         setSendingState(true);
 
-        // ユーザーメッセージを即座に表示（添付ファイル情報も含む）
+        // Show the user message immediately (including attachment info)
         const sentBubble = addUserMessage(message, selectedFiles);
         messageInput.value = '';
         messageInput.style.height = 'auto';
         if (charCounter) charCounter.textContent = '0/500';
 
-        // ローディング表示
+        // Loading display
         showLoadingIndicator();
 
-        // HTTPリクエストを送信（ストリーミング版）
+        // Send the HTTP request (streaming version)
         const formData = new FormData();
         formData.append('message', message || '（添付ファイルを確認してください）');
 
-        // 選択されたファイルを追加
+        // Add the selected files
         for (const file of selectedFiles) {
             formData.append('files', file);
         }
 
-        // 送信成功後、選択ファイルをクリア
+        // Clear the selected files after a successful send
         selectedFiles = [];
         updateFilePreview();
 
@@ -594,7 +593,7 @@ async function sendMessage(message) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        // SSEストリームをReadableStreamで読み取る
+        // Read the SSE stream with a ReadableStream
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -610,7 +609,7 @@ async function sendMessage(message) {
 
             buffer += decoder.decode(value, { stream: true });
 
-            // SSEイベントをパース
+            // Parse SSE events
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
@@ -652,9 +651,9 @@ async function sendMessage(message) {
                     currentStreamingEl = null;
                     currentAccumulatedText = '';
                 } else if (data.type === 'complete') {
-                    // ストリーミング完了
+                    // Streaming complete
                 } else if (data.type === 'files_excluded') {
-                    // 使えなくなった添付（24 時間を過ぎた等）は外して会話を続ける（BR3.6）
+                    // Drop attachments that are no longer usable (for example past 24 hours) and continue the conversation
                     showErrorMessage('次の添付は使えなくなったため外しました: ' + (data.names || []).join('、'));
                 } else if (data.type === 'error') {
                     receivedResponse = true;
@@ -710,7 +709,7 @@ function createStreamingBubble(personaName, personaId) {
     if (!chatMessages) return null;
     const colorClass = getPersonaColor(personaId);
     const timeStr = new Date().toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'});
-    // DiceBear アバター（ペルソナIDをseedに一貫生成）。未読込なら頭文字円にフォールバック
+    // DiceBear avatar (generated consistently from the persona ID as seed). Falls back to the initial circle when not loaded
     const avatarSvg = window.personaAvatarInner ? window.personaAvatarInner(personaId, 48) : null;
     const avatarHtml = avatarSvg
         ? `<div class="persona-list-avatar ring-2 ring-white">${avatarSvg}</div>`
@@ -740,12 +739,12 @@ function createStreamingBubble(personaName, personaId) {
     return messageDiv.querySelector('.streaming-content');
 }
 
-// UI状態管理関数
+// UI state management functions
 function setSendingState(sending) {
-    // 続けられなくなった会話は、送信の終わりでも送信・保存を有効に戻さない（M12）
+    // Do not re-enable send and save at the end of a send for a conversation that can no longer continue
     if (sendButton) sendButton.disabled = sending || conversationStopped;
     if (messageInput) messageInput.disabled = sending;
-    // 応答中は保存できない（U6 NFR1.60。サーバーも CONCURRENT_UPDATE で断る）
+    // Saving is not allowed while a response is in progress (the server also rejects it with CONCURRENT_UPDATE)
     if (saveButton) saveButton.disabled = sending || conversationStopped;
 
     if (sendButtonText && sendButtonLoading) {
@@ -772,11 +771,11 @@ function hideLoadingIndicator() {
     }
 }
 
-// メッセージ表示関数
+// Message display functions
 function addUserMessage(content, files = []) {
     if (!chatMessages) return null;
     
-    // 添付ファイルのプレビューHTML生成
+    // Build the HTML for the attachment preview
     let attachmentsHtml = '';
     if (files && files.length > 0) {
         const fileItems = files.map(file => {
@@ -819,9 +818,9 @@ function addUserMessage(content, files = []) {
 function addPersonaMessage(personaName, content, timestamp, personaId, contentHtml) {
     if (!chatMessages) return;
 
-    // ペルソナIDから一貫した色を取得（DiceBear未読込時のフォールバック用）
+    // Get a consistent color from the persona ID (fallback when DiceBear is not loaded)
     const colorClass = getPersonaColor(personaId);
-    // DiceBear アバター（ペルソナIDをseedに一貫生成）。未読込なら頭文字円にフォールバック
+    // DiceBear avatar (generated consistently from the persona ID as seed). Falls back to the initial circle when not loaded
     const avatarSvg = window.personaAvatarInner ? window.personaAvatarInner(personaId, 48) : null;
     const avatarHtml = avatarSvg
         ? `<div class="persona-list-avatar ring-2 ring-white">${avatarSvg}</div>`
@@ -852,7 +851,7 @@ function addPersonaMessage(personaName, content, timestamp, personaId, contentHt
     scrollToBottom();
 }
 
-// ユーティリティ関数
+// Utility functions
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -888,7 +887,7 @@ function showDetailedError(message, errorType, technicalDetails) {
         return;
     }
     
-    // エラータイプに応じたアイコンとスタイル
+    // Icon and style by error type
     let iconHtml = '❌';
     let titleText = 'エラーが発生しました';
     let actionHtml = '';
@@ -977,7 +976,7 @@ function showSuccessMessage(message) {
     }, 3000);
 }
 
-// メッセージ送信を無効化する関数
+// Function that disables message sending
 function disableMessageSending(reason) {
     if (messageInput) {
         messageInput.disabled = true;
@@ -991,7 +990,7 @@ function disableMessageSending(reason) {
         safeSetInnerHTML(sendButton, '<span class="text-gray-500">送信不可</span>');
     }
     
-    // フォーム送信も完全に無効化
+    // Also disable form submit completely
     if (messageForm) {
         messageForm.onsubmit = function(e) {
             e.preventDefault();
@@ -1001,22 +1000,22 @@ function disableMessageSending(reason) {
     }
 }
 
-// インタビューセッション保存処理
+// Interview session save handling
 async function saveInterviewSession() {
     const sessionId = '{{ session.id }}';
     
     if (!saveButton) return;
     
-    // 保存名を入力するモーダルを表示
+    // Show the modal for entering the save name
     const sessionName = await showSaveNameModal();
     if (!sessionName) {
-        return; // キャンセルされた場合
+        return; // When canceled
     }
     
     const originalText = saveButton.innerHTML;
     
     try {
-        // 保存中の表示に変更
+        // Switch to the saving display
         safeSetInnerHTML(saveButton, '<div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>保存中...');
         saveButton.disabled = true;
         
@@ -1053,7 +1052,7 @@ async function saveInterviewSession() {
             const messageCount = data.session_status?.message_count || 0;
             showSuccessMessage(`「${sessionName}」として保存されました（${messageCount}件のメッセージ）`);
             
-            // 保存後はメッセージ送信を無効化
+            // Disable message sending after saving
             disableMessageSending('セッションが保存されました。新しいメッセージは送信できません。');
             
             setTimeout(() => {
@@ -1064,7 +1063,7 @@ async function saveInterviewSession() {
     } catch (error) {
         console.error('Save session error:', error);
         
-        // エラータイプに応じた詳細なエラーメッセージ
+        // Detailed error message by error type
         if (error.message.includes('HTTP 404')) {
             showDetailedError(
                 'セッションが見つかりません。セッションが既に終了している可能性があります。',
@@ -1083,13 +1082,13 @@ async function saveInterviewSession() {
             );
         }
     } finally {
-        // ボタンを元の状態に戻す
+        // Restore the button to its original state
         safeSetInnerHTML(saveButton, originalText);
         saveButton.disabled = false;
     }
 }
 
-// 保存名の入力欄の検証（空欄なら確定ボタンを無効にする）
+// Validate the save-name input (disable the confirm button when empty)
 function validateSaveNameInput() {
     const input = document.getElementById('session-name-input');
     const confirmBtn = document.getElementById('confirm-save-btn');
@@ -1101,7 +1100,7 @@ function validateSaveNameInput() {
     const confirmBtn = document.getElementById('confirm-save-btn');
     if (!input || !confirmBtn) return;
     input.addEventListener('input', validateSaveNameInput);
-    // Enter キーで確定（Escape・× での取消は app.js の Dialog が受け持つ）
+    // Confirm with the Enter key (cancel by Escape or x is handled by Dialog in app.js)
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !confirmBtn.disabled) {
             e.preventDefault();
@@ -1110,17 +1109,17 @@ function validateSaveNameInput() {
     });
 })();
 
-// 保存名入力ダイアログを表示する。確定なら入力した名前、取消なら null を返す
+// Show the save-name dialog. Returns the entered name on confirm, null on cancel
 function showSaveNameModal() {
     const input = document.getElementById('session-name-input');
 
-    // デフォルト名を設定（現在の日時ベース）
+    // Set the default name (based on the current datetime)
     const now = new Date();
     const defaultName = `インタビューセッション ${now.getFullYear()}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getDate().toString().padStart(2,'0')} ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
     input.value = defaultName;
-    validateSaveNameInput(); // 初期検証
+    validateSaveNameInput(); // Initial validation
 
-    // 開くと入力欄へフォーカスが移る（Dialog）。テキストを選択状態にする
+    // Focus moves to the input when it opens (Dialog). Select the text
     const closed = openDialog('save-name-dialog');
     input.select();
 
@@ -1130,10 +1129,10 @@ function showSaveNameModal() {
     });
 }
 
-// DOMContentLoaded イベントで初期化
+// Initialize on the DOMContentLoaded event
 document.addEventListener('DOMContentLoaded', initializeChat);
 
-// 念のため、window.onload でも初期化
+// Also initialize on window.onload, just in case
 window.addEventListener('load', function() {
     if (!messageForm) {
         initializeChat();

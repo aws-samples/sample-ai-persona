@@ -1,6 +1,6 @@
-<!-- ペルソナ生成 分析・評価ログ ダイアログ（閲覧だけ。背景のクリックで閉じる） -->
+<!-- Persona generation analysis and evaluation log dialog (view only; closes on backdrop click) -->
 {% from "components/dialog.html" import dialog %}
-{#- 高度な生成（ベータ）の generation_context は形が違い、要約は detail_body.html が出す（U1 S13） #}
+{#- generation_context from advanced generation (beta) has a different shape; its summary is rendered by detail_body.html. #}
 {% set input_context = persona.generation_context if (persona.generation_context and persona.generation_context.get("mode") != "advanced") else none %}
 {% if persona.generation_log or input_context %}
 <div>
@@ -15,7 +15,7 @@
 
     {% call dialog("generation-log-dialog", persona.name ~ " — 生成ログ・評価", close_on_backdrop=True, panel_class="max-w-4xl") %}
 
-                <!-- ペルソナ生成インプットデータ -->
+                <!-- Persona generation input data -->
                 {% if input_context %}
                 {% set ctx = input_context %}
                 <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
@@ -70,7 +70,7 @@
                 </div>
                 {% endif %}
 
-                <!-- AI 分析・評価過程 -->
+                <!-- AI analysis and evaluation process -->
                 {% if persona.generation_log %}
                 <div class="bg-white rounded-lg border border-gray-200 p-6">
                     <h4 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">

@@ -46,7 +46,7 @@ survey_template_strategy = st.builds(
 
 
 # =============================================================================
-# Property 1: SurveyTemplateシリアライゼーションのラウンドトリップ
+# Property 1: SurveyTemplate serialization round trip
 # Validates: Requirements 11.1
 # =============================================================================
 
@@ -55,12 +55,10 @@ survey_template_strategy = st.builds(
 @settings(max_examples=100)
 def test_survey_template_serialization_roundtrip(template: SurveyTemplate) -> None:
     """
-    Property 1: SurveyTemplateシリアライゼーションのラウンドトリップ
+    Property 1: SurveyTemplate serialization round trip.
 
-    任意の有効なSurveyTemplateオブジェクトに対して、
-    from_dict(to_dict(template))は元のオブジェクトと等価なオブジェクトを生成する。
-
-    **Validates: Requirements 11.1**
+    For any valid SurveyTemplate object, from_dict(to_dict(template)) yields
+    an object equal to the original.
     """
     restored = SurveyTemplate.from_dict(template.to_dict())
 
@@ -113,7 +111,7 @@ survey_strategy = st.builds(
 
 
 # =============================================================================
-# Property 2: Surveyシリアライゼーションのラウンドトリップ
+# Property 2: Survey serialization round trip
 # Validates: Requirements 11.2
 # =============================================================================
 
@@ -122,12 +120,10 @@ survey_strategy = st.builds(
 @settings(max_examples=100)
 def test_survey_serialization_roundtrip(survey: Survey) -> None:
     """
-    Property 2: Surveyシリアライゼーションのラウンドトリップ
+    Property 2: Survey serialization round trip.
 
-    任意の有効なSurveyオブジェクトに対して、
-    from_dict(to_dict(survey))は元のオブジェクトと等価なオブジェクトを生成する。
-
-    **Validates: Requirements 11.2**
+    For any valid Survey object, from_dict(to_dict(survey)) yields
+    an object equal to the original.
     """
     restored = Survey.from_dict(survey.to_dict())
 

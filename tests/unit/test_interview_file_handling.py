@@ -1,9 +1,9 @@
-"""インタビューの添付の扱い（U6 BR3.6）。
+"""Handling of interview attachments.
 
-U6 からは、添付を Router が先に ``FileManager.upload_interview_attachment`` で置き
-（種類と大きさの検査は test_file_manager.py）、InterviewManager には ID だけを渡す。
-ここでは、置いたファイルからエージェントに渡す ContentBlock を作る部分と、
-InterviewManager が生のバイト列を受け取らないことを確かめる。
+The router first stores the attachment with ``FileManager.upload_interview_attachment``
+(type and size checks live in test_file_manager.py) and passes only the ID to
+InterviewManager. These tests cover building the ContentBlock for the agent from the
+stored file, and that InterviewManager never receives raw bytes.
 """
 
 import pytest
@@ -17,7 +17,7 @@ def _metadata(path, mime_type, filename):
 
 @pytest.mark.unit
 class TestAttachmentContents:
-    """保存したファイルから ContentBlock を作る（作り直しのときも同じ）"""
+    """Builds a ContentBlock from the stored file (same on regeneration)."""
 
     def test_png(self, tmp_path):
         path = tmp_path / "image.png"

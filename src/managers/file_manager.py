@@ -1,18 +1,18 @@
 """
-ファイル管理マネージャー
-ファイルアップロード、検証、保存機能を提供
+File management manager.
+Provides file upload, validation and storage.
 
-v1.0.0 U5（BR5.1〜BR5.9）:
+Rules:
 
-- アップロード（議論の資料・テンプレートの画像）は利用者を受け取り、S3 のキーを
-  ``uploads/{owner_sub}/{file_type}/{file_id}_{元の名前}`` にして ``pending=true`` の
-  タグを付けて置き、メタデータ（``UploadedFiles``）に ``owner_sub`` と 24 時間の
-  ``expires_at`` を書く
-- 親への紐付けと配信の判定は Component ``FileAttachments`` が持つ
-- 記憶への取り込みのファイルは保存しない（``convert_file_to_markdown`` が確認と変換だけ）
-- ``check_preview_path`` / ``deliver_preview`` は形・メタデータの一致・``can_read_file`` を
-  満たすパスだけを通し、配る（任意の S3 パスを受け付けない、BR5.8。配り方は閉域対応 U4 の
-  ``AssetDelivery``）
+- Uploads (discussion documents, template images) take the user and put the
+  S3 key at ``uploads/{owner_sub}/{file_type}/{file_id}_{original_name}`` with a
+  ``pending=true`` tag, and write ``owner_sub`` and a 24-hour
+  ``expires_at`` to the metadata (``UploadedFiles``)
+- Attaching to a parent and the delivery decision belong to the ``FileAttachments`` component
+- Files imported into memory are not stored (``convert_file_to_markdown`` only checks and converts)
+- ``check_preview_path`` / ``deliver_preview`` pass and serve only paths that satisfy
+  the shape, metadata match and ``can_read_file`` (arbitrary S3 paths are not
+  accepted; delivery goes through ``AssetDelivery``)
 """
 
 import hashlib
@@ -44,19 +44,20 @@ PREVIEW_URL_EXPIRATION_SECONDS = 3600
 
 
 class FileUploadError(CodedError):
-    """ファイルアップロード関連のエラー。
+    """
+    File upload errors.
 
-    アップロード時のバリデーション失敗と、ファイル操作そのものの失敗の
-    両方を表すため、code は raise 箇所ごとに指定する。
+    Represents both validation failures at upload and failures of the file
+    operation itself, so the code is given at each raise site.
     """
 
 
 class FileSecurityError(CodedError):
-    """ファイルセキュリティ関連のエラー"""
+    """File security error"""
 
 
 class FileMetadata:
-    """ファイルメタデータクラス"""
+    """File metadata class"""
 
     def __init__(
         self,
@@ -81,7 +82,7 @@ class FileMetadata:
         self.file_type = file_type
 
     def to_dict(self) -> Dict[str, Any]:
-        """辞書形式に変換"""
+        """Convert to a dict"""
         return {
             "file_id": self.file_id,
             "original_filename": self.original_filename,
@@ -95,27 +96,27 @@ class FileMetadata:
 
 
 class FileManager:
-    """ファイル管理クラス"""
+    """File management class"""
 
-    # 議論用ドキュメントの許可形式
+    # Allowed formats for discussion documents
     DISCUSSION_DOCUMENT_FORMATS = {".png", ".jpg", ".jpeg", ".pdf"}
-    DISCUSSION_DOCUMENT_MAX_SIZE = 10 * 1024 * 1024  # 10MB per file（アプリ運用上限）
-    # 画像1枚の上限はClaude(Bedrock)モデルの制約。configを single source of truth とする
+    DISCUSSION_DOCUMENT_MAX_SIZE = 10 * 1024 * 1024  # 10MB per file
+    # The per-image limit comes from the Claude (Bedrock) model constraint. config is the single source of truth
     DISCUSSION_IMAGE_MAX_SIZE = config.MAX_IMAGE_SIZE  # 5MB per image
-    # リクエストペイロード全体の上限（PDF含む全コンテンツ合算）。configを single source of truth とする
+    # Limit on the whole request payload (all content including PDFs). config is the single source of truth
     DISCUSSION_DOCUMENT_TOTAL_MAX_SIZE = config.MAX_REQUEST_PAYLOAD_SIZE  # 32MB total
     DISCUSSION_IMAGE_MIMES = {"image/png", "image/jpeg"}
 
-    # 知識ファイルの許可形式
+    # Allowed formats for knowledge files
     KNOWLEDGE_FILE_FORMATS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md"}
     KNOWLEDGE_FILE_MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
-    # ペルソナ生成ソースの許可形式（PDF/DOCX 等のバイナリ形式を含む）
+    # Allowed formats for persona generation sources (including binary formats such as PDF/DOCX)
     PERSONA_SOURCE_FORMATS = {".txt", ".md", ".pdf", ".docx", ".doc", ".csv"}
 
-    # アンケート画像の許可形式
+    # Allowed formats for survey images
     SURVEY_IMAGE_FORMATS = {".png", ".jpg", ".jpeg"}
-    # 画像1枚の上限はClaude(Bedrock)モデルの制約。configを single source of truth とする
+    # The per-image limit comes from the Claude (Bedrock) model constraint. config is the single source of truth
     SURVEY_IMAGE_MAX_SIZE = config.MAX_IMAGE_SIZE  # 5MB per file
 
     def __init__(
@@ -126,14 +127,15 @@ class FileManager:
         clock: Optional[Callable[[], datetime]] = None,
         asset_delivery: Optional[AssetDelivery] = None,
     ):
-        """ファイルマネージャーの初期化
+        """
+        Initialize the file manager.
 
         Args:
-            s3_service: S3（未設定ならローカルに保存する）
+            s3_service: S3 (saves locally when not configured)
             file_store: Upload metadata (optional, built on first use)
             attachments: The per-task ``FileAttachments`` (optional)
             clock: Aware-UTC clock (tests)
-            asset_delivery: Serves template images (closed network U4; built
+            asset_delivery: Serves template images (built
                 from ``s3_service`` and ``Config.ASSET_DELIVERY`` when omitted)
         """
         self._delivery = asset_delivery
@@ -152,7 +154,7 @@ class FileManager:
         self._attachments = attachments
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
-        # アップロードディレクトリの作成（ローカルストレージ使用時のみ）
+        # Create the upload directory (only when using local storage)
         if not self.s3_service:
             self.upload_dir.mkdir(parents=True, exist_ok=True)
             self.discussion_doc_dir.mkdir(parents=True, exist_ok=True)
@@ -218,19 +220,19 @@ class FileManager:
 
     def _validate_discussion_document(self, filename: str, file_content: bytes) -> bool:
         """
-        議論用ドキュメントの形式を検証する
+        Validate the format of a discussion document.
 
         Args:
-            filename: ファイル名
-            file_content: ファイル内容（バイト）
+            filename: File name
+            file_content: File content (bytes)
 
         Returns:
-            bool: 検証結果（True: 有効）
+            bool: Validation result (True: valid)
 
         Raises:
-            FileUploadError: ファイル形式が無効な場合
+            FileUploadError: If the file format is invalid
         """
-        # ファイル拡張子チェック
+        # File extension check
         file_ext = Path(filename).suffix.lower()
         if file_ext not in self.DISCUSSION_DOCUMENT_FORMATS:
             raise FileUploadError(
@@ -241,7 +243,7 @@ class FileManager:
                 },
             )
 
-        # MIMEタイプチェック（簡易）
+        # MIME type check (simple)
         mime_type = mimetypes.guess_type(filename)[0]
         allowed_mimes = {"image/png", "image/jpeg", "application/pdf"}
         if mime_type not in allowed_mimes:
@@ -250,7 +252,7 @@ class FileManager:
                 code=ErrorCode.FILE_MIME_UNSUPPORTED,
             )
 
-        # ファイルサイズチェック（画像はBedrockの上限に合わせて5MB）
+        # File size check (images are 5MB to match Bedrock's limit)
         is_image = mime_type in self.DISCUSSION_IMAGE_MIMES
         size_limit = (
             self.DISCUSSION_IMAGE_MAX_SIZE
@@ -264,7 +266,7 @@ class FileManager:
                 context={"max_size_mb": size_limit / (1024 * 1024)},
             )
 
-        # ファイル内容が空でないかチェック
+        # Check that the file content is not empty
         if len(file_content) == 0:
             raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
@@ -272,25 +274,25 @@ class FileManager:
 
     def convert_file_to_markdown(self, file_content: bytes, filename: str) -> str:
         """
-        知識ファイルを安全確認のうえマークダウンに変換する（何も保存しない、BR5.9）
+        Convert a knowledge file to Markdown after a safety check (nothing is stored).
 
         Args:
-            file_content: ファイル内容（バイト）
-            filename: ファイル名
+            file_content: File content (bytes)
+            filename: File name
 
         Returns:
-            str: マークダウン化されたテキスト
+            str: Text converted to Markdown
 
         Raises:
-            FileSecurityError: ファイル名・内容の安全確認に通らない場合
-            FileUploadError: 形式・大きさ・空、または変換に失敗した場合
+            FileSecurityError: If the file name or content fails the safety check
+            FileUploadError: If the format, size or emptiness is invalid, or conversion fails
         """
         from markitdown import MarkItDown
         import io
 
         self._security_check(filename, file_content, allow_binary=True)
 
-        # ファイル拡張子チェック
+        # File extension check
         file_ext = Path(filename).suffix.lower()
         if file_ext not in self.KNOWLEDGE_FILE_FORMATS:
             raise FileUploadError(
@@ -311,11 +313,11 @@ class FileManager:
 
         try:
             md = MarkItDown()
-            # BytesIOオブジェクトを作成してファイル名を設定
+            # Create a BytesIO object and set the file name
             file_stream = io.BytesIO(file_content)
             file_stream.name = filename
 
-            # マークダウンに変換
+            # Convert to Markdown
             result = md.convert_stream(file_stream)
             return result.text_content
 
@@ -329,26 +331,26 @@ class FileManager:
         self, principal: Principal, file_content: bytes, filename: str
     ) -> FileMetadata:
         """
-        議論用ドキュメントをアップロードする（本人のキー、24 時間の期限、BR5.1、BR5.2）
+        Upload a discussion document (own key, 24-hour expiry).
 
         Args:
-            principal: アップロードする人（resource:create が要る）
-            file_content: ファイル内容（バイト）
-            filename: 元のファイル名
+            principal: The uploader (needs resource:create)
+            file_content: File content (bytes)
+            filename: Original file name
 
         Returns:
-            FileMetadata: ファイルメタデータ
+            FileMetadata: File metadata
 
         Raises:
-            AccessDeniedError: resource:create がない
-            FileUploadError: アップロード処理でエラーが発生した場合
+            AccessDeniedError: No resource:create
+            FileUploadError: If an error occurs during upload
         """
         AccessPolicy.require(principal, Permission.RESOURCE_CREATE)
         try:
-            # セキュリティチェック（バイナリファイルを許可）
+            # Security check (binary files allowed)
             self._security_check(filename, file_content, allow_binary=True)
 
-            # 議論用ドキュメント形式検証
+            # Discussion document format validation
             self._validate_discussion_document(filename, file_content)
 
             return self._store_upload(
@@ -371,24 +373,25 @@ class FileManager:
         mime_type: Optional[str] = None,
     ) -> FileMetadata:
         """
-        インタビューの添付をアップロードする（議論の資料と同じ仕組み、U6 BR3.6）
+        Upload an interview attachment (same mechanism as discussion documents).
 
-        本人のキー・``pending`` のタグ・24 時間の期限で置き、セッションには ID だけを持つ。
-        種類と大きさの検査はインタビューのこれまでの検査（画像は ``MAX_IMAGE_SIZE``、
-        それ以外は ``MAX_FILE_SIZE``）のまま。
+        It is stored under the user's own key, with the ``pending`` tag and a 24-hour
+        expiry, and the session holds only the ID. Type and size checks stay as
+        the interview has always done them (images use ``MAX_IMAGE_SIZE``, everything
+        else ``MAX_FILE_SIZE``).
 
         Args:
-            principal: アップロードする人（resource:create が要る）
-            file_content: ファイル内容（バイト）
-            filename: 元のファイル名
-            mime_type: ブラウザが送った種類（ファイル名から判らないときに使う）
+            principal: The uploader (needs resource:create)
+            file_content: File content (bytes)
+            filename: Original file name
+            mime_type: The type the browser sent (used when it cannot be told from the file name)
 
         Returns:
-            FileMetadata: ファイルメタデータ
+            FileMetadata: File metadata
 
         Raises:
-            AccessDeniedError: resource:create がない
-            FileUploadError: ``FILE_MIME_UNSUPPORTED``・``FILE_TOO_LARGE``・
+            AccessDeniedError: No resource:create
+            FileUploadError: ``FILE_MIME_UNSUPPORTED``, ``FILE_TOO_LARGE``,
                 ``FILE_OPERATION_FAILED``
         """
         from .shared.document_loader import is_image_type, is_supported_mime_type
@@ -430,24 +433,24 @@ class FileManager:
         self, principal: Principal, file_content: bytes, filename: str
     ) -> FileMetadata:
         """
-        アンケート用画像をアップロードする（本人のキー、24 時間の期限、BR5.1、BR5.2）
+        Upload a survey image (own key, 24-hour expiry).
 
         Args:
-            principal: アップロードする人（resource:create が要る）
-            file_content: ファイル内容（バイト）
-            filename: 元のファイル名
+            principal: The uploader (needs resource:create)
+            file_content: File content (bytes)
+            filename: Original file name
 
         Returns:
-            FileMetadata: ファイルメタデータ
+            FileMetadata: File metadata
 
         Raises:
-            AccessDeniedError: resource:create がない
-            FileUploadError: アップロード処理でエラーが発生した場合
+            AccessDeniedError: No resource:create
+            FileUploadError: If an error occurs during upload
         """
         AccessPolicy.require(principal, Permission.RESOURCE_CREATE)
         try:
             self._security_check(filename, file_content, allow_binary=True)
-            # 形式・サイズ検証
+            # Format and size validation
             file_ext = Path(filename).suffix.lower()
             if file_ext not in self.SURVEY_IMAGE_FORMATS:
                 raise FileUploadError(
@@ -477,10 +480,10 @@ class FileManager:
             ) from e
 
     def check_preview_path(self, principal: Principal, file_path: str) -> None:
-        """Check that ``file_path`` is a template image the user may read (BR5.8).
+        """Check that ``file_path`` is a template image the user may read.
 
         Nothing is signed or opened; the router then embeds the app's own
-        preview route for this path (closed network U4 BR4.2).
+        preview route for this path.
 
         Raises:
             FileUploadError: ``FILE_NOT_FOUND``
@@ -488,7 +491,7 @@ class FileManager:
         self._readable_preview(principal, file_path)
 
     def deliver_preview(self, principal: Principal, file_path: str) -> DeliveryResult:
-        """Serve a template image after the BR5.8 check (closed network U4 BR3.4).
+        """Serve a template image after the preview path check.
 
         Raises:
             FileUploadError: ``FILE_NOT_FOUND`` (failed check or the object is
@@ -521,7 +524,7 @@ class FileManager:
             ) from e
 
     def _readable_preview(self, principal: Principal, file_path: str) -> UploadedFile:
-        """The upload behind a template image path the user may read (BR5.8).
+        """The upload behind a template image path the user may read.
 
         Only ``s3://{bucket}/uploads/{owner}/survey_image/{file_id}_{name}`` is
         accepted, where ``file_id`` is a UUID whose metadata holds exactly that
@@ -550,7 +553,7 @@ class FileManager:
             raise not_found
         return uploaded
 
-    # プライベートメソッド
+    # Private methods
 
     def _store_upload(
         self,
@@ -607,39 +610,39 @@ class FileManager:
         self, filename: str, file_content: bytes, allow_binary: bool = False
     ) -> None:
         """
-        ファイルのセキュリティチェックを実行する
+        Run security checks on a file.
 
         Args:
-            filename: ファイル名
-            file_content: ファイル内容
-            allow_binary: バイナリファイルを許可するかどうか
+            filename: File name
+            file_content: File content
+            allow_binary: Whether binary files are allowed
 
         Raises:
-            FileSecurityError: セキュリティ上の問題がある場合
+            FileSecurityError: If there is a security problem
         """
-        # ファイル名の安全性チェック
+        # File name safety check
         if ".." in filename or "/" in filename or "\\" in filename:
             raise FileSecurityError(
                 "filename contains a path traversal or invalid character",
                 code=ErrorCode.FILE_NAME_INVALID,
             )
 
-        # ファイル名の長さチェック
+        # File name length check
         if len(filename) > 255:
             raise FileSecurityError(
                 f"filename length {len(filename)} exceeds 255",
                 code=ErrorCode.FILE_NAME_TOO_LONG,
             )
 
-        # 隠しファイルのチェック
+        # Hidden file check
         if filename.startswith("."):
             raise FileSecurityError(
                 "filename starts with a dot", code=ErrorCode.FILE_HIDDEN_NOT_ALLOWED
             )
 
-        # バイナリファイルの簡易チェック（NULL文字の存在）
-        # allow_binaryがTrueの場合はスキップ
-        if not allow_binary and b"\x00" in file_content[:1024]:  # 最初の1KBをチェック
+        # Simple binary file check (presence of NUL characters)
+        # Skipped when allow_binary is True
+        if not allow_binary and b"\x00" in file_content[:1024]:  # Check the first 1KB
             raise FileSecurityError(
                 "NUL byte found in the first 1KB",
                 code=ErrorCode.FILE_BINARY_NOT_ALLOWED,
@@ -647,14 +650,15 @@ class FileManager:
 
     def _save_file_securely(self, file_content: bytes, uploaded: UploadedFile) -> str:
         """
-        ファイルを安全に保存する
+        Store a file safely.
 
-        S3 では所有者ごとのキー（``uploaded.s3_key``）に ``pending=true`` のタグを付けて
-        置く。S3 がない手元の開発では、種類ごとのディレクトリに保存する（タグも
-        ライフサイクルもないため、期限はメタデータの ``expires_at`` だけで効く）。
+        On S3 it is placed at the per-owner key (``uploaded.s3_key``) with a ``pending=true``
+        tag. In local development without S3 it is saved in a per-type directory
+        (there is no tag or lifecycle, so only the metadata's ``expires_at``
+        enforces expiry).
 
         Returns:
-            str: 保存されたファイルのパス（ローカルパスまたはS3パス）
+            str: Path of the stored file (local path or S3 path)
         """
         if self.s3_service:
             key, value = PENDING_TAG
@@ -672,23 +676,23 @@ class FileManager:
         )
         file_path = directory / f"{uploaded.id}_{uploaded.original_filename}"
 
-        # 一時ファイルに書き込み後、アトミックに移動
+        # Write to a temp file, then move atomically
         temp_path = file_path.with_suffix(file_path.suffix + ".tmp")
 
         try:
             with open(temp_path, "wb") as f:
                 f.write(file_content)
 
-            # アトミックな移動
+            # Atomic move
             temp_path.rename(file_path)
 
-            # ファイル権限を設定（読み取り専用）
+            # Set file permissions (read-only)
             file_path.chmod(0o644)
 
             return str(file_path.absolute())
 
         except Exception as e:
-            # 一時ファイルが残っている場合は削除
+            # Delete the temp file if it remains
             if temp_path.exists():
                 temp_path.unlink()
             raise FileUploadError(

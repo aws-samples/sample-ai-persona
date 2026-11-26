@@ -1,10 +1,7 @@
-"""SurveyTemplateManager の単体テスト（U7）。
+"""Unit tests for SurveyTemplateManager.
 
-BR1.1〜BR1.7、BR1.9、BR2.3、NFR1.66、NFR1.67、NFR1.69、NFR1.83、NFR1.84、NFR2.21、
-NFR2.25、NFR8.25、AC2.1.1〜AC2.1.3、AC4.1.1〜AC4.1.3、AC5.1.2、AC5.1.4。
-
-DynamoDB は moto、ResourceSharing・ResourceLookup・AccessPolicy は本物
-（tests/unit/survey_world.py）。AI と FileAttachments はモック。
+DynamoDB is moto; ResourceSharing, ResourceLookup and AccessPolicy are real
+(tests/unit/survey_world.py). The AI and FileAttachments are mocks.
 """
 
 from unittest.mock import Mock
@@ -85,7 +82,7 @@ def _stored(world: SurveyWorld, template_id: str) -> dict | None:
 
 
 # =============================================================================
-# 作成（BR1.1、NFR1.83、NFR2.25）
+# Creation
 # =============================================================================
 
 
@@ -259,7 +256,7 @@ class TestCreateTemplate:
 
 
 # =============================================================================
-# 一覧（BR1.2、NFR1.66、NFR2.21、NFR2.26）
+# Listing
 # =============================================================================
 
 
@@ -338,7 +335,7 @@ class TestListTemplates:
     def test_a_body_unshared_after_indexing_is_not_listed(
         self, mgr, seeded, survey_world
     ):
-        # 共有の索引が残っていても、本体を読み直して can_read で落とす（BR1.2）
+        # Even if a share index remains, re-read the body and drop it by can_read
         survey_world.client.update_item(
             TableName=survey_world.templates_table,
             Key={"id": {"S": seeded["b"].id}},
@@ -361,12 +358,12 @@ class TestListTemplates:
 
 
 # =============================================================================
-# U7 Loop-back 1: 検索の 500 件の上限（NFR2.21、BR1.2）
+# Search limit of 500 records
 # =============================================================================
 
 
 class TestSearchReadsAtMost500:
-    """A search reads the newest 500 IDs of the tab and never scans (NFR2.21)."""
+    """A search reads the newest 500 IDs of the tab and never scans."""
 
     @staticmethod
     def _seed(world: SurveyWorld, owner: str, count: int, *share: str) -> list:
@@ -440,7 +437,7 @@ class TestSearchReadsAtMost500:
         assert listing.search_truncated is True
         assert listing.counts == {"mine": None}
         assert scan.call_count == 0
-        # 最も古い 1 件は読まれないため、名前で探しても出ない
+        # The oldest one is not read, so it does not show up even when searched by name
         oldest = mgr.list_templates(MEMBER_A, "mine", None, search="検索000")
         assert oldest.items == []
 
@@ -473,7 +470,7 @@ class TestSearchReadsAtMost500:
 
 
 # =============================================================================
-# 読む・管理する（BR1.3〜BR1.6、NFR1.67、NFR1.69）
+# Reading and managing
 # =============================================================================
 
 
@@ -620,7 +617,7 @@ class TestDeleteTemplate:
 
 
 # =============================================================================
-# AI 生成（BR2.3）
+# AI generation
 # =============================================================================
 
 

@@ -1,49 +1,49 @@
-"""The advanced generation (beta) of personas from tables and documents (W4〜W6).
+"""The advanced generation (beta) of personas from tables and documents.
 
-U6: up to three tables (``source_1``〜), prepared one at a time; with the
-AI detailed analysis (decided at the start, BR35.2) the join keys are found
-(BR37.3), ``run_code`` is given with a budget (BR36.2) and a change of the
-library or a Parquet fails the generation (BR36.6).
+Up to three tables (``source_1`` ...), prepared one at a time; with the
+AI detailed analysis (decided at the start) the join keys are found,
+``run_code`` is given with a budget and a change of the
+library or a Parquet fails the generation.
 
 ``start_generation`` checks the request and writes the owner's lock, the
-generation and the file's in-use mark in one transaction (BR7.5, BR6.4);
+generation and the file's in-use mark in one transaction;
 the Router then hands ``run`` to its own thread pool. ``run`` goes through
-the stages in order and never raises (functional-spec.md §3)::
+the stages in order and never raises::
 
     preparing -> planning -> running -> synthesizing -> verifying -> done
                      (any stage) -> failed
 
-- One sandbox session per generation, always stopped at the end (BR6.1).
-  The table goes in through a 15-minute presigned GET made here (BR6.2);
+- One sandbox session per generation, always stopped at the end.
+  The table goes in through a 15-minute presigned GET made here;
   a refused download gets one new URL. The URL is never logged or stored.
-- Every transition is conditioned on the current state (BR7.1); every stage
-  writes a ``stage`` event and a heartbeat runs every 30 seconds (BR7.3).
+- Every transition is conditioned on the current state; every stage
+  writes a ``stage`` event and a heartbeat runs every 30 seconds.
 - The whole generation has 60 minutes; no model stage starts with less than
-  10 minutes left (reliability-design.md §2, NFR5.6).
+  10 minutes left.
 - The end releases the lock and the mark, writes ``finished_at`` (results
-  readable 24 hours) and returns the slot, each step on its own (NFR5.15).
-- Free slots are a ``BoundedSemaphore`` of ``ADVANCED_GENERATION_MAX_CONCURRENT``
-  (scalability-design.md §1); a full task answers ``ADVANCED_GENERATION_BUSY``.
+  readable 24 hours) and returns the slot, each step on its own.
+- Free slots are a ``BoundedSemaphore`` of ``ADVANCED_GENERATION_MAX_CONCURRENT``;
+  a full task answers ``ADVANCED_GENERATION_BUSY``.
 
 Failures keep the error code and safe values only, never row data or
-exception text (NFR3.6); logs go through the allowed-field list (NFR6.1).
+exception text; logs go through the allowed-field list.
 
-U5 (the generation's controls, ADR-009): requests travel through the store,
+Generation controls: requests travel through the store,
 so whichever task receives them, the task running the generation takes them.
 
 - ``confirm_plan`` stops the run in ``awaiting_plan_approval`` after the plan;
   approve, replan (no limit) or cancel; 15 minutes per card, 60 in total, and
-  the waits move the 60-minute deadline back (BR29).
+  the waits move the 60-minute deadline back.
 - A watch thread reads the generation every ``control_poll_seconds`` (and
   writes the heartbeat); the run checks at its boundaries and stops on a
-  cancel, or quietly when someone else ended it (BR31.2, BR32.5). Right
+  cancel, or quietly when someone else ended it. Right
   before the results it reads once more, and ``done`` loses to a pending
   cancel; a lost ``done`` removes the candidates and the record again.
 - Every end (done, failed, cancelled) releases the lock and the marks before
   its event is written and before the session stops, so the same files can
   start again at once; a start also frees a lock left by an ended generation.
 - Readers (the stream, the page, the start, the requests) end a generation
-  whose heartbeat is 5 minutes old, or whose plan wait ran out (BR32.1, BR32.2).
+  whose heartbeat is 5 minutes old, or whose plan wait ran out.
 """
 
 from __future__ import annotations
@@ -131,12 +131,12 @@ logger = logging.getLogger(__name__)
 
 #: ``cause`` of a sandbox failure (the same value SandboxService uses).
 _CAUSE_SANDBOX = "code_interpreter"
-#: Library error codes -> what the user is told (functional-spec.md §5).
+#: Library error codes -> what the user is told.
 _LIBRARY_CODES = {
     "SOURCE_UNREADABLE": ErrorCode.GENERATION_SOURCE_UNREADABLE,
     "TOO_MANY_BAD_ROWS": ErrorCode.GENERATION_SOURCE_UNREADABLE,
     "OUT_OF_MEMORY": ErrorCode.GENERATION_CAPACITY,
-    # U4 (BR24.4, BR24.6)
+    # Document failures
     "DOCUMENT_NO_TEXT": ErrorCode.DOCUMENT_NO_TEXT,
     "DOCUMENT_ENCRYPTED": ErrorCode.DOCUMENT_ENCRYPTED,
 }
@@ -149,14 +149,14 @@ _SAFE_CONTEXT_KEYS = frozenset(
         "max_chars",
         "limit",
         "value",
-        # U3: counts and line numbers, integers only (NFR3.20)
+        # Counts and line numbers, integers only
         "rows_read",
         "rows_excluded",
         "columns_count",
         "row_examples",
         "required_rows",
         "persona_count",
-        # U4: the document's place and the character counts (NFR3.22)
+        # The document's place and the character counts
         "source_index",
         "total_chars",
     }
@@ -175,24 +175,24 @@ _COUNT_KEYS = frozenset(
 )
 #: Seconds between two "根拠の抽出 n / M" notices when 10% is not reached.
 _EXTRACTION_NOTICE_SECONDS = 30
-#: Room kept under the 2MB of the result parts for the item keys (NFR5.38).
+#: Room kept under the 2MB of the result parts for the item keys.
 _PARTS_SLACK_BYTES = 16 * 1024
-#: At most this many line numbers are kept in ``row_examples`` (BR16.2).
+#: At most this many line numbers are kept in ``row_examples``.
 _ROW_EXAMPLES_MAX = 5
-#: The two time limits, told apart in ``error_context`` (NFR1.6, NFR5.6, NFR5.7).
+#: The two time limits, told apart in ``error_context``.
 _LIMIT_GENERATION = "generation_minutes"
 _LIMIT_PREPARE = "prepare_minutes"
-#: U5: one plan card (BR29.5) and every card together (BR29.7).
+#: One plan card and every card together.
 _LIMIT_PLAN_WAIT = "plan_wait_minutes"
 _LIMIT_PLAN_WAIT_TOTAL = "plan_wait_total_minutes"
-#: U5: attributes that mean nothing once the generation has ended.
+#: Attributes that mean nothing once the generation has ended.
 _ENDED_REMOVES = ("control_request", "awaiting_since")
-#: U5: the states a cancel may be written in (BR31.1).
+#: The states a cancel may be written in.
 _RUNNING_STATES = tuple(s for s in GenerationStatus if not s.is_terminal)
-#: U5: the actions the plan card sends (a cancel has its own route).
+#: The actions the plan card sends (a cancel has its own route).
 _PLAN_DECISIONS = frozenset({ControlAction.APPROVE.value, ControlAction.REPLAN.value})
 _EVENT_TEXT_MAX = 150
-#: Wait before the one re-send of a failed copy of the source (NFR5.30).
+#: Wait before the one re-send of a failed copy of the source.
 _REFRESH_RETRY_SECONDS = 1.0
 
 
@@ -205,7 +205,7 @@ class _StopRun(Exception):
 
 
 class _Cancelled(Exception):
-    """Internal: the user cancelled; the run moves to ``cancelled`` (U5 BR31.2)."""
+    """Internal: the user cancelled; the run moves to ``cancelled``."""
 
 
 def _utc_now() -> datetime:
@@ -221,7 +221,7 @@ def _summary(**values: Any) -> str:
 
 
 def _safe_context(context: Mapping[str, Any]) -> dict[str, Any]:
-    """Only short, known values survive into the stored failure (NFR3.6)."""
+    """Only short, known values survive into the stored failure."""
     safe: dict[str, Any] = {}
     for key, value in context.items():
         if key not in _SAFE_CONTEXT_KEYS:
@@ -251,12 +251,12 @@ def _safe_context(context: Mapping[str, Any]) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class GenerationProgress:
-    """What the progress stream reads at one moment (C3)."""
+    """What the progress stream reads at one moment."""
 
     generation: AdvancedGeneration
     events: tuple[GenerationEvent, ...]
     #: The stored failure values and, for a document's failure, the owner's
-    #: file name found again from ``source_index`` (U4 BR24.4, NFR3.22).
+    #: file name found again from ``source_index``.
     failure_context: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -266,7 +266,7 @@ class GenerationProgress:
 
 @dataclass(frozen=True)
 class AdvancedGenerationResult:
-    """The finished result shown in section D (BR8.4)."""
+    """The finished result shown in the result section."""
 
     generation: AdvancedGeneration
     prepare_reports: tuple[PrepareReport, ...]
@@ -274,7 +274,7 @@ class AdvancedGenerationResult:
     evidence: tuple[Evidence, ...]
     candidates: tuple[PersonaCandidate, ...]
     unverified_segment_ids: tuple[str, ...]
-    #: U4: one report per document, and the display name of each source file.
+    #: One report per document, and the display name of each source file.
     document_reports: tuple[DocumentReport, ...] = ()
     source_names: dict[str, str] = field(default_factory=dict)
 
@@ -296,7 +296,7 @@ class _NoTools:
 
 @dataclass
 class _Table:
-    """U6: one prepared table of the run, named in the order chosen (BR37.2)."""
+    """One prepared table of the run, named in the order chosen."""
 
     alias: str
     source: SourceFile
@@ -304,7 +304,7 @@ class _Table:
     profile: dict[str, Any]
 
 
-#: U6: the progress notice when run_code is taken off (BR36.2, AC5.4.2).
+#: The progress notice when run_code is taken off.
 _RUN_CODE_DISABLED_NOTICE = "AI による詳細分析をやめて、事前定義された関数で続けます"
 
 #: What the screen's log calls a plan step and a tool (fixed names only; the
@@ -347,17 +347,17 @@ class _Run:
     session: Optional["SandboxSession"] = None
     #: The table (none when the generation uses documents alone).
     source: Optional[SourceFile] = None
-    #: Every source file, in ``source_file_ids`` order (U4).
+    #: Every source file, in ``source_file_ids`` order.
     sources: list[SourceFile] = field(default_factory=list)
     report: Optional[PrepareReport] = None
-    #: U4: ``(source_index, file, report)`` of each prepared document.
+    #: ``(source_index, file, report)`` of each prepared document.
     documents: list[tuple[int, SourceFile, DocumentReport]] = field(
         default_factory=list
     )
     document_mode: Optional[DocumentMode] = None
     #: Full text of each document, in ``documents`` order (``full_text`` only).
     document_texts: list[str] = field(default_factory=list)
-    #: Document evidence that passed the quote check (BR27.1).
+    #: Document evidence that passed the quote check.
     document_evidence: list[Evidence] = field(default_factory=list)
     evidence_stats: dict[str, int] = field(default_factory=dict)
     evidence_tokens: dict[str, int] = field(default_factory=dict)
@@ -372,37 +372,37 @@ class _Run:
     cause: Optional[str] = None
     #: DuckDB's memory limit the preparation reported (for the log only).
     memory_limit: Optional[str] = None
-    #: U5: seconds already waited for plan approvals (BR29.6) and replans.
+    #: Seconds already waited for plan approvals and replans.
     waited_seconds: int = 0
     replan_count: int = 0
-    #: U5: when the current plan card was shown (``awaiting_plan_approval``).
+    #: When the current plan card was shown (``awaiting_plan_approval``).
     awaiting_since: Optional[datetime] = None
-    #: U5: the watch saw a cancel request (BR31.2) ...
+    #: The watch saw a cancel request ...
     cancel_requested: threading.Event = field(default_factory=threading.Event)
     cancel_request: Optional[ControlRequest] = None
-    #: ... or that a reader ended the generation (BR32.5).
+    #: ... or that a reader ended the generation.
     ended_elsewhere: threading.Event = field(default_factory=threading.Event)
     #: Set before the run writes its own end, so the watch ignores that end.
     ending: threading.Event = field(default_factory=threading.Event)
-    #: Consecutive failures of the watch's read and of its heartbeat (NFR5.51).
+    #: Consecutive failures of the watch's read and of its heartbeat.
     read_failures: int = 0
     beat_failures: int = 0
     #: The end (lock, marks, ``finished_at``) is already written.
     finished: bool = False
-    #: U6: every table, in the order chosen (``source_1``〜``source_3``).
+    #: Every table, in the order chosen (``source_1`` to ``source_3``).
     tables: list[_Table] = field(default_factory=list)
-    #: U6: the join plans and the axis people each matched (BR37.3).
+    #: The join plans and the axis people each matched.
     joins: list[tuple[JoinPlan, int]] = field(default_factory=list)
-    #: U6: the run_code budget (the gate the tools ask, NFR5.55).
+    #: The run_code budget (the gate the tools ask).
     budget: Optional[RunCodeBudget] = None
-    #: review-01 R-01: why detailed analysis was not offered after all
+    #: Why detailed analysis was not offered after all
     detailed_fallback: Optional[str] = None
-    #: U6 addendum: how each table reads (proposed, then as the user confirmed).
+    #: How each table reads (proposed, then as the user confirmed).
     reading: tuple[TableReading, ...] = ()
 
     @property
     def deadline(self) -> datetime:
-        """60 minutes from the start, moved back by the plan waits (BR29.6)."""
+        """60 minutes from the start, moved back by the plan waits."""
         return self.generation.created_at + timedelta(
             seconds=config.ADVANCED_GENERATION_TIMEOUT_SECONDS + self.waited_seconds
         )
@@ -410,7 +410,7 @@ class _Run:
 
 @dataclass(frozen=True)
 class ElapsedClock:
-    """Seconds since the generation started, and whether they still grow (AC9.1.1)."""
+    """Seconds since the generation started, and whether they still grow."""
 
     seconds: int
     running: bool
@@ -440,7 +440,7 @@ class AdvancedPersonaGenerationManager:
         """Every Service is optional; omitted ones come from the factory on first use.
 
         The availability check (``is_available``) needs only the settings
-        store, so the tab strip never builds the sandbox or the agents (ADR-011).
+        store, so the tab strip never builds the sandbox or the agents.
         """
         self._advanced_generation_policy = AdvancedGenerationPolicy(
             settings_store or service_factory.get_app_settings_store()
@@ -461,14 +461,14 @@ class AdvancedPersonaGenerationManager:
             heartbeat_seconds or config.ADVANCED_GENERATION_HEARTBEAT_SECONDS
         )
         self._poll_seconds = poll_seconds
-        #: U5: how often the watch and the plan wait read the generation
+        #: How often the watch and the plan wait read the generation
         self._control_poll_seconds = float(
             control_poll_seconds
             if control_poll_seconds is not None
             else config.ADVANCED_GENERATION_CONTROL_POLL_SECONDS
         )
 
-    # --- lazy dependencies (ADR-011) --------------------------------------------
+    # --- lazy dependencies --------------------------------------------
 
     @property
     def _store(self) -> "AdvancedGenerationStore":
@@ -517,17 +517,17 @@ class AdvancedPersonaGenerationManager:
     # --- availability and start -------------------------------------------------
 
     def is_available(self, principal: Principal) -> bool:
-        """Whether the tab and the page are shown to ``principal`` (BR1.1)."""
+        """Whether the tab and the page are shown to ``principal``."""
         return self._advanced_generation_policy.is_available(principal)
 
     def detailed_analysis_offered(self, principal: Principal) -> bool:
-        """U6 BR35.4: whether the detailed settings show "AI による詳細分析"."""
+        """Whether the detailed settings show "AI による詳細分析"."""
         return self._advanced_generation_policy.availability(
             principal, in_process=self._in_process()
         ).detailed
 
     def _in_process(self) -> bool:
-        """The sandbox runs in this process (only an injected one can, ADR-004)."""
+        """The sandbox runs in this process (only an injected one can)."""
         return getattr(self._sandbox_service, "kind", "code_interpreter") == (
             "in_process"
         )
@@ -542,13 +542,13 @@ class AdvancedPersonaGenerationManager:
         confirm_plan: bool = False,
         use_detailed_analysis: bool = False,
     ) -> str:
-        """Check the request and write the start transaction (W4, BR7.5, BR6.4).
+        """Check the request and write the start transaction.
 
-        U5: ``confirm_plan`` stops the run after the plan until the user
-        approves it (BR29.1).
+        ``confirm_plan`` stops the run after the plan until the user
+        approves it.
 
-        The order is: release conditions, input, the free slot, the lock
-        (scalability-design.md §1). A refused transaction gives the slot back.
+        The order is: release conditions, input, the free slot, the lock.
+        A refused transaction gives the slot back.
 
         Returns:
             The generation ID; the caller hands :meth:`run` to its pool and
@@ -568,16 +568,16 @@ class AdvancedPersonaGenerationManager:
         )
         ids = list(dict.fromkeys(i for i in source_file_ids if i))
         self._check_input(purpose, persona_count)
-        # U4 BR23.1 / U6 BR37.1: documents alone, or up to three tables
+        # Documents alone, or up to three tables
         found = self._catalog.ready_sources(principal.sub, ids)
-        # U6 BR35.2: decided now and kept; a box sent without the
+        # Decided now and kept; a box sent without the
         # administrator's permission is quietly off
         detailed = (
             bool(use_detailed_analysis)
             and any(s.kind is SourceKind.TABLE for s in found)
             and self.detailed_analysis_offered(principal)
         )
-        self._judge_lock_holder(principal)  # U5 BR30.1: a stalled one lets go
+        self._judge_lock_holder(principal)  # a stalled one lets go
         if not self._slots.acquire(blocking=False):
             raise _fail(ErrorCode.ADVANCED_GENERATION_BUSY, "no free generation slot")
         try:
@@ -594,7 +594,7 @@ class AdvancedPersonaGenerationManager:
             raise
 
     def _judge_lock_holder(self, principal: Principal) -> None:
-        """Judge the generation the owner's lock points at (BR30.1, NFR5.47).
+        """Judge the generation the owner's lock points at.
 
         A stalled one is ended (which releases its lock and marks) so the new
         start can take them; one already ended has its lock and marks released
@@ -613,7 +613,7 @@ class AdvancedPersonaGenerationManager:
         if generation is None or generation.owner_sub != principal.sub:
             return
         if generation.status.is_terminal:
-            # review fix: an ended generation whose holds were not released
+            # An ended generation whose holds were not released
             # (yet) never blocks the next start; only its own holds go
             self._store.release_holds(
                 generation.generation_id,
@@ -659,7 +659,7 @@ class AdvancedPersonaGenerationManager:
         )
         lock_until = now + timedelta(seconds=config.ADVANCED_GENERATION_LOCK_SECONDS)
         try:
-            # U2 BR13.3: "used" is the start; the same write moves the expiry
+            # "Used" is the start; the same write moves the expiry
             self._store.create_with_lock(
                 generation,
                 lock_until=lock_until,
@@ -672,7 +672,7 @@ class AdvancedPersonaGenerationManager:
         return generation.generation_id
 
     def abort_start(self, generation_id: str) -> None:
-        """Undo a start whose run could not be handed to the pool (§2).
+        """Undo a start whose run could not be handed to the pool.
 
         Each end step stands alone; the slot goes back last, exactly once,
         even when the read raises (that error still reaches the caller).
@@ -721,7 +721,7 @@ class AdvancedPersonaGenerationManager:
         except _Cancelled:
             self._record_cancel(state)
         except _StopRun:
-            # U5 BR32.5: a lost transition means someone else ended it
+            # A lost transition means someone else ended it
             state.ended_elsewhere.set()
             logger.warning("advanced generation stopped: a transition was lost")
         except CodedError as e:
@@ -730,14 +730,14 @@ class AdvancedPersonaGenerationManager:
             logger.error("advanced generation failed (%s)", type(e).__name__)
             self._record_failure(state, ErrorCode.GENERATION_OPERATION_FAILED, {})
         finally:
-            # Each end step stands alone; the slot goes back last and once (§2).
+            # Each end step stands alone; the slot goes back last and once.
             try:
                 stop_watch.set()
                 if not state.ended_elsewhere.is_set() and not state.finished:
-                    # NFR5.46: the side that ended it released the lock and marks
+                    # The side that ended it released the lock and marks
                     self._finish(state.generation)
                     state.finished = True
-                # review fix: the session (an external call) stops after the
+                # The session (an external call) stops after the
                 # lock and the marks are gone, so a restart is never refused
                 self._stop_session(state)
                 try:
@@ -755,7 +755,7 @@ class AdvancedPersonaGenerationManager:
         self._enter(
             state,
             GenerationStatus.PLANNING,
-            # U4 BR25.2: decided right after the preparation
+            # Decided right after the preparation
             updates={
                 "document_mode": (
                     state.document_mode.value if state.document_mode else None
@@ -764,7 +764,7 @@ class AdvancedPersonaGenerationManager:
         )
         self._plan(state)
         if state.generation.confirm_plan:
-            # U5 BR29.1: wait for the user; ends in ``running`` (or raises)
+            # Wait for the user; ends in ``running`` (or raises)
             self._await_plan_decision(state)
         else:
             self._enter(
@@ -780,7 +780,7 @@ class AdvancedPersonaGenerationManager:
         personas = self._synthesize(state)
         problem = self._persona_problem(state, personas)
         if problem is not None:
-            # U6 addendum: a persona that is not complete, or a layer left out,
+            # A persona that is not complete, or a layer left out,
             # is written once more; a second time fails the generation
             logger.info("advanced generation personas rejected: %s", problem)
             self._event(
@@ -826,9 +826,9 @@ class AdvancedPersonaGenerationManager:
         moved: bool = False,
         updates: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        """Move to ``stage`` (conditioned on the current one) and say so (BR7.1).
+        """Move to ``stage`` (conditioned on the current one) and say so.
 
-        ``moved``: the store already moved it (U5: the plan wait's own writes).
+        ``moved``: the store already moved it (the plan wait's own writes).
         """
         self._checkpoint(state)
         self._check_deadline(state)
@@ -875,7 +875,7 @@ class AdvancedPersonaGenerationManager:
             raise self._generation_timeout("generation over 60 minutes")
 
     def _before_model(self, state: _Run) -> None:
-        """No model stage starts with under 10 minutes left (§2), nor after a cancel."""
+        """No model stage starts with under 10 minutes left, nor after a cancel."""
         self._checkpoint(state)
         remaining = state.deadline - self._clock()
         if remaining < timedelta(
@@ -886,11 +886,10 @@ class AdvancedPersonaGenerationManager:
     # --- preparing --------------------------------------------------------------
 
     def _prepare(self, state: _Run) -> None:
-        """Bring every file in, prepare the table, then each document (BR25.4).
+        """Bring every file in, prepare the table, then each document.
 
-        U4: every chosen file is refreshed and brought in (the U2 note that
-        only the first was refreshed is fixed here). The 20 minutes of the
-        preparation count the table and the documents together (NFR1.22).
+        Every chosen file is refreshed and brought in. The 20 minutes of the
+        preparation count the table and the documents together.
         """
         generation = state.generation
         sources = [
@@ -909,7 +908,7 @@ class AdvancedPersonaGenerationManager:
         state.session = sandbox.start_session(
             generation.generation_id, config.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS
         )
-        # U5 BR32.4: a reader that ends the generation stops the session by its ID
+        # A reader that ends the generation stops the session by its ID
         if not self._store.transition(
             generation.generation_id,
             GenerationStatus.PREPARING,
@@ -920,7 +919,7 @@ class AdvancedPersonaGenerationManager:
         for source in state.sources:
             self._bring_in(state, source)
         prepare_started = self._clock()
-        # U6 NFR1.28: each table in the order chosen, one at a time, within
+        # Each table in the order chosen, one at a time, within
         # the same 20 minutes as the documents
         tables = [s for s in state.sources if s.kind is SourceKind.TABLE]
         for alias, table in zip(TABLE_ALIASES, tables):
@@ -950,7 +949,7 @@ class AdvancedPersonaGenerationManager:
         alias: str = TABLE_ALIASES[0],
         only: bool = True,
     ) -> None:
-        """One table's preparation and its checks (U1, U3: BR16, BR18; U6 BR37.2)."""
+        """One table's preparation and its checks."""
         assert state.session is not None
         started = time.monotonic()
         state.report = None
@@ -969,10 +968,10 @@ class AdvancedPersonaGenerationManager:
         state.tables.append(_Table(alias, source, state.report, state.profile))
 
     def _settle_guide_table(self, state: _Run) -> None:
-        """The table the guide and the population read (U6 BR37.2), then joins.
+        """The table the guide and the population read, then joins.
 
-        With several tables the row check (BR18.1) is made on that table, and
-        the join keys are found when the detailed analysis is on (BR37.3).
+        With several tables the row check is made on that table, and
+        the join keys are found when the detailed analysis is on.
         """
         state.reading = AnalysisPolicy.read_tables(
             [(t.alias, t.source.display_name, t.profile) for t in state.tables]
@@ -993,7 +992,7 @@ class AdvancedPersonaGenerationManager:
         )
 
     def _plan_joins(self, state: _Run) -> None:
-        """Find the join keys with the fixed ``key_overlap`` (BR37.3, NFR1.29)."""
+        """Find the join keys with the fixed ``key_overlap``."""
         deadline = self._clock() + timedelta(
             seconds=config.ADVANCED_JOIN_CHECK_TIMEOUT_SECONDS
         )
@@ -1034,7 +1033,7 @@ class AdvancedPersonaGenerationManager:
         )
 
     def _check_enough_rows(self, state: _Run) -> None:
-        """Stop when the table has fewer rows than persona count x 10 (BR18.1).
+        """Stop when the table has fewer rows than persona count x 10.
 
         Runs after the bad-row check (which raised already if it applied) and
         before any model call. The count is the rows read, before any narrowing
@@ -1059,7 +1058,7 @@ class AdvancedPersonaGenerationManager:
         error_code: Optional[ErrorCode],
         context: Mapping[str, Any],
     ) -> None:
-        """One line at the end of the preparation: counts and time only (NFR6.11)."""
+        """One line at the end of the preparation: counts and time only."""
         fields: dict[str, Any] = {
             "generation_id": state.generation.generation_id,
             "status": "failed" if error_code else "done",
@@ -1089,12 +1088,12 @@ class AdvancedPersonaGenerationManager:
             logger.error("preparation not logged (%s)", type(e).__name__)
 
     def _refresh_source(self, state: _Run, source: SourceFile) -> SourceFile:
-        """Copy the object onto its key so S3 keeps it 9 more days (BR13.4).
+        """Copy the object onto its key so S3 keeps it 9 more days.
 
         Runs before the session starts. A transient S3 failure is sent again
-        once after 1 second (NFR5.30); an object gone from S3 or a checksum
+        once after 1 second; an object gone from S3 or a checksum
         that differs from the record is ``GENERATION_SOURCE_UNREADABLE``. A
-        record without a checksum gets the copy's (security-design.md §5).
+        record without a checksum gets the copy's.
 
         Returns:
             The file, with the filled checksum when there was none.
@@ -1235,9 +1234,9 @@ class AdvancedPersonaGenerationManager:
         """Poll a started command until it ends, within the 20 and 60 minutes.
 
         ``on_progress`` gets the progress file and says whether it wrote an
-        event; without one for 60 seconds a "still going" notice is written
-        (BR17.2). The 20 minutes count from ``prepare_started``, the start of
-        the whole preparation (table and documents, NFR1.22).
+        event; without one for 60 seconds a "still going" notice is written.
+        The 20 minutes count from ``prepare_started``, the start of
+        the whole preparation (table and documents).
         """
         assert state.session is not None
         sandbox = self._sandbox
@@ -1252,12 +1251,12 @@ class AdvancedPersonaGenerationManager:
             if status.get("done"):
                 return status
             if state.cancel_requested.is_set() or state.ended_elsewhere.is_set():
-                # U5 BR31.2: stop the command, then end the run
+                # Stop the command, then end the run
                 self._cancel_quietly(state, command_id)
                 self._checkpoint(state)
             now = self._clock()
             if now - last_event_at >= notice:
-                # The rows stand still while the table is written (BR17.2): say
+                # The rows stand still while the table is written: say
                 # that it goes on, so the screen hears from us within 5 minutes.
                 last_event_at = now
                 minutes = max(int((now - started).total_seconds() // 60), 1)
@@ -1283,7 +1282,7 @@ class AdvancedPersonaGenerationManager:
                 else config.ADVANCED_GENERATION_PREPARE_POLL_SECONDS
             )
 
-    # --- U4: documents (BR24, BR25, BR26, BR27.1) --------------------------------
+    # --- Documents --------------------------------
 
     def _prepare_document(
         self,
@@ -1293,7 +1292,7 @@ class AdvancedPersonaGenerationManager:
         source: SourceFile,
         prepare_started: datetime,
     ) -> DocumentReport:
-        """Prepare one document in the sandbox and say what it holds (BR24.5)."""
+        """Prepare one document in the sandbox and say what it holds."""
         assert state.session is not None
         metadata = source.document_metadata
         fmt = source.source_format
@@ -1365,7 +1364,7 @@ class AdvancedPersonaGenerationManager:
         report: Optional[DocumentReport],
         error_code: Optional[ErrorCode],
     ) -> None:
-        """One line per document: counts and time only, never names (NFR6.13)."""
+        """One line per document: counts and time only, never names."""
         try:
             log_advanced_event(
                 "advanced_generation.document_prepared",
@@ -1384,7 +1383,7 @@ class AdvancedPersonaGenerationManager:
             logger.error("document preparation not logged (%s)", type(e).__name__)
 
     def _decide_document_mode(self, state: _Run) -> None:
-        """The total limit, then full text or extraction (BR25.1, BR25.2)."""
+        """The total limit, then full text or extraction."""
         total = sum(report.chars for _, _, report in state.documents)
         chunks = sum(report.chunks for _, _, report in state.documents)
         limit = int(config.ADVANCED_DOCUMENT_MAX_TOTAL_CHARS)
@@ -1433,7 +1432,7 @@ class AdvancedPersonaGenerationManager:
     def _read_chunk(
         self, state: _Run, source_id: str, index: int
     ) -> tuple[str, Mapping[str, Any]]:
-        """One chunk, taken out of the session a piece at a time (NFR5.39)."""
+        """One chunk, taken out of the session a piece at a time."""
         assert state.session is not None
         parts: list[str] = []
         offset: Optional[int] = 0
@@ -1459,11 +1458,11 @@ class AdvancedPersonaGenerationManager:
         return "".join(parts), info
 
     def _extract_evidence(self, state: _Run) -> None:
-        """Evidence out of every chunk, a few at once (BR26.1〜BR26.3, NFR1.16).
+        """Evidence out of every chunk, a few at once.
 
         Each task takes one chunk out of the session, asks the light model and
         returns its evidence; the chunk's text goes when the task ends. One
-        failure stops the rest without waiting for them (BR26.2, NFR1.18).
+        failure stops the rest without waiting for them.
         """
         started = time.monotonic()
         tasks = [
@@ -1476,7 +1475,7 @@ class AdvancedPersonaGenerationManager:
         tokens = {"input_tokens": 0, "output_tokens": 0}
         found: list[tuple[int, int, list[Evidence]]] = []
         # Set by the first failure: later tasks do not start and running ones
-        # do not retry (BR26.2), so no call goes on after the run has failed.
+        # do not retry, so no call goes on after the run has failed.
         stopped = threading.Event()
         first_failure: list[BaseException] = []
         executor = ThreadPoolExecutor(
@@ -1552,14 +1551,14 @@ class AdvancedPersonaGenerationManager:
         """One task of the extraction: the time check, the chunk, the model.
 
         A failure here sets ``stopped`` before it is raised, so the next task a
-        worker picks up gives up at once (BR26.2, NFR1.18).
+        worker picks up gives up at once.
         """
         if stopped.is_set():
             raise _fail(
                 ErrorCode.GENERATION_OPERATION_FAILED, "extraction already stopped"
             )
         try:
-            self._before_model(state)  # BR26.5: before every call
+            self._before_model(state)  # before every call
             text, info = self._read_chunk(state, source_id, chunk)
             # One agent per call: a Strands agent is never shared by two threads.
             agent = self._agents.create_advanced_evidence_agent(
@@ -1599,7 +1598,7 @@ class AdvancedPersonaGenerationManager:
     def _check_quotes(
         self, state: _Run, evidence: Sequence[Evidence]
     ) -> list[Evidence]:
-        """Keep the evidence whose quote is in its document (BR27.1).
+        """Keep the evidence whose quote is in its document.
 
         Quotes go to the sandbox per document, ``ADVANCED_EVIDENCE_VERIFY_BATCH``
         at a time. The dropped ones are counted in ``evidence_stats``.
@@ -1651,9 +1650,9 @@ class AdvancedPersonaGenerationManager:
     def _library_value(
         result: Mapping[str, Any], *, strict: bool = False
     ) -> Mapping[str, Any]:
-        """The value of a C9 result, or the user-facing code of its error.
+        """The value of a sandbox result, or the user-facing code of its error.
 
-        ``strict`` (U4 NFR5.39): a value the Service had to cut cannot be used
+        ``strict``: a value the Service had to cut cannot be used
         (a chunk's text, the quote check) and is ``GENERATION_OPERATION_FAILED``.
         """
         if result.get("ok") and isinstance(result.get("value"), Mapping):
@@ -1709,7 +1708,7 @@ class AdvancedPersonaGenerationManager:
 
     def _profile_text(self, state: _Run) -> str:
         if len(state.tables) > 1:
-            # U6 BR37.2: every table's profile under its name
+            # Every table's profile under its name
             return json.dumps(
                 {t.alias: t.profile for t in state.tables},
                 ensure_ascii=False,
@@ -1738,7 +1737,7 @@ class AdvancedPersonaGenerationManager:
         }
 
     def _table_data(self, state: _Run) -> dict[str, str]:
-        """U6: the table names, the guide table and the join plans (BR37.2〜37.4)."""
+        """The table names, the guide table and the join plans."""
         if len(state.tables) <= 1 and not state.joins:
             return {}
         data = {
@@ -1757,7 +1756,7 @@ class AdvancedPersonaGenerationManager:
         return data
 
     def _full_texts(self, state: _Run) -> list[str]:
-        """The whole document texts for the prompts (``full_text`` only, BR25.3)."""
+        """The whole document texts for the prompts (``full_text`` only)."""
         return (
             list(state.document_texts)
             if state.document_mode is DocumentMode.FULL_TEXT
@@ -1780,7 +1779,7 @@ class AdvancedPersonaGenerationManager:
             next((r for r in state.reading if r.alias == guide_alias), None),
         )
         detailed = self._detailed_in_use(state)
-        # U6 addendum: the step candidates from the words and the column shapes
+        # The step candidates from the words and the column shapes
         candidates = (
             AnalysisPolicy.guide_candidates(
                 generation.purpose,
@@ -1809,7 +1808,7 @@ class AdvancedPersonaGenerationManager:
             **self._reading_data(state),
         }
         if state.document_mode is DocumentMode.EXTRACTION:
-            # BR26.3: the checked evidence only, never the text
+            # The checked evidence only, never the text
             data["document_evidence"] = self._document_evidence_text(state)
         plan: Optional[AnalysisPlan] = None
         self._event(state, EventType.PROGRESS, message="分析の計画を作っています")
@@ -1823,7 +1822,7 @@ class AdvancedPersonaGenerationManager:
                 data,
                 documents=self._full_texts(state),
             )
-            self._checkpoint(state)  # U5: a cancel during the call
+            self._checkpoint(state)  # a cancel during the call
             plan = AnalysisPolicy.settle_plan(
                 raw,
                 guide=guide,
@@ -1846,7 +1845,7 @@ class AdvancedPersonaGenerationManager:
             message=f"計画ができました（手順 {len(plan.plan_steps())} 件: {names}）",
         )
         if not generation.confirm_plan:
-            # U5: a plan to confirm is announced once its card can be shown
+            # A plan to confirm is announced once its card can be shown
             self._plan_event(state)
 
     def _plan_event(self, state: _Run) -> None:
@@ -1858,16 +1857,16 @@ class AdvancedPersonaGenerationManager:
             interpreted_purpose=state.plan.interpreted_purpose[:_EVENT_TEXT_MAX],
         )
 
-    # --- U5: the plan confirmation (BR29) ---------------------------------------
+    # --- Plan confirmation ---------------------------------------
 
     def _await_plan_decision(self, state: _Run) -> None:
-        """Show the plan and wait for approve, replan or cancel (W5-1).
+        """Show the plan and wait for approve, replan or cancel.
 
-        The thread keeps its slot and the lock while it waits (NFR5.41) and
-        reads the generation every ``control_poll_seconds`` (NFR1.24). A
+        The thread keeps its slot and the lock while it waits and
+        reads the generation every ``control_poll_seconds``. A
         replan makes the plan again with the new instruction and waits again,
-        with no limit on the count (BR29.4). One card waits 15 minutes and all
-        the cards 60 minutes together (BR29.5, BR29.7).
+        with no limit on the count. One card waits 15 minutes and all
+        the cards 60 minutes together.
 
         Raises:
             _Cancelled: The user cancelled while the card was shown.
@@ -1886,13 +1885,13 @@ class AdvancedPersonaGenerationManager:
             # a request taken by no one (a cancel wrote over it) is read again
 
     def _enter_awaiting(self, state: _Run) -> None:
-        """``planning -> awaiting_plan_approval`` with the longer lock (NFR5.43)."""
+        """``planning -> awaiting_plan_approval`` with the longer lock."""
         if state.status is GenerationStatus.AWAITING_PLAN_APPROVAL:
             return
         assert state.plan is not None
         generation = state.generation
         now = self._clock()
-        # From the generation's own deadline, so it never shrinks (NFR5.43)
+        # From the generation's own deadline, so it never shrinks
         until = generation.created_at + timedelta(
             seconds=config.ADVANCED_GENERATION_LOCK_SECONDS
             + state.waited_seconds
@@ -1943,8 +1942,8 @@ class AdvancedPersonaGenerationManager:
     ) -> tuple[Optional[tuple[str, int]], int]:
         """The plan wait that ran out, if any, and all the seconds waited.
 
-        One card waits ``ADVANCED_GENERATION_PLAN_WAIT_SECONDS`` (BR29.5); all
-        the cards ``ADVANCED_GENERATION_PLAN_WAIT_TOTAL_SECONDS`` (BR29.7).
+        One card waits ``ADVANCED_GENERATION_PLAN_WAIT_SECONDS``; all
+        the cards ``ADVANCED_GENERATION_PLAN_WAIT_TOTAL_SECONDS``.
         """
         card = int((now - awaiting_since).total_seconds())
         total = waited_seconds + max(0, card)
@@ -1971,7 +1970,7 @@ class AdvancedPersonaGenerationManager:
         raise self._timeout("plan wait ran out", limit[0], limit[1])
 
     def _waited_now(self, state: _Run) -> int:
-        """All the waits, the current card's included (BR29.6)."""
+        """All the waits, the current card's included."""
         assert state.awaiting_since is not None
         current = int((self._clock() - state.awaiting_since).total_seconds())
         return state.waited_seconds + max(0, current)
@@ -2030,7 +2029,7 @@ class AdvancedPersonaGenerationManager:
         return True
 
     def _take_replan(self, state: _Run, request: ControlRequest) -> bool:
-        """Put the new instruction in and go back to ``planning`` (BR29.4)."""
+        """Put the new instruction in and go back to ``planning``."""
         generation = state.generation
         waited = self._waited_now(state)
         purpose = request.revised_purpose or ""
@@ -2074,13 +2073,13 @@ class AdvancedPersonaGenerationManager:
     def _analyze(self, state: _Run) -> None:
         assert state.plan is not None
         if state.source is None:
-            # U4: documents alone have no table to analyse
+            # Documents alone have no table to analyse
             state.tools = _NoTools()
             return
         self._before_model(state)
         generation = state.generation
         aliases = tuple(t.alias for t in state.tables)
-        # U6 BR35.3: run_code only when decided at the start (never re-read)
+        # run_code only when decided at the start (never re-read)
         policy = AnalysisPolicy.tool_policy(
             detailed=generation.use_detailed_analysis,
             in_process=self._in_process(),
@@ -2088,7 +2087,7 @@ class AdvancedPersonaGenerationManager:
         )
         detailed = AnalysisTool.RUN_CODE in policy.tools
         if detailed and not self._hashes_known(state):
-            # review-01 R-01: nothing to compare a change with -> fail closed,
+            # Nothing to compare a change with -> fail closed,
             # the fixed functions go on (as in-process does)
             detailed = False
             state.detailed_fallback = REASON_MISSING_HASH
@@ -2152,7 +2151,7 @@ class AdvancedPersonaGenerationManager:
             },
             source_id=state.source.source_file_id,
         )
-        self._checkpoint(state)  # U5: a cancel during the call
+        self._checkpoint(state)  # a cancel during the call
         if tools.sandbox_error is not None:
             raise tools.sandbox_error
         if state.budget is not None:
@@ -2161,13 +2160,13 @@ class AdvancedPersonaGenerationManager:
         state.segments, state.evidence = self._parse_analysis(output)
         runs: dict[str, Optional[EmittedResult]] = {}
         if state.budget is not None:
-            # BR36.4, NFR3.39: only what a successful run recounted goes on
+            # Only what a successful run recounted goes on
             runs = {call_id: None for call_id in tools.run_code_ids()}
             runs.update(tools.emitted_results())
             state.segments, state.evidence = filter_evidence(
                 state.segments, state.evidence, runs
             )
-        # U6 addendum: a feature is a number that was counted, never free text
+        # A feature is a number that was counted, never free text
         state.segments = settle_features(
             state.segments,
             runs=runs,
@@ -2208,13 +2207,13 @@ class AdvancedPersonaGenerationManager:
 
         listen(told)
 
-    # --- U6: the AI detailed analysis (BR36, NFR3.35, NFR5.55) -----------------
+    # --- AI detailed analysis -----------------
 
     def _new_budget(self, state: _Run) -> RunCodeBudget:
         generation_id = state.generation.generation_id
 
         def disabled(reason: str, failures: int) -> None:
-            # AC5.4.2: once, then the fixed functions go on
+            # Once, then the fixed functions go on
             self._event(state, EventType.PROGRESS, message=_RUN_CODE_DISABLED_NOTICE)
             self._log(
                 "advanced_generation.run_code_disabled",
@@ -2238,7 +2237,7 @@ class AdvancedPersonaGenerationManager:
         )
 
     def _log_verify_failed(self, state: _Run) -> None:
-        """review-01 R-03: the check failed; told apart from a tamper."""
+        """The check failed; told apart from a tamper."""
         budget = state.budget
         self._log(
             "advanced_generation.run_code_disabled",
@@ -2268,7 +2267,7 @@ class AdvancedPersonaGenerationManager:
     def _detailed_in_use(self, state: _Run) -> bool:
         """Whether the analysis will get ``run_code`` (as :meth:`_analyze` decides).
 
-        U6 addendum: the planning is told the detailed-only steps only then.
+        The planning is told the detailed-only steps only then.
         """
         if state.source is None:
             return False
@@ -2280,7 +2279,7 @@ class AdvancedPersonaGenerationManager:
         return AnalysisTool.RUN_CODE in policy.tools and self._hashes_known(state)
 
     def _hashes_known(self, state: _Run) -> bool:
-        """Every table's Parquet hash and the library hash are there (R-01)."""
+        """Every table's Parquet hash and the library hash are there."""
         return (
             bool(self._sandbox.library_sha256)
             and bool(state.tables)
@@ -2290,12 +2289,12 @@ class AdvancedPersonaGenerationManager:
     def _check_untouched(self, state: _Run) -> None:
         """Fail on a change: one found by a run, or one left after the last run.
 
-        BR36.6: a halted budget fails the generation. When run_code ran at
+        A halted budget fails the generation. When run_code ran at
         least once, the hashes are checked once more with the app's own
-        library sent inside the command (security-design.md), before anything
+        library sent inside the command, before anything
         reaches the synthesis. Processes the code left are a change
         (``process``); a process scan that could not run fails closed but is
-        no tamper (security review).
+        no tamper.
         """
         assert state.budget is not None and state.session is not None
         if state.budget.halted():
@@ -2324,12 +2323,12 @@ class AdvancedPersonaGenerationManager:
             self._log_tamper(state.generation.generation_id, changed)
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
         if not isinstance(hashes, Mapping) or left is None:
-            # review-01 R-03: the check itself failed -> fail closed, no tamper
+            # The check itself failed -> fail closed, no tamper
             self._log_verify_failed(state)
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "check failed")
 
     def _changed_hashes(self, state: _Run, hashes: Mapping[str, Any]) -> list[str]:
-        """review-01 R-01: a missing expected or returned hash is a change."""
+        """A missing expected or returned hash is a change."""
         changed: list[str] = []
         library = hashes.get("library")
         expected_library = self._sandbox.library_sha256
@@ -2347,7 +2346,7 @@ class AdvancedPersonaGenerationManager:
 
     @staticmethod
     def _check_cluster_calls(state: _Run) -> None:
-        """A cluster plan whose clustering failed twice cannot go on (BR5.3)."""
+        """A cluster plan whose clustering failed twice cannot go on."""
         if state.plan is None or state.plan.method is not AnalysisMethod.CLUSTER:
             return
         calls = [c for c in state.tools.calls if c.tool == "cluster_segments"]
@@ -2369,7 +2368,7 @@ class AdvancedPersonaGenerationManager:
         return segments, evidence
 
     def _assign_to_segments(self, state: _Run) -> None:
-        """Extraction with a table: each evidence gets 0 or 1 segment (BR28.1)."""
+        """Extraction with a table: each evidence gets 0 or 1 segment."""
         if not state.document_evidence or not state.segments:
             return
         self._before_model(state)
@@ -2399,7 +2398,7 @@ class AdvancedPersonaGenerationManager:
             },
             prompts.EvidenceAssignmentOutput,
         )
-        self._checkpoint(state)  # U5: a cancel during the call
+        self._checkpoint(state)  # a cancel during the call
         state.document_evidence = documents.apply_assignments(
             state.document_evidence,
             list(output.assignments),
@@ -2427,7 +2426,7 @@ class AdvancedPersonaGenerationManager:
             "segments": json.dumps(
                 [s.to_dict() for s in state.segments], ensure_ascii=False
             ),
-            # BR28.2: evidence without a segment reaches every persona
+            # Evidence without a segment reaches every persona
             "evidence": json.dumps(
                 [e.to_dict() for e in [*state.evidence, *state.document_evidence]],
                 ensure_ascii=False,
@@ -2455,7 +2454,7 @@ class AdvancedPersonaGenerationManager:
             prompts.AdvancedPersonaListOutput,
             documents=self._full_texts(state),
         )
-        self._checkpoint(state)  # U5: a cancel during the call
+        self._checkpoint(state)  # a cancel during the call
         personas = list(output.personas)
         if len(personas) != generation.persona_count:
             raise _fail(
@@ -2470,7 +2469,7 @@ class AdvancedPersonaGenerationManager:
                 max_quote_chars=int(config.ADVANCED_EVIDENCE_QUOTE_MAX_CHARS),
             )
             state.document_evidence = self._check_quotes(state, evidence)
-        # NFR4.4: only the generation's own evidence IDs are kept
+        # Only the generation's own evidence IDs are kept
         known = {e.id for e in [*state.evidence, *state.document_evidence]}
         return [
             p.model_copy(
@@ -2494,7 +2493,7 @@ class AdvancedPersonaGenerationManager:
     ) -> VerificationResult:
         assert state.plan is not None
         if state.report is None:
-            # U4 BR27.2: documents alone rest on their checked quotes
+            # Documents alone rest on their checked quotes
             result = AnalysisVerifier.verify_documents(
                 persona_evidence_ids=[p.evidence_ids for p in personas],
                 evidence=state.document_evidence,
@@ -2510,7 +2509,7 @@ class AdvancedPersonaGenerationManager:
         outputs = {
             cid: state.tools.output_of(cid) for cid in state.tools.tool_call_ids()
         }
-        # U6 BR37.5: the population of each table (the first one is the
+        # The population of each table (the first one is the
         # default of a segment without a source), and the recounted results
         populations = {t.alias: t.report.rows_read for t in state.tables} or {
             TABLE_ALIASES[0]: state.report.rows_read
@@ -2536,15 +2535,15 @@ class AdvancedPersonaGenerationManager:
         personas: Sequence[prompts.AdvancedPersonaOutput],
         verification: VerificationResult,
     ) -> None:
-        """Record, candidates and result parts first, then ``done`` (W5-6, W5-7).
+        """Record, candidates and result parts first, then ``done``.
 
-        U5 BR31.2 (review fix): the generation is read once more right before
+        The generation is read once more right before
         anything is written, and ``done`` is conditioned on no pending
         request. When ``done`` still loses (a reader ended it, or a cancel
         came in while writing), what was written is removed again and the run
         ends as the store says: cancelled, or quietly.
         """
-        self._checkpoint(state)  # U5 BR31.2: a cancelled run keeps nothing
+        self._checkpoint(state)  # a cancelled run keeps nothing
         generation = state.generation
         assert state.plan is not None
         now = self._clock()
@@ -2606,7 +2605,7 @@ class AdvancedPersonaGenerationManager:
             }
         self._check_item_size(state, done_updates)
         parts: dict[ResultPartName, list[dict[str, Any]]] = {
-            # U6: every table; the Parquet hash stays with the run (NFR3.35)
+            # Every table; the Parquet hash stays with the run
             ResultPartName.PREPARE_REPORTS: (
                 [t.report.without_hash().to_dict() for t in state.tables]
                 if state.tables
@@ -2644,8 +2643,7 @@ class AdvancedPersonaGenerationManager:
             raise _StopRun()  # moved in a way the read cannot tell: end quietly
         self._close_stage(state)
         state.status = GenerationStatus.DONE
-        # review fix (as the cancel, AC9.3.2): the lock and the marks go
-        # before the result shows
+        # The lock and the marks go before the result shows
         self._finish(state.generation)
         state.finished = True
         self._event(
@@ -2657,7 +2655,7 @@ class AdvancedPersonaGenerationManager:
 
     @staticmethod
     def _join_title(state: _Run, result: Optional[EmittedResult]) -> Optional[str]:
-        """The record's line for a joined result: columns and match rates (BR38.1)."""
+        """The record's line for a joined result: columns and match rates."""
         if result is None or not result.population_source.startswith("join:"):
             return None
         names = {t.alias: t.source.display_name for t in state.tables}
@@ -2670,7 +2668,7 @@ class AdvancedPersonaGenerationManager:
 
     @staticmethod
     def _u6_params(state: _Run) -> dict[str, Any]:
-        """``detailed_analysis`` and ``join`` of AnalysisRun.params (BR37.4, C8)."""
+        """``detailed_analysis`` and ``join`` of AnalysisRun.params."""
         params: dict[str, Any] = {}
         budget = state.budget
         if budget is not None:
@@ -2680,7 +2678,7 @@ class AdvancedPersonaGenerationManager:
                 "failures": budget.failures,
             }
         elif state.detailed_fallback is not None:
-            # review-01 R-01: asked for, but not offered (no hash to compare)
+            # Asked for, but not offered (no hash to compare)
             params["detailed_analysis"] = {
                 "used": False,
                 "fell_back": True,
@@ -2688,7 +2686,7 @@ class AdvancedPersonaGenerationManager:
                 "reason": state.detailed_fallback,
             }
         if AnalysisPolicy.readings_count_rows(state.reading):
-            # U6 addendum: the counts are of rows (orders, events), not people
+            # The counts are of rows (orders, events), not people
             params["rows_are_not_people"] = True
         if state.joins and budget is not None:
             plan_only: dict[str, Any] = {
@@ -2703,7 +2701,7 @@ class AdvancedPersonaGenerationManager:
                     for plan, matched in state.joins
                 ],
             }
-            # review-01 R-04: "join" only when a joined result was adopted (a
+            # "join" only when a joined result was adopted (a
             # kept segment rests on it); otherwise only the plan is recorded
             emitted = state.tools.emitted_results()
             joined: Optional[list[str]] = None
@@ -2723,7 +2721,7 @@ class AdvancedPersonaGenerationManager:
         personas: Sequence[prompts.AdvancedPersonaOutput],
         other_parts: Mapping[ResultPartName, Sequence[Mapping[str, Any]]],
     ) -> list[Evidence]:
-        """All evidence, less what no persona cites when over 2MB (BR27.3, NFR5.38)."""
+        """All evidence, less what no persona cites when over 2MB."""
 
         def size(items: Sequence[Mapping[str, Any]]) -> int:
             return sum(
@@ -2746,7 +2744,7 @@ class AdvancedPersonaGenerationManager:
     def _check_item_size(state: _Run, done_updates: Mapping[str, Any]) -> None:
         """The generation item stays within its limit once ``done`` is written.
 
-        entities.md: one item is up to 64KB; large results go to ResultPart.
+        One item is up to 64KB; large results go to ResultPart.
         Measured before the candidates and the result parts are written.
         """
         assert state.plan is not None
@@ -2767,11 +2765,11 @@ class AdvancedPersonaGenerationManager:
         """Read the generation once more; stop when it ended or a cancel waits.
 
         The watch reads only every ``control_poll_seconds``, so a reader's end
-        or a cancel written after the last checkpoint is seen here (BR31.2).
+        or a cancel written after the last checkpoint is seen here.
         A failed read lets the conditioned ``done`` decide.
 
         Raises:
-            _StopRun: Someone else ended it (BR32.5).
+            _StopRun: Someone else ended it.
             _Cancelled: A cancel is pending.
         """
         try:
@@ -2822,7 +2820,7 @@ class AdvancedPersonaGenerationManager:
     def _record_failure(
         self, state: _Run, code: ErrorCode, context: Mapping[str, Any]
     ) -> None:
-        """Move the current stage to ``failed`` with the code only (W5)."""
+        """Move the current stage to ``failed`` with the code only."""
         state.error_code = code
         safe = _safe_context(context)
         state.cause = safe.get("cause")
@@ -2840,15 +2838,15 @@ class AdvancedPersonaGenerationManager:
             )
             if moved:
                 self._close_stage(state)
-                # review fix (as the cancel, AC9.3.2): the lock and the marks
-                # go before 失敗しました shows, so a restart is not refused
+                # The lock and the marks go before 失敗しました shows,
+                # so a restart is not refused
                 self._finish(state.generation)
                 state.finished = True
                 self._event(
                     state, EventType.ERROR, error_code=code.value, kind=code.kind.value
                 )
             else:
-                # U5 BR32.5: a reader (or the requester) ended it first
+                # A reader (or the requester) ended it first
                 state.ended_elsewhere.set()
         except CodedError as e:
             logger.error("advanced generation failure not written (%s)", e.code.value)
@@ -2891,12 +2889,12 @@ class AdvancedPersonaGenerationManager:
             logger.error("advanced generation slot released twice")
 
     def _start_watch(self, state: _Run) -> threading.Event:
-        """The heartbeat thread, widened to read the generation (U5 NFR1.23).
+        """The heartbeat thread, widened to read the generation.
 
         Every ``control_poll_seconds`` it reads the generation; every
         ``heartbeat_seconds`` it writes the heartbeat. Each read and each
         write is wrapped on its own: a failure is a warning with the count of
-        failures in a row, and the next round goes on (NFR5.51).
+        failures in a row, and the next round goes on.
         """
         stop = threading.Event()
         generation_id = state.generation.generation_id
@@ -2923,7 +2921,7 @@ class AdvancedPersonaGenerationManager:
         try:
             current = self._store.get(generation_id)
             state.read_failures = 0
-        except Exception as e:  # noqa: BLE001 - the watch never dies (NFR5.51)
+        except Exception as e:  # noqa: BLE001 - the watch never dies
             state.read_failures += 1
             logger.warning(
                 "advanced generation watch read failed (%s): failures_in_a_row=%d",
@@ -2933,7 +2931,7 @@ class AdvancedPersonaGenerationManager:
             return
         if current is None or current.status.is_terminal:
             if not state.ending.is_set():
-                state.ended_elsewhere.set()  # BR32.5: a reader ended it
+                state.ended_elsewhere.set()  # a reader ended it
             return
         request = current.control_request
         if request is not None and request.action is ControlAction.CANCEL:
@@ -2954,7 +2952,7 @@ class AdvancedPersonaGenerationManager:
 
     @staticmethod
     def _checkpoint(state: _Run) -> None:
-        """Stop here when a reader ended the run or the user cancelled (BR31.2).
+        """Stop here when a reader ended the run or the user cancelled.
 
         Called at the stage boundaries, before and after the model calls, in
         the preparation's wait and before each extraction chunk.
@@ -2965,7 +2963,7 @@ class AdvancedPersonaGenerationManager:
             raise _Cancelled()
 
     def _record_cancel(self, state: _Run) -> None:
-        """Move the current stage to ``cancelled`` and say so (BR31.2, BR32.4).
+        """Move the current stage to ``cancelled`` and say so.
 
         Nothing of the result is kept: the candidates and the record are only
         written at the very end (``_write_results``), after the last check.
@@ -2987,7 +2985,7 @@ class AdvancedPersonaGenerationManager:
         self._close_stage(state)
         stage = state.status
         state.status = GenerationStatus.CANCELLED
-        # AC9.3.2: the lock and the marks go before the screen hears of it, so
+        # The lock and the marks go before the screen hears of it, so
         # the same files can start again as soon as 中止しました shows
         self._finish(state.generation)
         state.finished = True
@@ -3029,10 +3027,10 @@ class AdvancedPersonaGenerationManager:
             durations_ms=dict(state.durations_ms),
             total_ms=int((time.monotonic() - state.started_monotonic) * 1000),
             tool_calls=len(state.tools.calls) if state.tools is not None else 0,
-            # U5 NFR6.17
+            # Replan and wait counts
             replan_count=state.replan_count,
             waited_seconds=state.waited_seconds,
-            # U6 NFR6.20: counts only, never the code or its output
+            # Counts only, never the code or its output
             detailed_analysis_used=state.generation.use_detailed_analysis,
             run_code_calls=budget.calls if budget is not None else 0,
             run_code_failures=budget.failures if budget is not None else 0,
@@ -3048,7 +3046,7 @@ class AdvancedPersonaGenerationManager:
             ),
         )
 
-    # --- U5: control logs (observability-design.md NFR6.16) ---------------------
+    # --- Control logs ---------------------
 
     @staticmethod
     def _log(event: str, **fields: Any) -> None:
@@ -3085,7 +3083,7 @@ class AdvancedPersonaGenerationManager:
             waited_seconds=waited_seconds,
         )
 
-    # --- reads (owner only, no release check: BR1.1 exception) ------------------
+    # --- Reads (owner only, no release check) ------------------
 
     def _owned(self, principal: Principal, generation_id: str) -> AdvancedGeneration:
         generation = self._store.get(generation_id)
@@ -3101,7 +3099,7 @@ class AdvancedPersonaGenerationManager:
             raise _fail(ErrorCode.GENERATION_EXPIRED, "generation expired")
         return generation
 
-    # --- U5: requests from the screen (BR29.3, BR29.4, BR31.1) -------------------
+    # --- Requests from the screen ---------------------
 
     def request_control(
         self,
@@ -3113,7 +3111,7 @@ class AdvancedPersonaGenerationManager:
         """Write a cancel, an approve or a replan for the owner's generation.
 
         The request goes through the store, so the task running the
-        generation takes it whichever task received it (ADR-009).
+        generation takes it whichever task received it.
 
         Raises:
             AdvancedGenerationError: ``GENERATION_NOT_FOUND`` (someone else's
@@ -3172,7 +3170,7 @@ class AdvancedPersonaGenerationManager:
         revised_purpose: Optional[str] = None,
         data_reading: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> None:
-        """Approve the plan or replan it; nothing else (W5-1, BR29.3, BR29.4).
+        """Approve the plan or replan it; nothing else.
 
         A cancel has its own request (``request_control`` with ``cancel``);
         here it is refused like any other action, and nothing is written.
@@ -3195,7 +3193,7 @@ class AdvancedPersonaGenerationManager:
         revised_purpose: Optional[str],
         data_reading: Optional[dict[str, dict[str, Any]]] = None,
     ) -> ControlRequest:
-        """The request for ``action``, its instruction checked (BR29.4)."""
+        """The request for ``action``, its instruction checked."""
         try:
             kind = ControlAction(action)
         except ValueError:
@@ -3236,7 +3234,7 @@ class AdvancedPersonaGenerationManager:
         self, generation: AdvancedGeneration, request: ControlRequest
     ) -> None:
         if not generation.status.is_terminal and self._is_stalled(generation):
-            # BR31.3: no thread runs it any more; the requester ends it
+            # No thread runs it any more; the requester ends it
             if self._end_by_reader(
                 generation,
                 GenerationStatus.CANCELLED,
@@ -3247,7 +3245,7 @@ class AdvancedPersonaGenerationManager:
             # it moved since the read: a live thread takes the request instead
             generation = self._store.get(generation.generation_id) or generation
         else:
-            generation = self._judge_reader(generation)  # BR31.1: a plan wait out
+            generation = self._judge_reader(generation)  # a plan wait out
         if generation.status.is_terminal or not self._store.put_control_request(
             generation.generation_id,
             request,
@@ -3259,7 +3257,7 @@ class AdvancedPersonaGenerationManager:
     def _request_plan_decision(
         self, generation: AdvancedGeneration, request: ControlRequest
     ) -> None:
-        generation = self._judge_reader(generation)  # BR29.3: judged first
+        generation = self._judge_reader(generation)  # judged first
         if (
             generation.status is not GenerationStatus.AWAITING_PLAN_APPROVAL
             or generation.control_request is not None
@@ -3274,13 +3272,13 @@ class AdvancedPersonaGenerationManager:
                 ErrorCode.GENERATION_NOT_AWAITING_PLAN, "generation is not waiting"
             )
 
-    # --- U5: the reader's judgement (BR32, ADR-009) -----------------------------
+    # --- The reader's judgement ---------------------
 
     def _judge_reader(self, generation: AdvancedGeneration) -> AdvancedGeneration:
         """End a generation whose thread is gone or whose plan wait ran out.
 
-        Run on the SSE re-reads, the page, the start and the control requests
-        (NFR5.47). It only reads, unless one of these holds (BR32.1, BR32.2):
+        Run on the SSE re-reads, the page, the start and the control requests.
+        It only reads, unless one of these holds:
 
         - no heartbeat for 5 minutes (the plan wait included):
           ``GENERATION_STALLED``, conditioned on ``heartbeat_at``;
@@ -3331,7 +3329,7 @@ class AdvancedPersonaGenerationManager:
             return generation
 
     def _is_stalled(self, generation: AdvancedGeneration) -> bool:
-        """No heartbeat for more than 5 minutes (BR32.1); the start counts as one."""
+        """No heartbeat for more than 5 minutes; the start counts as one."""
         beat = generation.heartbeat_at or generation.created_at
         return self._clock() - beat > timedelta(
             seconds=config.ADVANCED_GENERATION_STALL_SECONDS
@@ -3347,12 +3345,12 @@ class AdvancedPersonaGenerationManager:
         code: Optional[ErrorCode] = None,
         context: Optional[Mapping[str, Any]] = None,
     ) -> bool:
-        """End a generation no thread looks after any more (BR32.4).
+        """End a generation no thread looks after any more.
 
-        The move is conditioned on the state and ``field`` being what was read
-        (NFR5.44); only the side that moved it writes the event, releases the
+        The move is conditioned on the state and ``field`` being what was read;
+        only the side that moved it writes the event, releases the
         lock and the marks, and stops the session by its ID. Each of those
-        steps stands alone (NFR5.45).
+        steps stands alone.
 
         Returns:
             Whether this reader ended it.
@@ -3405,10 +3403,10 @@ class AdvancedPersonaGenerationManager:
         return True
 
     def running_generation_id(self, principal: Principal) -> Optional[str]:
-        """The owner's generation that still runs, to reopen its progress (W1-5).
+        """The owner's generation that still runs, to reopen its progress.
 
-        It is found through the owner's lock (one running generation per user,
-        BR7.5). Only a display aid: an unreadable lock reads as "none".
+        It is found through the owner's lock (one running generation per user).
+        Only a display aid: an unreadable lock reads as "none".
         """
         try:
             lock = self._store.get_lock(principal.sub)
@@ -3422,7 +3420,7 @@ class AdvancedPersonaGenerationManager:
             principal, generation.owner_sub
         ):
             return None
-        # U5 NFR5.47: the page reopening a stalled generation ends it
+        # The page reopening a stalled generation ends it
         generation = self._judge_reader(generation)
         if generation.status.is_terminal:
             return None
@@ -3437,7 +3435,7 @@ class AdvancedPersonaGenerationManager:
         """
         generation = self._owned(principal, generation_id)
         finished = generation.status.is_terminal
-        # U5 W5-1.3: the plan waits are not counted; a shown card stops the clock
+        # The plan waits are not counted; a shown card stops the clock
         waiting = (
             generation.status is GenerationStatus.AWAITING_PLAN_APPROVAL
             and generation.awaiting_since is not None
@@ -3462,13 +3460,13 @@ class AdvancedPersonaGenerationManager:
         *,
         after_sequence: Optional[int] = None,
     ) -> GenerationProgress:
-        """The generation and its events after ``after_sequence`` (C3, BR7.2).
+        """The generation and its events after ``after_sequence``.
 
         Raises:
             AdvancedGenerationError: ``GENERATION_NOT_FOUND`` (someone else's
                 or missing), ``GENERATION_EXPIRED`` (24 hours after the end).
         """
-        # U5 NFR5.47: every re-read of the stream also judges the generation
+        # Every re-read of the stream also judges the generation
         generation = self._judge_reader(self._owned(principal, generation_id))
         events = self._store.read_events(generation_id, after_sequence=after_sequence)
         return GenerationProgress(
@@ -3482,7 +3480,7 @@ class AdvancedPersonaGenerationManager:
     ) -> dict[str, Any]:
         """The stored values, plus the owner's file name for ``source_index``.
 
-        U4 BR24.4: the name is looked up again in the owner's own files; it is
+        The name is looked up again in the owner's own files; it is
         never stored with the failure. A file gone since shows no name.
         """
         context = dict(generation.error_context or {})
@@ -3519,7 +3517,7 @@ class AdvancedPersonaGenerationManager:
     def get_result(
         self, principal: Principal, generation_id: str
     ) -> AdvancedGenerationResult:
-        """The finished result for section D (BR8.4).
+        """The finished result for the result section.
 
         Raises:
             AdvancedGenerationError: ``GENERATION_NOT_FOUND`` (also while it is
@@ -3560,7 +3558,7 @@ class AdvancedPersonaGenerationManager:
         )
 
     def get_record(self, principal: Principal, generation_id: str) -> AnalysisRecord:
-        """The analysis record of the owner's finished generation (BR9.1, BR9.3).
+        """The analysis record of the owner's finished generation.
 
         Raises:
             AdvancedGenerationError: ``GENERATION_NOT_FOUND`` or

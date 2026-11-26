@@ -1,7 +1,4 @@
-"""AdvancedPersonaGenerationManager: start, run and reads of a generation (W4〜W6).
-
-US5.1, US9.1, US10.1, BR5.5, BR5.8, BR6.1, BR6.2, BR7.1〜BR7.5, NFR2.2,
-NFR2.3, NFR5.6, NFR5.14, NFR5.15, NFR6.1〜NFR6.5.
+"""AdvancedPersonaGenerationManager: start, run and reads of a generation.
 
 DynamoDB and S3 are moto with the real stores; the sandbox is the in-process
 version running ``sandbox/persona_analysis.py`` (the session's download from
@@ -90,7 +87,7 @@ def _csv(rows: int = 300) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-#: Labels the fake extraction and synthesis read evidence from (U4).
+#: Labels the fake extraction and synthesis read evidence from.
 _LABELS = {"価値": "value", "不満": "pain", "目標": "goal", "行動": "behavior"}
 
 
@@ -183,7 +180,7 @@ class _Sandbox(InProcessSandbox):
         #: When set, the preparation ends at once with this C9 result.
         self.fake_prepare_result: Optional[dict[str, Any]] = None
         self.cancelled: list[str] = []
-        # U4: what was started and called, and fake document preparations
+        # what was started and called, and fake document preparations
         self.functions: dict[str, str] = {}
         self.started: list[tuple[str, dict[str, Any]]] = []
         self.called: list[tuple[str, dict[str, Any]]] = []
@@ -260,7 +257,7 @@ class _Sandbox(InProcessSandbox):
         if self.stop_error is not None:
             raise self.stop_error
 
-    #: U5: sessions a reader stopped by their ID (BR32.4, NFR5.48)
+    #: sessions a reader stopped by their ID
     stopped_by_id: list[str]
 
     def stop_session_by_id(self, session_id: str) -> None:
@@ -291,9 +288,9 @@ class _Agents:
         self.running = 0
         self.max_running = 0
         self.extracted_count = 0
-        #: The ``may_retry`` each extraction call was given (BR26.2)
+        #: The ``may_retry`` each extraction call was given
         self.may_retry: list[Any] = []
-        #: The ``purpose`` each extraction call was given (BR26.1)
+        #: The ``purpose`` each extraction call was given
         self.extraction_purposes: list[str] = []
         self.instructions_seen = []
         self.documents_seen = []
@@ -310,7 +307,7 @@ class _Agents:
         self.instructions_seen.append(instructions)
         return "synthesizer"
 
-    # --- U4: documents ---------------------------------------------------------
+    # --- documents ---------------------------------------------------------------
 
     instructions_seen: list[str]
     documents_seen: list[list[str]]
@@ -377,7 +374,7 @@ class _Agents:
             with self.lock:
                 self.running -= 1
 
-    #: U6 addendum: the planning and analysis requests, in order
+    #: the planning and analysis requests, in order
     planning_prompts: list[str] = []
     analysis_prompts: list[str] = []
 
@@ -394,12 +391,12 @@ class _Agents:
             )
         return dict(self.plan)
 
-    #: U5: called inside the analysis call (the model is "running")
+    #: called inside the analysis call (the model is "running")
     on_analysis: Any = None
-    #: U5: called inside each extraction call
+    #: called inside each extraction call
     on_extraction: Any = None
 
-    #: U6: replaces the analysis (tools, holder, source_id) -> output
+    #: replaces the analysis (tools, holder, source_id) -> output
     analysis_fn: Any = None
 
     def run_advanced_analysis(self, agent, prompt, data, *, source_id):
@@ -556,7 +553,7 @@ class _Env:
 
     def factory(self, session, policy, **kwargs):
         if "gate" in kwargs and kwargs["gate"] is not None:
-            # U6: the same Service, polling a running run_code quickly
+            # the same Service, polling a running run_code quickly
             sandbox = kwargs.pop("sandbox")
             service = AnalysisToolService(
                 sandbox, session, policy, poll_seconds=0.02, **kwargs
@@ -615,7 +612,7 @@ class _Env:
         owner: str = ADMIN.sub,
         inspect: bool = True,
     ) -> SourceFile:
-        """A ready document (U4) inspected like an upload (or not, ``inspect``)."""
+        """A ready document inspected like an upload (or not, ``inspect``)."""
         from src.managers.shared.source_inspector import inspect_document
         from src.models.source_file import (
             DocumentMetadata,
@@ -713,7 +710,7 @@ class TestStart:
             _start(env.manager(), file, count=count)
 
     def test_four_tables_are_refused(self, env: _Env) -> None:
-        # U6 BR37.1 replaced U4's one table: three tables at most
+        # three tables at most
         files = [env.ready_file() for _ in range(4)]
 
         with raises_code(
@@ -972,7 +969,7 @@ class TestRun:
         assert env.agents.calls == []
 
     def test_preparation_over_twenty_minutes_is_a_timeout(self, env: _Env) -> None:
-        # NFR1.6 / NFR5.7: the 20-minute preparation limit, told apart from the 60
+        # the 20-minute preparation limit is a timeout
         env.sandbox.hold_prepare_rows = 1000
         manager = env.manager(
             sleep=lambda seconds: env.clock.advance(minutes=5),
@@ -1021,7 +1018,7 @@ class TestRun:
     def test_preparation_is_polled_at_the_configured_interval(
         self, env: _Env, monkeypatch
     ) -> None:
-        # NFR1.8: the interval comes from config, not from the manager
+        # the interval comes from config, not from the manager
         monkeypatch.setattr(config, "ADVANCED_GENERATION_PREPARE_POLL_SECONDS", 2)
         env.sandbox.hold_prepare_rows = 10
         polls: list[float] = []
@@ -1131,7 +1128,7 @@ class TestRun:
     def test_generation_item_over_its_size_limit_fails_before_done(
         self, env: _Env, monkeypatch
     ) -> None:
-        # entities.md「1 つの item は 64KB まで」: done で書く本体の大きさを先に測る
+        # an item is capped at 64KB: measure the body written at done first
         monkeypatch.setattr(config, "ADVANCED_GENERATION_ITEM_MAX_BYTES", 600)
         manager = env.manager()
         generation_id = _start(manager, env.ready_file())
@@ -1262,7 +1259,7 @@ class TestReads:
     def test_elapsed_of_a_running_generation_counts_from_its_start(
         self, env: _Env
     ) -> None:
-        # AC9.1.1: 経過時間は生成の created_at から数える
+        # elapsed time counts from the generation's created_at
         manager = env.manager()
         generation_id = _start(manager, env.ready_file())
         env.clock.advance(minutes=2, seconds=14)
@@ -1353,7 +1350,7 @@ class TestReads:
         assert manager.is_available(MEMBER) is False
 
 
-# --- U2: 使い回しと期限（BR13.3、BR13.4、BR13.5、BR14.3、NFR5.30、NFR6.9） -----------
+# --- Reuse and expiry -----------------------------------------------------
 
 DAYS = config.ADVANCED_SOURCE_RETENTION_DAYS
 REFRESH_FIELDS = {
@@ -1393,7 +1390,7 @@ class TestReuseAndExpiry:
         assert found.expires_at == env.clock.now + timedelta(days=DAYS)
 
     def test_an_expired_file_cannot_start(self, env: _Env) -> None:
-        file = env.ready_file()  # an U1-style record: no expires_at
+        file = env.ready_file()  # a legacy record: no expires_at
         env.clock.advance(days=DAYS)
 
         with raises_code(
@@ -1583,7 +1580,7 @@ def _ended_cleanly(env: _Env, file: SourceFile) -> None:
 
 
 class TestPrepareFailureContext:
-    """BR16.2, BR17.1, NFR3.20: counts and line numbers reach error_context."""
+    """Counts and line numbers reach error_context."""
 
     def test_too_many_bad_rows_carries_counts_and_line_numbers(self, env: _Env) -> None:
         manager = env.manager()
@@ -1704,7 +1701,7 @@ class TestPrepareFailureContext:
 
 
 class TestInsufficientData:
-    """BR18.1, BR18.2: fewer rows than persona count x 10 stop before planning."""
+    """Fewer rows than persona count x 10 stop before planning."""
 
     def test_ten_rows_for_five_personas_stop(self, env: _Env) -> None:
         manager = env.manager()
@@ -1819,7 +1816,7 @@ class TestStageProgressMessages:
 
 
 class TestPrepareNotice:
-    """BR17.2, NFR1.13: a notice every 60 seconds while the rows stand still."""
+    """A notice every 60 seconds while the rows stand still."""
 
     @staticmethod
     def _messages(env: _Env, generation_id: str) -> list[str]:
@@ -1925,7 +1922,7 @@ class TestPrepareNotice:
 
 
 class TestPreparedLog:
-    """NFR6.11, NFR1.12: counts and time of the preparation, no values."""
+    """Counts and time of the preparation, no values."""
 
     def test_a_done_preparation_logs_counts_reasons_time_and_memory(
         self, env: _Env, capsys
@@ -1980,7 +1977,7 @@ class TestPreparedLog:
 
 
 # ---------------------------------------------------------------------------
-# U4: documents (BR23〜BR28)
+# Documents
 # ---------------------------------------------------------------------------
 
 
@@ -2010,12 +2007,12 @@ def small_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def extraction(monkeypatch: pytest.MonkeyPatch, small_chunks: None) -> None:
-    """Every document goes to the evidence extraction (BR25.2)."""
+    """Every document goes to the evidence extraction."""
     monkeypatch.setattr(config, "PERSONA_SOURCE_MAX_CHARS", 10)
 
 
 class TestDocumentPreparation:
-    """Step 17: BR24.4〜BR24.6, BR25.1, BR25.4, NFR1.19, NFR1.22, NFR3.22, NFR3.24."""
+    """Document preparation."""
 
     def test_every_document_is_refreshed_brought_in_and_prepared(
         self, env: _Env, monkeypatch
@@ -2176,7 +2173,7 @@ class TestDocumentPreparation:
 
 
 class TestDocumentMode:
-    """Step 19: BR25.2, BR25.3, BR26.4, AC6.1.1, NFR4.3."""
+    """Document mode."""
 
     def _chars(self, env: _Env, text: str) -> int:
         doc = env.ready_document(text)
@@ -2236,7 +2233,7 @@ class TestDocumentMode:
         generation = env.generations.get(generation_id)
         assert generation.document_mode.value == "extraction"
         assert "extraction" in env.agents.calls
-        # BR26.3: planning and synthesis get the evidence list, not the text
+        # planning and synthesis get the evidence list, not the text
         assert env.agents.documents_seen
         assert all(docs == [] for docs in env.agents.documents_seen)
         assert "document_evidence" in env.agents.data_seen[0]
@@ -2255,7 +2252,7 @@ class TestDocumentMode:
 
 
 class TestEvidenceExtraction:
-    """Step 20: BR26.1〜BR26.3, BR26.5, NFR1.16〜NFR1.18, NFR2.7, NFR7.3."""
+    """Evidence extraction."""
 
     def _run(self, env: _Env, *docs: SourceFile, count: int = 2) -> str:
         manager = env.manager()
@@ -2289,7 +2286,7 @@ class TestEvidenceExtraction:
     def test_every_chunk_call_gets_the_users_purpose(
         self, env: _Env, extraction, purpose: str
     ) -> None:
-        """The prompt asks to favour the instruction, so it must be sent (BR26.1)."""
+        """The prompt asks to favour the instruction, so it must be sent."""
         doc = env.ready_document(_interview(8))
         manager = env.manager()
         generation_id = _start_with(manager, doc, purpose=purpose)
@@ -2414,13 +2411,13 @@ class TestEvidenceExtraction:
 
         generation_id = self._run(env, doc)
 
-        # nothing to rest the personas on: the verification fails (BR27.2)
+        # nothing to rest the personas on: the verification fails
         failed = _failed(env, generation_id)
         assert failed.error_code == ErrorCode.GENERATION_VERIFICATION_FAILED.value
 
 
 class TestQuoteVerification:
-    """Step 21: BR27.1, BR27.3, NFR1.21, NFR5.38, AC6.2.2."""
+    """Quote verification."""
 
     def test_extracted_quotes_not_in_the_text_are_dropped_and_counted(
         self, env: _Env, monkeypatch, extraction
@@ -2464,7 +2461,7 @@ class TestQuoteVerification:
 
 
 class TestDocumentVerificationAndResult:
-    """Steps 22〜23: BR27.2, BR28.1, BR28.2, AC6.1.3, AC7.1.1, AC7.1.2, NFR4.4."""
+    """Document verification and the result written."""
 
     def test_a_persona_without_goal_evidence_fails_the_verification(
         self, env: _Env
@@ -2526,7 +2523,7 @@ class TestDocumentVerificationAndResult:
         assert evidence["ev-d1-0-0"]["assignment_reason"] == "30代の発言"
         assert "segment_id" not in evidence["ev-d1-0-1"]  # unknown segment
         assert "ev-unknown" not in evidence
-        # BR28.2: the evidence without a segment goes to every persona
+        # the evidence without a segment goes to every persona
         synthesis = env.agents.data_seen[-1]
         given = {e["id"] for e in json.loads(synthesis["evidence"])}
         assert {"ev-d1-0-0", "ev-d1-0-1"} <= given
@@ -2578,7 +2575,7 @@ class TestDocumentVerificationAndResult:
 
 
 class TestDocumentLogs:
-    """Step 24: NFR6.13〜NFR6.15, NFR7.3 (counts, time and tokens only)."""
+    """Counts, time and tokens only."""
 
     def test_preparation_mode_and_extraction_are_logged_without_text(
         self, env: _Env, capsys, extraction
@@ -2608,7 +2605,7 @@ class TestDocumentLogs:
 
 
 # =============================================================================
-# U5: the generation's controls (BR29〜BR33)
+# The generation's controls
 # =============================================================================
 
 #: The watch and the plan wait read every 10 ms; the heartbeat goes as often.
@@ -2676,7 +2673,7 @@ def _advance(env: _Env, generation_id: str, **delta: float) -> None:
 
 
 class TestPlanConfirmation:
-    """Step 10: BR29.1〜BR29.7, NFR1.24, NFR5.41, NFR5.42, AC8.1.1〜8.1.4."""
+    """Plan confirmation."""
 
     def test_off_runs_straight_to_the_analysis(self, env: _Env) -> None:
         manager = env.manager(**FAST_CONTROL)
@@ -2704,7 +2701,7 @@ class TestPlanConfirmation:
         kinds = [k for k, _ in _events(env, generation_id)]
         assert kinds[-1] == "plan"
         assert "analysis" not in env.agents.calls
-        # BR29.6, NFR5.43: created_at + 75 minutes + waited (0) + 15 minutes
+        # created_at + 75 minutes + waited (0) + 15 minutes
         until = START + timedelta(minutes=75 + 15)
         lock = env.generations.get_lock(ADMIN.sub)
         assert lock is not None and lock.lock_until == until
@@ -2795,7 +2792,7 @@ class TestPlanConfirmation:
             _advance(env, generation_id, minutes=14)
             manager.request_control(ADMIN, generation_id, "replan", revised_purpose="")
             _await_card(env, generation_id, replans=n)
-        # BR29.6: every card extends from the deadline, never shrinking it
+        # every card extends from the deadline, never shrinking it
         lock = env.generations.get_lock(ADMIN.sub)
         assert lock is not None
         assert lock.lock_until == START + timedelta(minutes=75 + 56 + 15)
@@ -2829,7 +2826,7 @@ class TestPlanConfirmation:
 
 
 class _FlakyStore(AdvancedGenerationStore):
-    """The real store whose watch reads or heartbeats fail on demand (NFR5.51)."""
+    """The real store whose watch reads or heartbeats fail on demand."""
 
     watch_read_failures = 0
     heartbeat_fails = False
@@ -2873,7 +2870,7 @@ def _assert_cancelled_and_released(env: _Env, generation_id: str, file) -> None:
 
 
 class TestCancel:
-    """Step 12: BR31.1〜BR31.5, NFR1.23, NFR5.46, NFR5.51, AC9.3.1, AC9.3.2."""
+    """Cancel."""
 
     def test_a_cancel_is_written_for_the_owners_running_generation(
         self, env: _Env
@@ -3020,7 +3017,7 @@ class TestCancel:
             GenerationStatus.PREPARING,
             updates={"session_id": "session-lost"},
         )
-        env.clock.advance(minutes=5, seconds=1)  # BR31.3: no heartbeat for 5 min
+        env.clock.advance(minutes=5, seconds=1)  # no heartbeat for 5 min
 
         manager.request_control(ADMIN, generation_id, "cancel")
 
@@ -3067,7 +3064,7 @@ def _left_alone(env: _Env, generation_id: str, *, session_id: str = "s-lost") ->
 
 
 class TestReaderJudgement:
-    """Step 14: BR30.1, BR32.1〜BR32.5, NFR5.44〜NFR5.47, AC9.2.1, AC9.4.1."""
+    """Judgement by a reader."""
 
     def test_the_session_id_is_kept_once_the_session_starts(self, env: _Env) -> None:
         manager = env.manager()
@@ -3205,7 +3202,7 @@ class TestReaderJudgement:
         assert kinds.count("error") == 1 and "cancelled" not in kinds
         assert _current(env, generation_id).error_code == "generation_stalled"
         assert len(env.sandbox.stopped) == 1  # its own session, stopped quietly
-        _start(manager, file)  # BR32.5: the slot went back
+        _start(manager, file)  # the slot went back
 
 
 class TestElapsedWithPlanWaits:
@@ -3237,7 +3234,7 @@ class TestElapsedWithPlanWaits:
 
 
 class TestControlLogs:
-    """Step 17: NFR3.29, NFR3.30, NFR6.16〜NFR6.18."""
+    """Control logs."""
 
     def test_a_replan_and_a_cancel_are_logged_without_text(
         self, env: _Env, capsys
@@ -3296,7 +3293,7 @@ class TestControlLogs:
 
 
 class _UnreachableSandbox(_Sandbox):
-    """Code Interpreter that cannot be reached (BR33.2)."""
+    """Code Interpreter that cannot be reached."""
 
     def start_session(self, generation_id: str, lifetime_seconds: int):
         from src.services.sandbox_service import SandboxUnavailableError
@@ -3308,7 +3305,7 @@ class _UnreachableSandbox(_Sandbox):
 
 
 class TestSandboxUnreachable:
-    """Step 16: BR33.1, BR33.2, NFR5.49, AC9.5.1, AC9.5.2."""
+    """Unreachable Code Interpreter."""
 
     def test_only_the_advanced_generation_fails(self, env: _Env, capsys) -> None:
         from src.managers import persona_generation_manager as ordinary
@@ -3368,7 +3365,7 @@ class TestSandboxUnreachable:
         assert env.generations.get_lock(ADMIN.sub) is None
 
 
-# --- U5 review fixes ----------------------------------------------------------
+# --- Review fixes -------------------------------------------------------------
 
 
 class _ObservedStore(AdvancedGenerationStore):
@@ -3466,7 +3463,7 @@ class TestEndOrder:
         assert _current(env, generation_id).status is GenerationStatus.FAILED
         assert ("error", False) in store.held_at_event
         assert stops == [False]
-        # the same file starts again at once (no 409 after 失敗しました)
+        # the same file starts again at once (no 409 after a failed run)
         _start(manager, file)
 
     def test_done_releases_before_the_result_and_the_session_stop(
@@ -3521,10 +3518,10 @@ _NO_WATCH = {"control_poll_seconds": 3600}
 
 
 class TestNothingKeptAfterALateEnd:
-    """Review fix 2: BR31.2 holds after the last checkpoint too."""
+    """Nothing is kept after the last checkpoint either."""
 
     def _stall(self, env: _Env, manager, generation_id: str) -> None:
-        env.clock.advance(minutes=6)  # no heartbeat: a reader ends it (BR32.1)
+        env.clock.advance(minutes=6)  # no heartbeat: a reader ends it
         manager.stream_events(ADMIN, generation_id)
 
     def _assert_nothing_kept(self, env: _Env, generation_id: str) -> None:
@@ -3595,7 +3592,7 @@ class TestNothingKeptAfterALateEnd:
 
 
 class TestDataReading:
-    """U6 addendum: the plan card shows how the tables read, and the user may fix it."""
+    """The plan card shows how the tables read, and the user may fix it."""
 
     def test_the_card_has_the_proposed_reading(self, env: _Env) -> None:
         manager = env.manager(**FAST_CONTROL)
@@ -3747,7 +3744,7 @@ class TestPlanDecisionOnly:
 
 
 # ---------------------------------------------------------------------------
-# U6: the AI detailed analysis and several tables (BR35〜BR38)
+# The AI detailed analysis and several tables
 # ---------------------------------------------------------------------------
 
 _ALLOWED = {"audience_mode": "everyone", "allow_detailed_analysis": True, "version": 1}
@@ -3891,7 +3888,7 @@ def _code_analysis(failures: int = 0, *, after=None, code: str = _EMIT):
 
 
 class TestDetailedAnalysisChoice:
-    """BR35.2, NFR5.58: decided at the start and kept on the generation."""
+    """Decided at the start and kept on the generation."""
 
     def test_allowed_code_interpreter_and_checked_is_on(self, env: _Env) -> None:
         env = _detailed_env(env)
@@ -4050,7 +4047,7 @@ class TestRunCodeInTheGeneration:
 
 
 class _NoParquetHashSandbox(_CodeSandbox):
-    """The preparation reports no ``parquet_sha256`` (review-01 R-01)."""
+    """The preparation reports no ``parquet_sha256``."""
 
     def poll_command(self, session, command_id):
         status = super().poll_command(session, command_id)
@@ -4066,7 +4063,7 @@ class _NoParquetHashSandbox(_CodeSandbox):
 
 
 class _NoLibraryHashSandbox(_CodeSandbox):
-    """The session holds no library hash to compare with (review-01 R-01)."""
+    """The session holds no library hash to compare with."""
 
     @property
     def library_sha256(self) -> str:
@@ -4074,7 +4071,7 @@ class _NoLibraryHashSandbox(_CodeSandbox):
 
 
 class _FailingCheckSandbox(_CodeSandbox):
-    """The isolated check itself fails for one function (review-01 R-03)."""
+    """The isolated check itself fails for one function."""
 
     failing: str = "verify_hashes"
 
@@ -4121,7 +4118,7 @@ def _with_sandbox(env: _Env, cls: type) -> _Env:
 
 
 class TestDetailedAnalysisFailsClosed:
-    """review-01 R-01 / R-03: no hash to compare and a failed check."""
+    """No hash to compare and a failed check."""
 
     @pytest.mark.parametrize("cls", [_NoParquetHashSandbox, _NoLibraryHashSandbox])
     def test_without_a_hash_the_fixed_functions_go_on(
@@ -4302,7 +4299,7 @@ class TestSeveralTables:
                 "match_rate": pytest.approx(0.6667, abs=1e-3),
             }
         ]
-        # review-01 R-04: the analysis kept to source_1, so only the plan is kept
+        # the analysis kept to source_1, so only the plan is kept
         params = _current(env, gid).analysis_run.params
         assert "join" not in params
         plan = params["join_plan"]
@@ -4346,7 +4343,7 @@ class TestSeveralTables:
 
 
 class TestMultiStepPlan:
-    """U6 addendum: the plan as steps, the candidates and the playbooks read."""
+    """The plan as steps, the candidates and the playbooks read."""
 
     def test_the_plan_keeps_its_steps_and_the_requests_follow_them(
         self, env: _Env

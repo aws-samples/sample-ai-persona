@@ -1,13 +1,13 @@
-"""DynamoDB reads and writes of registered knowledge bases (U7).
+"""DynamoDB reads and writes of registered knowledge bases.
 
 ``KnowledgeBases``: PK ``id``. ``shared_group_ids`` is the usage scope of the
-organization asset (BR5.1); without it only admins may use the knowledge base.
+organization asset; without it only admins may use the knowledge base.
 
-- A new registration is written only when the ``id`` does not exist yet
-  (BR1.5), and never writes the usage scope.
+- A new registration is written only when the ``id`` does not exist yet,
+and never writes the usage scope.
 - The usage scope changes only through :meth:`KnowledgeBaseStore.update_scope`
-  (``ADD`` / ``DELETE``, BR5.2).
-- Listing scans to the last page (NFR9.37).
+  (``ADD`` / ``DELETE``).
+- Listing scans to the last page.
 
 Who may register, delete or scope a knowledge base is decided by
 ``SettingsManager``.
@@ -84,7 +84,7 @@ class KnowledgeBaseStore:
         return self._knowledge_base(item) if item else None
 
     def list_all(self) -> list[KnowledgeBase]:
-        """Every registered knowledge base, every scan page (NFR9.37)."""
+        """Every registered knowledge base, every scan page."""
         params: dict[str, Any] = {"TableName": self.table_name}
         found: list[KnowledgeBase] = []
         while True:
@@ -102,7 +102,7 @@ class KnowledgeBaseStore:
     def update_scope(
         self, kb_id: str, *, add: frozenset[str], remove: frozenset[str]
     ) -> bool:
-        """``ADD`` then ``DELETE`` on ``shared_group_ids`` (BR5.2).
+        """``ADD`` then ``DELETE`` on ``shared_group_ids``.
 
         Two separate updates (DynamoDB refuses both actions on one attribute in
         one expression), each conditioned on the knowledge base existing. A

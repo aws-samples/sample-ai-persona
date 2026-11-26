@@ -1,26 +1,20 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_x_circle, icon_arrow_left %}
-{# 404 のときは題名も理由を区別しない 1 つにする（M11、A7）。base.html は「題名 - AIペルソナシステム」を出す #}
+{# For 404, the title is also a single one that does not reveal the reason. base.html renders "<title> - AIペルソナシステム". #}
 {% if status_code == 404 %}{% set title = "ページが見つかりません" %}{% endif %}
 {#
-  フルページ表示のエラー画面（Issue #117）。
+  Full-page error screen.
 
-  `raise HTTPException(...)` をブラウザのフルページ遷移で受けたときに使う。
-  従来は FastAPI の既定ハンドラが `{"detail": "..."}` を返し、生のJSONが
-  ブラウザに表示されていた。
+  Used when a `raise HTTPException(...)` is received through a full browser navigation. Previously FastAPI's default handler returned `{"detail": "..."}` and raw JSON was shown in the browser.
 
-  パーシャル（error_banner.html / error_inline.html）と違い、これは
-  base.html を継承した独立したページ。ナビゲーションが残るので利用者は
-  そこからも移動できる。
+  Unlike the partials (error_banner.html / error_inline.html), this is a standalone page extending base.html. The navigation stays, so users can move away from here.
 
-  引数:
-    error       ... 表示する文言（404 のときは出さない）
-    status_code ... HTTPステータス（見出しの出し分けに使う）
-    back_url    ... 復帰先の一覧画面
+  Arguments:
+    error       ... message to show (not shown for 404)
+    status_code ... HTTP status (used to choose the heading)
+    back_url    ... list screen to return to
 
-  404 は「ページが見つかりません」（M11、U3 WF8、NFR1.9）。読めないリソース・存在しない ID・
-  admin 専用画面・知らない URL を区別せず、同じ見出しと本文を出す。渡された error
-  （「ペルソナが見つかりません」など）は出さない。404 以外は今どおり。
+  404 shows "ページが見つかりません". Unreadable resources, nonexistent IDs, admin-only screens, and unknown URLs are not distinguished: the same heading and body are shown, and the passed error (for example "ペルソナが見つかりません") is not shown. Other statuses are unchanged.
 #}
 {% block content %}
 <div class="max-w-2xl mx-auto py-12">

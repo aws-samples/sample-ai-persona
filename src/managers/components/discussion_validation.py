@@ -1,13 +1,16 @@
-"""discussion（非エージェント）/ agent_discussion（エージェント）共通の議論バリデーション。
+"""Discussion validation shared by discussion (non-agent) and agent_discussion (agent).
 
-以前は両 Manager に `_validate_discussion_input` / `_validate_discussion_results` /
-`_validate_discussion_for_save` が near-duplicate でコピーされ、閾値（ペルソナ数上限・
-topic 長・件数）が2箇所に分散していた。security/正当性に関わる判定の単一ソース化のため
-Component に集約する。中身はビジネスルール（閾値・fail-closed）なので shared/ には置けない。
+Both Managers used to carry near-duplicate copies of
+`_validate_discussion_input` / `_validate_discussion_results` /
+`_validate_discussion_for_save`, spreading the thresholds (persona limit,
+topic length, counts) over two places. They are collected here as a single
+source for decisions that affect security and correctness. The content is
+business rules (thresholds, fail-closed), so it cannot live in shared/.
 
-各 Manager は自ドメインの例外クラス（`error_cls`）と ErrorCode を注入する。両モードで
-挙動が異なる部分（生成結果の最小文字数ゲート・statement 限定カウント・保存時の mode 要件）
-は明示フラグで受ける（Component は Manager/Router を import しない）。
+Each Manager injects its own exception class (`error_cls`) and ErrorCodes.
+Parts that differ between the modes (minimum-length gate on generated results,
+statement-only counting, mode requirement on save) are taken as explicit flags
+(a Component must not import Managers or Routers).
 """
 
 import logging
@@ -20,7 +23,7 @@ from ...models.persona import Persona
 
 logger = logging.getLogger(__name__)
 
-# ビジネス閾値（両モード共通の単一ソース）。
+# Business thresholds (single source for both modes).
 MIN_PERSONAS = 2
 MAX_PERSONAS = 5
 MIN_TOPIC_LENGTH = 5
@@ -35,11 +38,12 @@ def validate_personas_and_topic(
     *,
     error_cls: Type[CodedError],
 ) -> None:
-    """議論開始前の入力（ペルソナ集合・topic）を検証する。
+    """Validate the input (persona set, topic) before a discussion starts.
 
-    両モード共通: 空 / 最小2 / **最大5** / 個別ペルソナ（falsy・id/name 欠落）/
-    **重複 id** / topic（空・5未満・200超）。以前はこれらのうち上限・個別・重複が
-    非エージェント側にしか無かったが、統一して両モードに適用する。
+    Common to both modes: empty / minimum 2 / **maximum 5** / each persona
+    (falsy, missing id/name) / **duplicate ids** / topic (empty, under 5, over
+    200). The maximum, per-persona and duplicate checks used to exist only on
+    the non-agent side; they now apply to both modes.
     """
     if not personas:
         raise error_cls(
@@ -102,13 +106,15 @@ def validate_results(
     require_min_content: bool,
     count_statements_only: bool,
 ) -> None:
-    """AI 生成後の議論結果（発言の列）を検証する。
+    """Validate the discussion result (message sequence) after AI generation.
 
-    両モード共通: メッセージ最小2 / ペルソナ別発言有無の warning。
+    Common to both modes: at least 2 messages / warning for personas that did
+    not speak.
 
-    ``require_min_content``: 全メッセージの合計文字数 < 100 を拒否（非エージェントのみ True）。
-    ``count_statements_only``: ペルソナ別カウントを message_type=="statement" に限定
-    （エージェントのみ True。warning の精度に影響）。
+    ``require_min_content``: reject a total length under 100 characters (True
+    for non-agent only).
+    ``count_statements_only``: count per persona only message_type=="statement"
+    (True for agent only; affects the warning's accuracy).
     """
     if not messages or len(messages) < MIN_MESSAGES:
         message_count = len(messages) if messages else 0
@@ -148,11 +154,12 @@ def validate_for_save(
     require_mode: Optional[str] = None,
     messages: Optional[List[Message]] = None,
 ) -> None:
-    """保存前の議論オブジェクトの構造を検証する。
+    """Validate the structure of a discussion object before saving.
 
-    共通: falsy / id / topic / participants 最小2 / created_at / 各メッセージの
-    persona_id・content 非空。``code`` は Manager ごとに異なる（注入）。
-    ``require_mode`` 指定時は ``discussion.mode`` が一致することを要求（エージェントは "agent"）。
+    Common: falsy / id / topic / at least 2 participants / created_at /
+    non-empty persona_id and content for each message. ``code`` differs per
+    Manager (injected). With ``require_mode``, ``discussion.mode`` must match
+    (agent uses "agent").
     """
     if not discussion:
         raise error_cls("discussion is falsy", code=code)

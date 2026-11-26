@@ -1,6 +1,4 @@
-"""
-ファイルマネージャーの単体テスト
-"""
+"""Unit tests for FileManager."""
 
 import tempfile
 from datetime import datetime, timezone
@@ -18,19 +16,19 @@ from src.models.asset_delivery import DeliveryKind, SizeLimit
 from src.models.errors import ErrorCode
 from tests.conftest import MEMBER_A
 
-#: The uploader (U5: uploads take the user and need resource:create)
+#: The uploader (uploads take the user and need resource:create)
 PRINCIPAL = MEMBER_A.principal()
 
 
 class TestFileManager:
-    """ファイルマネージャーのテストクラス"""
+    """Test class for FileManager."""
 
     def setup_method(self):
-        """各テストメソッドの前に実行される初期化処理"""
-        # テスト用の一時ディレクトリを作成
+        """Runs before each test method."""
+        # Create a temporary directory for tests
         self.temp_dir = tempfile.mkdtemp()
 
-        # Configをモック化してテスト用ディレクトリを使用
+        # Mock Config to use the test directory
         with patch("src.managers.file_manager.config") as mock_config:
             mock_config.upload_dir = Path(self.temp_dir)
             mock_config.MAX_FILE_SIZE = 1024 * 1024  # 1MB
@@ -40,31 +38,31 @@ class TestFileManager:
                 for ext in mock_config.ALLOWED_FILE_EXTENSIONS
             )
 
-            # FileManagerを作成
+            # Create the FileManager
             self.file_manager = FileManager(file_store=Mock(), attachments=Mock())
 
     def teardown_method(self):
-        """各テストメソッドの後に実行されるクリーンアップ処理"""
-        # テスト用ディレクトリを削除
+        """Runs after each test method."""
+        # Remove the test directory
         import shutil
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_validate_persona_source_file_txt_ok(self):
-        """ペルソナ生成ソース: 対応拡張子のテキストは通過する"""
+        """Persona generation source: text with a supported extension passes."""
         self.file_manager.validate_persona_source_file(
             "interview.txt", "十分な長さのインタビュー内容です。".encode("utf-8")
         )
 
     def test_validate_persona_source_file_pdf_not_rejected(self):
-        """ペルソナ生成ソース: PDF(バイナリ)は形式・空でない限り通過する（デグレ防止）"""
-        # validate_file_format と違い、デコード不可のバイナリでも弾かれてはならない。
+        """Persona generation source: a PDF (binary) passes as long as its format is valid and it is non-empty (regression guard)."""
+        # Unlike validate_file_format, undecodable binary must not be rejected.
         self.file_manager.validate_persona_source_file(
             "report.pdf", b"%PDF-1.4 binary payload not decodable as text"
         )
 
     def test_validate_persona_source_file_invalid_extension(self):
-        """ペルソナ生成ソース: 非対応拡張子(.exe)は許可リストで弾く"""
+        """Persona generation source: an unsupported extension (.exe) is rejected by the allowlist."""
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.validate_persona_source_file(
                 "malware.exe", b"anything at all here"
@@ -72,13 +70,13 @@ class TestFileManager:
         assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
     def test_validate_persona_source_file_empty(self):
-        """ペルソナ生成ソース: 空ファイルは弾く"""
+        """Persona generation source: an empty file is rejected."""
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.validate_persona_source_file("empty.txt", b"")
         assert exc_info.value.code is ErrorCode.FILE_EMPTY
 
     def test_validate_persona_source_file_too_large(self):
-        """ペルソナ生成ソース: 生バイト上限超過は弾く"""
+        """Persona generation source: exceeding the raw byte limit is rejected."""
         with patch("src.managers.file_manager.config") as mock_config:
             mock_config.PERSONA_SOURCE_MAX_BYTES = 100
             with pytest.raises(FileUploadError) as exc_info:
@@ -86,15 +84,15 @@ class TestFileManager:
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
 
     def test_security_check_success(self):
-        """セキュリティチェック成功テスト"""
+        """Security check succeeds."""
         filename = "normal_file.txt"
         content = "正常なファイル内容です。".encode("utf-8")
 
-        # 例外が発生しないことを確認
+        # Verify no exception is raised
         self.file_manager._security_check(filename, content)
 
     def test_security_check_path_traversal(self):
-        """パストラバーサル攻撃のテスト"""
+        """Path traversal attack test."""
         filename = "../../../etc/passwd"
         content = "悪意のあるファイル".encode("utf-8")
 
@@ -104,7 +102,7 @@ class TestFileManager:
         assert exc_info.value.code is ErrorCode.FILE_NAME_INVALID
 
     def test_security_check_hidden_file(self):
-        """隠しファイルのテスト"""
+        """Hidden file test."""
         filename = ".hidden_file.txt"
         content = "隠しファイル".encode("utf-8")
 
@@ -114,7 +112,7 @@ class TestFileManager:
         assert exc_info.value.code is ErrorCode.FILE_HIDDEN_NOT_ALLOWED
 
     def test_security_check_binary_file(self):
-        """バイナリファイルのテスト"""
+        """Binary file test."""
         filename = "binary_file.txt"
         content = b"Normal text\x00binary data"
 
@@ -124,7 +122,7 @@ class TestFileManager:
         assert exc_info.value.code is ErrorCode.FILE_BINARY_NOT_ALLOWED
 
     def test_upload_discussion_document_png(self):
-        """議論用ドキュメント（PNG）アップロードテスト (Task 2)"""
+        """Discussion document (PNG) upload test."""
         png_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         filename = "test_image.png"
 
@@ -139,7 +137,7 @@ class TestFileManager:
         assert metadata.file_size == len(png_content)
 
     def test_upload_discussion_document_pdf(self):
-        """議論用ドキュメント（PDF）アップロードテスト (Task 2)"""
+        """Discussion document (PDF) upload test."""
         pdf_content = b"%PDF-1.4\n" + b"\x00" * 100
         filename = "test_document.pdf"
 
@@ -153,7 +151,7 @@ class TestFileManager:
         assert "discussion_documents" in metadata.file_path
 
     def test_upload_discussion_document_invalid_format(self):
-        """議論用ドキュメント無効形式拒否テスト (Task 2)"""
+        """Discussion document rejects an invalid format."""
         content = b"test content"
         filename = "test.txt"
 
@@ -164,7 +162,7 @@ class TestFileManager:
         assert ".pdf" in str(exc_info.value.context["allowed_formats"])
 
     def test_upload_discussion_document_oversized(self):
-        """議論用ドキュメントサイズ制限テスト (Task 2)"""
+        """Discussion document size limit test."""
         large_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * (11 * 1024 * 1024)  # 11MB
         filename = "large.png"
 
@@ -178,7 +176,7 @@ class TestFileManager:
 
 
 class TestFileManagerSurveyImage:
-    """upload_survey_image のテスト"""
+    """Tests for upload_survey_image."""
 
     def setup_method(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -197,7 +195,7 @@ class TestFileManagerSurveyImage:
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_upload_survey_image_success(self):
-        # 最小限のPNG (1x1 pixel)
+        # Minimal PNG (1x1 pixel)
         png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         result = self.file_manager.upload_survey_image(
             PRINCIPAL, png_header, "test.png"
@@ -224,10 +222,10 @@ class TestFileManagerSurveyImage:
 
 
 class TestFileManagerKnowledgeFile:
-    """記憶への取り込みのファイルは保存しない（U5 BR5.9）。
+    """Files imported into memory are not stored.
 
-    upload_knowledge_file はなくなり、プレビューは convert_file_to_markdown が
-    安全確認・大きさの確認をしたうえで変換だけを行う。
+    upload_knowledge_file is gone; the preview only converts via
+    convert_file_to_markdown, after the safety and size checks.
     """
 
     def setup_method(self):
@@ -270,7 +268,7 @@ class TestFileManagerKnowledgeFile:
 
 
 class TestFileManagerConvertToMarkdown:
-    """convert_file_to_markdown のテスト"""
+    """Tests for convert_file_to_markdown."""
 
     def setup_method(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -304,7 +302,7 @@ class TestFileManagerConvertToMarkdown:
 
 
 class TestFileManagerUtilities:
-    """cleanup_orphaned_files, get_file_statistics, bulk_delete_files, export_file_metadata, validate_system_health のテスト"""
+    """Tests for cleanup_orphaned_files, get_file_statistics, bulk_delete_files, export_file_metadata and validate_system_health."""
 
     def setup_method(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -321,28 +319,28 @@ class TestFileManagerUtilities:
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_validate_discussion_document_image_within_5mb(self):
-        """画像が5MB以内なら検証を通過する"""
+        """An image up to 5MB passes validation."""
         content = b"\x00" * (4 * 1024 * 1024)  # 4MB
         result = self.file_manager._validate_discussion_document("photo.png", content)
         assert result is True
 
     def test_validate_discussion_document_image_over_5mb(self):
-        """画像が5MBを超えると検証エラー（Bedrock上限に整合）"""
-        content = b"\x00" * (5 * 1024 * 1024 + 1)  # 5MB超
+        """An image over 5MB fails validation (matches the Bedrock limit)."""
+        content = b"\x00" * (5 * 1024 * 1024 + 1)  # over 5MB
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager._validate_discussion_document("photo.png", content)
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
         assert exc_info.value.context["max_size_mb"] == 5.0
 
     def test_validate_discussion_document_pdf_within_10mb(self):
-        """PDFは画像より緩く10MBまで許容する"""
+        """A PDF is allowed up to 10MB, looser than images."""
         content = b"\x00" * (6 * 1024 * 1024)  # 6MB
         result = self.file_manager._validate_discussion_document("doc.pdf", content)
         assert result is True
 
     def test_validate_discussion_document_pdf_over_10mb(self):
-        """PDFが10MBを超えると検証エラー"""
-        content = b"\x00" * (10 * 1024 * 1024 + 1)  # 10MB超
+        """A PDF over 10MB fails validation."""
+        content = b"\x00" * (10 * 1024 * 1024 + 1)  # over 10MB
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager._validate_discussion_document("doc.pdf", content)
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
@@ -350,7 +348,7 @@ class TestFileManagerUtilities:
 
 
 # =============================================================================
-# U5: 所有者付きのキー・24 時間の期限・配信の判定（BR5.1、BR5.2、BR5.4、BR5.8）
+# Owner-prefixed keys, 24-hour expiry, and delivery decisions
 # =============================================================================
 
 _U5_REGION = "us-east-1"
@@ -413,7 +411,7 @@ class TestFileManagerU5Uploads:
         assert s3.get_object_tags(stored.s3_key) == {"pending": "true"}
 
     def test_interview_attachment_is_an_owned_pending_upload(self, u5_files):
-        """U6 BR3.6: インタビューの添付も議論と同じアップロードで置く。"""
+        """Interview attachments are stored by the same upload as discussions."""
         manager, store, s3, _, _ = u5_files
 
         metadata = manager.upload_interview_attachment(PRINCIPAL, _PNG, "画像.png")
@@ -480,7 +478,7 @@ class TestFileManagerU5Uploads:
 
 
 class TestFileManagerU5Preview:
-    """BR5.8 の検査（check_preview_path）と、検査のあとの配信（U4 BR3.4）。"""
+    """The preview path check (check_preview_path) and delivery after the check."""
 
     def test_owner_passes_the_check_and_nothing_is_signed(self, u5_files, monkeypatch):
         manager, _, s3, _, _ = u5_files

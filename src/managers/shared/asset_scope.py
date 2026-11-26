@@ -1,4 +1,4 @@
-"""Pure helpers of the organization-asset usage scope (U7 BR5.2, M10).
+"""Pure helpers of the organization-asset usage scope.
 
 ``DatasetManager``, ``SettingsManager`` and ``SurveyDatasetManager`` each own
 one kind of asset and decide with ``AccessPolicy`` themselves. What they share
@@ -12,7 +12,7 @@ from typing import Iterable, Sequence
 from ...models.authz import Department, ResourceType
 from ...models.sharing import AssetScopeDialog
 
-#: Label of a department that no longer exists (M10).
+#: Label of a department that no longer exists.
 VANISHED_GROUP_LABEL = "（削除されたグループ）"
 
 
@@ -36,7 +36,7 @@ def scope_dialog(
     current: frozenset[str],
     departments: Sequence[Department],
 ) -> AssetScopeDialog:
-    """The dialog of one asset: every department, the scope checked (BR5.2)."""
+    """The dialog of one asset: every department, the scope checked."""
     existing = {d.group_id for d in departments}
     return AssetScopeDialog(
         resource_type=resource_type,

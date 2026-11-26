@@ -1,4 +1,4 @@
-"""U4 の応答への変換 asset_response（BR4.1、BR4.3、BR4.5）。"""
+"""Conversion of an asset result into a response (asset_response)."""
 
 import asyncio
 from unittest.mock import Mock
@@ -62,7 +62,7 @@ class TestStreamHeaders:
 
 
 class TestBodyIsAlwaysClosed:
-    """BR4.5: 読み終わり・途中の失敗・切断のどれでも close が呼ばれる。"""
+    """close is called on completion, on a mid-stream failure and on disconnect."""
 
     def _app(self, result: DeliveryResult) -> TestClient:
         app = FastAPI()
@@ -104,14 +104,14 @@ class TestBodyIsAlwaysClosed:
     @pytest.mark.parametrize(
         ("fail_on", "spec_version"),
         [
-            ("http.response.start", "2.4"),  # 最初のデータを送る前
-            ("http.response.body", "2.4"),  # 途中まで送ったあと
+            ("http.response.start", "2.4"),  # before the first data is sent
+            ("http.response.body", "2.4"),  # after part of the data is sent
             ("http.response.start", "2.0"),
             ("http.response.body", "2.0"),
         ],
     )
     def test_send_failure_closes_the_body(self, fail_on, spec_version):
-        """送信そのものが失敗しても（後始末のタスクが走らなくても）閉じる。"""
+        """The body closes even when sending itself fails (even if the cleanup task never runs)."""
         close = Mock()
         response = asset_response(_result(iter([b"a"] * 100), close))
         scope = {"type": "http", "asgi": {"spec_version": spec_version}}

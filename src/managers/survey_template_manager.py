@@ -1,24 +1,23 @@
 """
-SurveyTemplateManager
-テンプレートCRUD + AI設問生成を担当するマネージャークラス。
+SurveyTemplateManager: manager class for template CRUD and AI question generation.
 
-v1.0.0 U7: every entry point takes the signed-in user (``Principal``) and
-decides with ``AccessPolicy`` (``functional-design/rules.md``):
+Every entry point takes the signed-in user (``Principal``) and
+decides with ``AccessPolicy``:
 
-- BR1.1: the creator owns a new template; it starts unshared. The body is
+- The creator owns a new template; it starts unshared. The body is
   written "id does not exist yet" (no shares yet, so no index items), then
   the images are attached; a failed attach removes the body.
-- BR1.2: lists are tabbed (``ResourceSharing``); bodies are read again
+- Lists are tabbed (``ResourceSharing``); bodies are read again
   strongly and checked with ``can_read``; a search reads the newest 500 of
   the tab. Members never scan.
-- BR1.3〜BR1.5: reading needs ``ensure_readable``, changing needs
+- Reading needs ``ensure_readable``, changing needs
   ``ensure_manageable``; an edit writes only the changed columns, so the
   owner, the shares and ``created_at`` stay (an admin's edit included).
-- BR1.6: templates without an owner (before v1.0.0) are admin only.
-- BR1.7: delete removes the body and its share items in one transaction,
+- Templates without an owner (created before owners were recorded) are admin only.
+- Delete removes the body and its share items in one transaction,
   then the images (three tries, then ``survey.cleanup_failed``).
-- BR2.3: AI generation needs ``ai:execute``.
-- NFR2.25: a template body is at most 200KB.
+- AI generation needs ``ai:execute``.
+- A template body is at most 200KB.
 """
 
 import logging
@@ -55,30 +54,30 @@ from .shared.structured_log import log_event
 logger = logging.getLogger(__name__)
 
 _TEMPLATE = ResourceType.SURVEY_TEMPLATE
-#: Largest template body written (NFR2.25).
+#: Largest template body written.
 MAX_TEMPLATE_BYTES = 200 * 1024
 #: Images one template may carry (questions refer to them by name).
 MAX_TEMPLATE_IMAGES = 3
-#: Owner label of a template without owner (before v1.0.0).
+#: Owner label of a template without owner.
 OWNER_UNKNOWN = "所有者不明"
 #: Most rows a search returns.
 SEARCH_RESULT_LIMIT = 100
 
 
 class SurveyTemplateManagerError(CodedError):
-    """SurveyTemplateManager層の基底例外"""
+    """Base exception of the SurveyTemplateManager layer"""
 
     pass
 
 
 class SurveyTemplateValidationError(SurveyTemplateManagerError):
-    """バリデーションエラー"""
+    """Validation error"""
 
     pass
 
 
 class SurveyTemplateManager:
-    """テンプレートCRUD + AI設問生成"""
+    """Template CRUD + AI question generation"""
 
     _MAX_AI_MESSAGES = 40
     _MAX_AI_MESSAGE_LENGTH = 2000
@@ -98,7 +97,7 @@ class SurveyTemplateManager:
         Args:
             survey_template_store: Template bodies (the singleton when omitted).
             ai_service: AI generation (the singleton when omitted).
-            file_attachments: The per-task ``FileAttachments`` (U5).
+            file_attachments: The per-task ``FileAttachments``.
             resource_sharing: The per-task ``ResourceSharing`` (tabs, delete).
             owners: The owner-name copy (display only).
             resource_lookup: The per-task ``ResourceLookup`` (decisions).
@@ -140,9 +139,9 @@ class SurveyTemplateManager:
             self._lookup = access_parts_from(service_factory).lookup
         return self._lookup
 
-    # =========================================================================
-    # 作成（BR1.1、NFR1.83、NFR2.25）
-    # =========================================================================
+    # ==========================================================================
+    # Create
+    # ==========================================================================
 
     def create_template(
         self,
@@ -151,7 +150,7 @@ class SurveyTemplateManager:
         questions: List[Question],
         images: Optional[List[TemplateImage]] = None,
     ) -> SurveyTemplate:
-        """Create a template owned by ``principal`` (BR1.1).
+        """Create a template owned by ``principal``.
 
         Raises:
             AccessDeniedError: The user lacks ``resource:create``.
@@ -217,9 +216,9 @@ class SurveyTemplateManager:
                 code=ErrorCode.SURVEY_TEMPLATE_TOO_LARGE,
             )
 
-    # =========================================================================
-    # 一覧（BR1.2）
-    # =========================================================================
+    # ==========================================================================
+    # List
+    # ==========================================================================
 
     def list_templates(
         self,
@@ -228,7 +227,7 @@ class SurveyTemplateManager:
         cursor: Optional[str],
         search: Optional[str] = None,
     ) -> TabbedList[SurveyTemplate]:
-        """One page of a tab, or a search inside the tab (BR1.2).
+        """One page of a tab, or a search inside the tab.
 
         Raises:
             CodedError: ``LOOKUP_UNAVAILABLE`` when the index or the bodies
@@ -358,12 +357,12 @@ class SurveyTemplateManager:
             search_truncated=search_truncated,
         )
 
-    # =========================================================================
-    # 読む・変える・消す（BR1.3〜BR1.7）
-    # =========================================================================
+    # ==========================================================================
+    # Read, change, delete
+    # ==========================================================================
 
     def get_template(self, principal: Principal, template_id: str) -> SurveyTemplate:
-        """A template the user may read (BR1.3).
+        """A template the user may read.
 
         Raises:
             CodedError: ``SURVEY_TEMPLATE_NOT_FOUND`` (unreadable or missing).
@@ -377,7 +376,7 @@ class SurveyTemplateManager:
     def get_template_for_edit(
         self, principal: Principal, template_id: str
     ) -> SurveyTemplate:
-        """A template the user may change (the edit screen, BR1.4).
+        """A template the user may change (the edit screen).
 
         Raises:
             CodedError: ``SURVEY_TEMPLATE_NOT_FOUND``.
@@ -411,10 +410,10 @@ class SurveyTemplateManager:
         questions: List[Question],
         images: Optional[List[TemplateImage]] = None,
     ) -> SurveyTemplate:
-        """Change the name, questions and images only (BR1.4, BR1.5).
+        """Change the name, questions and images only.
 
         New images are attached; images taken off are deleted (results
-        stop showing them as well, Q5 A).
+        stop showing them as well).
 
         Raises:
             CodedError: ``SURVEY_TEMPLATE_NOT_FOUND``, validation codes,
@@ -474,9 +473,9 @@ class SurveyTemplateManager:
         return updated
 
     def delete_template(self, principal: Principal, template_id: str) -> bool:
-        """Delete the body and its shares, then its images (BR1.7).
+        """Delete the body and its shares, then its images.
 
-        Results made from the template stay (they carry a snapshot, BR2.7).
+        Results made from the template stay (they carry a snapshot).
 
         Returns:
             ``True`` once the body is gone (cleanup failures are logged).
@@ -519,9 +518,9 @@ class SurveyTemplateManager:
             sleep=self._sleep,
         )
 
-    # =========================================================================
-    # 画像（security-design.md §4）
-    # =========================================================================
+    # ==========================================================================
+    # Images
+    # ==========================================================================
 
     @staticmethod
     def _image_file_id(principal: Principal, image: TemplateImage) -> str:
@@ -553,14 +552,14 @@ class SurveyTemplateManager:
             )
         return file_id
 
-    # =========================================================================
-    # AI設問生成（BR2.3）
-    # =========================================================================
+    # ==========================================================================
+    # AI question generation
+    # ==========================================================================
 
     def generate_ai_chat_response(
         self, principal: Principal, messages: List[Dict[str, str]]
     ) -> str:
-        """AIチャットヒアリングの1ターンを処理してassistant発言を返す。"""
+        """Process one turn of the AI chat hearing and return the assistant's reply."""
         AccessPolicy.require(principal, Permission.AI_EXECUTE, resource_type=_TEMPLATE)
         if self.ai_service is None:
             raise SurveyTemplateManagerError(
@@ -580,7 +579,7 @@ class SurveyTemplateManager:
     def generate_ai_questions_draft(
         self, principal: Principal, messages: List[Dict[str, str]]
     ) -> Dict[str, Any]:
-        """会話履歴からアンケート設問ドラフトを生成して返す。"""
+        """Generate and return a survey question draft from the conversation history."""
         AccessPolicy.require(principal, Permission.AI_EXECUTE, resource_type=_TEMPLATE)
         if self.ai_service is None:
             raise SurveyTemplateManagerError(
@@ -605,13 +604,13 @@ class SurveyTemplateManager:
             "questions": [q.to_dict() for q in questions],
         }
 
-    # =========================================================================
-    # バリデーション
-    # =========================================================================
+    # ==========================================================================
+    # Validation
+    # ==========================================================================
 
     @staticmethod
     def _validate_template_name(name: str) -> None:
-        """テンプレート名のバリデーション。"""
+        """Validate the template name."""
         if not name or not name.strip():
             raise SurveyTemplateValidationError(
                 "template name is blank",
@@ -620,7 +619,7 @@ class SurveyTemplateManager:
 
     @staticmethod
     def _validate_questions(questions: List[Question]) -> None:
-        """質問リストのバリデーション。"""
+        """Validate the question list."""
         if not questions:
             raise SurveyTemplateValidationError(
                 "question list is empty",
@@ -636,7 +635,7 @@ class SurveyTemplateManager:
 
     @staticmethod
     def _validate_images(images: List[TemplateImage]) -> None:
-        """画像リストのバリデーション。"""
+        """Validate the image list."""
         if len(images) > MAX_TEMPLATE_IMAGES:
             raise SurveyTemplateValidationError(
                 f"{len(images)} images attached, max is {MAX_TEMPLATE_IMAGES}",
@@ -706,7 +705,7 @@ class SurveyTemplateManager:
 
     @staticmethod
     def _build_question_from_ai(data: Dict[str, Any]) -> Question:
-        """AI生成のJSON 1件を Question に変換する。不正値は安全側に丸める。"""
+        """Convert one AI-generated JSON item to a Question. Invalid values are rounded to the safe side."""
         qtype = str(data.get("question_type", "")).strip()
         text = str(data.get("text", "")).strip()
         if not text:

@@ -1,4 +1,4 @@
-"""Evaluation of the personas an advanced generation writes (U6 addendum).
+"""Evaluation of the personas an advanced generation writes.
 
 Not a score gate: the cases run through the running app against the dev
 stack (as ``test_method_selection_eval.py``) and what they gave is measured and

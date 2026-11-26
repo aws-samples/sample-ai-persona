@@ -1,4 +1,4 @@
-"""対応表（リソース → 所有者・共有先・移すかどうか）と所有者の解決のテスト（移行スクリプト）。"""
+"""Tests for the mapping table (resource to owner, share targets, whether to move) and owner resolution (migration script)."""
 
 import pytest
 

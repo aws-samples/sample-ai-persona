@@ -1,4 +1,4 @@
-"""CustomPersonaData・PersonaDataRef・AssetScopeChange の単体テスト（U7 entities.md）。"""
+"""Unit tests for CustomPersonaData, PersonaDataRef and AssetScopeChange."""
 
 from datetime import datetime
 

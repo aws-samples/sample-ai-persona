@@ -1,15 +1,15 @@
-"""DynamoDB reads and writes of persona bindings (U5, ADR-007).
+"""DynamoDB reads and writes of persona bindings.
 
 ``PersonaBindings``: PK ``persona_id``, SK ``target_key`` (``DATASET#{id}`` or
 the fixed ``KB``), GSI ``TargetIndex`` (PK ``target_id``, ``KEYS_ONLY``).
 
 - Reading a persona's bindings is always a ``Query`` on ``persona_id``, read to
-  the last page; this service never scans (NFR2.9, BR8.2).
-- Deleting is by ``(persona_id, target_key)`` (BR2.5), by ``persona_id``
-  (``delete_all``, BR3.1) or by the target through ``TargetIndex``
+  the last page; this service never scans.
+- Deleting is by ``(persona_id, target_key)``, by ``persona_id``
+  (``delete_all``) or by the target through ``TargetIndex``
   (``delete_for_target``, when a dataset or knowledge base is deleted).
 - ``delete_all`` and ``delete_for_target`` re-send ``UnprocessedItems`` up to
-  three times, 0.2 / 0.4 / 0.8 seconds apart (``reliability-design.md`` §4).
+  three times, 0.2 / 0.4 / 0.8 seconds apart.
 
 Who may read or change a binding is decided by ``PersonaManager``; the
 bindings of a deleted dataset or knowledge base are removed by
@@ -89,7 +89,7 @@ class PersonaBindingStore:
             params["ExclusiveStartKey"] = last
 
     def put(self, binding: PersonaBinding) -> None:
-        """Write one binding (replaces the item with the same key, BR2.9)."""
+        """Write one binding (replaces the item with the same key)."""
         item = {k: self._serializer.serialize(v) for k, v in binding.to_dict().items()}
         self._call("put_item", TableName=self.table_name, Item=item)
 
@@ -106,7 +106,7 @@ class PersonaBindingStore:
     def delete_all(
         self, persona_id: str, bindings: Sequence[PersonaBinding] | None = None
     ) -> int:
-        """Delete every binding of a persona (BR3.1).
+        """Delete every binding of a persona.
 
         Args:
             persona_id: The persona.

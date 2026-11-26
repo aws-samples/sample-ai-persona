@@ -1,10 +1,7 @@
-"""DiscussionRecords（議論の保存・読み出し・削除の部品、ADR-006）の単体テスト。
+"""Unit tests for DiscussionRecords (store, read and delete of discussions).
 
-BR1.1〜BR1.7、BR2.4〜BR2.7、BR4.4、BR5.1、BR5.2、BR7.3、BR9.1、NFR1.44、NFR1.45、
-NFR1.53、NFR1.57、NFR1.58、NFR8.18、AC2.1.1、AC2.2.4、AC4.1.2、AC4.3.1、AC4.3.2。
-
-Store は手元の偽物（失敗を差し込める）、AccessPolicy・ResourceSharing・ResourceLookup
-は本物を使う（判定をモックにしない）。資料の紐付けは FileAttachments のモック。
+The Store is a local fake (failures can be injected); AccessPolicy, ResourceSharing and
+ResourceLookup are real (decisions are not mocked). Document bindings use a FileAttachments mock.
 """
 
 from dataclasses import replace
@@ -234,7 +231,7 @@ def records(store, files) -> DiscussionRecords:
         sample_rate=0.0,
     )
     bodies = Mock()
-    # 参加者のカード（BR7.3）: 読めるペルソナの本体だけを返す
+    # Participant cards: only the bodies of readable personas are returned
     bodies.get_many.side_effect = lambda ids: {
         i: _participant_persona(i) for i in ids if i in ("p1", "p2")
     }
@@ -299,7 +296,7 @@ def _share(store: FakeStore, discussion_id: str, *groups: str) -> None:
 
 
 # =============================================================================
-# 保存（BR1.1、BR1.2、BR2.7、NFR1.57）
+# Save
 # =============================================================================
 
 
@@ -352,7 +349,7 @@ class TestSaveNew:
         assert store.messages == {} and store.bodies == {}
 
     def test_an_existing_body_keeps_its_messages(self, records, store):
-        """同じ ID の議論が先に保存されていたら、巻き戻しでその発言を消さない。"""
+        """If a discussion with the same ID was saved first, rollback does not erase its messages."""
         discussion = _discussion()
         records.save_new(OWNER, discussion, _messages())
         with raises_code(CodedError, ErrorCode.DISCUSSION_OPERATION_FAILED):
@@ -390,7 +387,7 @@ class TestSaveNew:
 
 
 # =============================================================================
-# 読み出し（BR1.3、BR1.7、BR2.4、BR7.3、NFR1.44）
+# Read
 # =============================================================================
 
 
@@ -500,7 +497,7 @@ class TestGet:
 
 
 # =============================================================================
-# 部分更新（BR1.4、BR2.5、BR2.6）
+# Partial update
 # =============================================================================
 
 
@@ -554,7 +551,7 @@ class TestUpdateInsights:
 
 
 # =============================================================================
-# 削除と後始末（BR1.5、BR1.6、NFR1.58、NFR8.18）
+# Delete and cleanup
 # =============================================================================
 
 
@@ -610,7 +607,7 @@ class TestDelete:
 
 
 # =============================================================================
-# 書き足し（BR3.8）
+# Append
 # =============================================================================
 
 
@@ -656,7 +653,7 @@ class TestAppendMessages:
 
 
 # =============================================================================
-# レポート（BR4.2、BR4.4）
+# Report
 # =============================================================================
 
 
@@ -710,7 +707,7 @@ class TestReports:
 
 
 # =============================================================================
-# 一覧の本体（NFR2.15）とエクスポート（BR9.1）
+# List body and export
 # =============================================================================
 
 

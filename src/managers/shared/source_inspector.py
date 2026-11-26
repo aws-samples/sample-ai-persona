@@ -1,18 +1,18 @@
-"""Inspection of the head of an uploaded table (advanced generation U1, BR3.1〜BR3.3).
+"""Inspection of the head of an uploaded table (advanced generation).
 
 ``SourceUploadManager`` reads only the first bytes of the file (4MB by
-default, BR3.1) and hands them here. The result is the
+default) and hands them here. The result is the
 :class:`~src.models.source_file.SourceMetadata` the screen shows and the
 preparation in the sandbox starts from. This module is a pure function over
 those bytes: no I/O, no Service.
 
-Encoding (BR3.2): a UTF-8 BOM means ``utf-8-sig``; a head of ASCII only is
-``undetermined`` (the preparation settles it, BR4.3); otherwise the first of
+Encoding: a UTF-8 BOM means ``utf-8-sig``; a head of ASCII only is
+``undetermined`` (the preparation settles it); otherwise the first of
 UTF-8, CP932 and EUC-JP that decodes the head strictly. Strict Shift_JIS is
 not tried (CP932 covers it).
 
 A head that is not a table raises :class:`SourceInspectionError` with one
-code per way of fixing it (U2 BR12.1): an empty column name
+code per way of fixing it: an empty column name
 (``SOURCE_EMPTY_COLUMN_NAME``), a duplicated one
 (``SOURCE_DUPLICATE_COLUMN_NAME``), nothing decodes
 (``SOURCE_ENCODING_UNKNOWN``), binary / empty / a line longer than the head
@@ -56,12 +56,12 @@ _BOOLEAN = frozenset({"true", "false"})
 
 
 class SourceInspectionError(CodedError):
-    """The head is not a table this feature can read (one code per fix, BR12.1)."""
+    """The head is not a table this feature can read (one code per fix)."""
 
     code = ErrorCode.SOURCE_NOT_A_TABLE
 
 
-#: Reason word -> the code that tells the user how to fix it (U2 BR12.1).
+#: Reason word -> the code that tells the user how to fix it.
 _REASON_CODES = {
     "empty_column_name": ErrorCode.SOURCE_EMPTY_COLUMN_NAME,
     "duplicate_column_name": ErrorCode.SOURCE_DUPLICATE_COLUMN_NAME,
@@ -83,7 +83,7 @@ def _invalid(reason: str) -> SourceInspectionError:
 
 
 def _whole_lines(head: bytes, total_size: int) -> bytes:
-    """Drop the line the read cut in the middle (BR3.1)."""
+    """Drop the line the read cut in the middle."""
     if len(head) >= total_size:
         return head
     end = head.rfind(b"\n")
@@ -93,7 +93,7 @@ def _whole_lines(head: bytes, total_size: int) -> bytes:
 
 
 def _decode(data: bytes) -> tuple[SourceEncoding, str]:
-    """The encoding and text of ``data`` (BR3.2)."""
+    """The encoding and text of ``data``."""
     if data.startswith(_BOM):
         try:
             return SourceEncoding.UTF8_SIG, data[len(_BOM) :].decode("utf-8")
@@ -156,7 +156,7 @@ def inspect_table_head(
     total_size: int,
     now: datetime,
 ) -> SourceMetadata:
-    """Inspect the first bytes of a CSV / TSV file (BR3.1〜BR3.3).
+    """Inspect the first bytes of a CSV / TSV file.
 
     Args:
         head: The first bytes of the object (the whole object if smaller).
@@ -168,7 +168,7 @@ def inspect_table_head(
         The metadata; ``sample_rows`` is cut to the display limits.
 
     Raises:
-        SourceInspectionError: A ``SOURCE_*`` code (BR12.1) when the head is not
+        SourceInspectionError: A ``SOURCE_*`` code when the head is not
             a table.
     """
     if b"\x00" in head:
@@ -202,13 +202,13 @@ def inspect_table_head(
     )
 
 
-# --- U4: documents (BR22.1〜BR22.3, NFR3.25) ---------------------------------
+# Documents
 #
 # Only the head (4MB) and the tail (1MB) are read; the bytes are matched, no
 # library parses them. What cannot be judged from them is left ready: the
-# preparation in the sandbox finds it (BR22.2, BR24.6).
+# preparation in the sandbox finds it.
 
-#: ``%PDF-`` must start within this many bytes (BR22.1).
+#: ``%PDF-`` must start within this many bytes.
 _PDF_SIGNATURE_WINDOW = 1024
 _PDF_SIGNATURE = b"%PDF-"
 _ZIP_SIGNATURE = b"PK\x03\x04"
@@ -222,7 +222,7 @@ _XREF_STREAM = re.compile(rb"/Type\s*/XRef\b")
 _ENCRYPT_KEY = re.compile(rb"/Encrypt\b")
 #: The trailer dictionary is short; look this far after ``trailer``.
 _TRAILER_WINDOW = 4096
-#: Bytes a cut multibyte character can leave at the end of the head (BR22.1).
+#: Bytes a cut multibyte character can leave at the end of the head.
 _CUT_CHARACTER_BYTES = 3
 
 
@@ -266,7 +266,7 @@ def _check_pdf(head: bytes, tail: bytes) -> None:
 
 def _check_docx(head: bytes, tail: bytes, total_size: int) -> None:
     if head.startswith(_OLE_SIGNATURE):
-        # An encrypted docx and an old .doc cannot be told apart (BR22.1).
+        # An encrypted docx and an old .doc cannot be told apart.
         raise _encrypted("ole")
     if not head.startswith(_ZIP_SIGNATURE):
         raise _not_document("zip_signature")
@@ -278,7 +278,7 @@ def _check_docx(head: bytes, tail: bytes, total_size: int) -> None:
     tail_start = total_size - len(tail)
     start = directory_offset - tail_start
     if directory_offset == _ZIP64_MARK or start < 0:
-        return  # not judged here: the preparation reads it (NFR3.25)
+        return  # not judged here: the preparation reads it
     if _DOCX_PART not in tail[start : start + directory_size]:
         raise _not_document("docx_part")
 
@@ -309,7 +309,7 @@ def inspect_document(
     now: datetime,
     chars_per_mb: int,
 ) -> DocumentMetadata:
-    """Inspect the head and the tail of a document (BR22.1〜BR22.3).
+    """Inspect the head and the tail of a document.
 
     Args:
         head: The first bytes (4MB, or the whole object if smaller).

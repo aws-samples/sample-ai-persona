@@ -1,13 +1,13 @@
 """
 Cognito OIDC communication (AUTH_MODE=oidc).
 
-Moved into :mod:`src.services.cognito` in U8 so that it shares
+Lives in :mod:`src.services.cognito` so that it shares
 :class:`~src.services.cognito.circuit_breaker.CircuitBreaker` with the admin
 API client; an open breaker (``CircuitOpenError``) becomes ``OIDC_UNAVAILABLE``
-here, so the behaviour seen by callers is unchanged.
+here.
 
 The OAuth 2.0 / OIDC protocol work is delegated to libraries instead of being
-hand-written (NFR4.5): Authlib's ``OAuth2Client`` builds the authorization URL
+hand-written: Authlib's ``OAuth2Client`` builds the authorization URL
 with PKCE (S256), exchanges the code, refreshes and revokes tokens; joserfc
 (Authlib's JOSE successor; ``authlib.jose`` is deprecated in Authlib 1.8)
 verifies the ID token signature and ``iss`` / ``aud`` / ``exp`` / ``nonce``.
@@ -21,7 +21,7 @@ Endpoints are the fixed Cognito URLs derived from the user pool and the
 Managed Login domain, so no discovery document is fetched. The JWKS is fetched
 once and kept in the process; an unknown ``kid`` triggers one re-fetch.
 
-Failure classification (``reliability-design.md``):
+Failure classification:
 
 - transient: timeout, connection failure, HTTP 5xx, HTTP 429, JWKS fetch
   failure, or the breaker being open -> ``OIDC_UNAVAILABLE``;

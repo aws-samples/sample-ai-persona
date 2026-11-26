@@ -1,29 +1,29 @@
-"""Who may use the advanced generation (beta), and its setting (U1 BR1, U6 BR34).
+"""Who may use the advanced generation (beta), and its setting.
 
 Two Managers (``SourceUploadManager``, ``AdvancedPersonaGenerationManager``)
-and, in U6, ``SettingsManager`` ask the same question, and Managers cannot
+and ``SettingsManager`` ask the same question, and Managers cannot
 import each other, so the decision lives in this component
 (``.claude/rules/architecture.md``, Component layer).
 
-The feature is usable only when every one of these holds (BR1.1):
+The feature is usable only when every one of these holds:
 
 1. ``ENABLE_ADVANCED_GENERATION`` is true (default true; the closed network
-   Stage passes false, BR1.3, BR1.4).
+   Stage passes false).
 2. An analysis sandbox is configured (``CODE_INTERPRETER_ID``).
 3. The user has ``ai:execute``.
 4. The administrator opened it to the user: administrators always; with the
    ``everyone`` audience every user; with ``departments`` the members of the
-   chosen departments. While nothing is set, administrators only (BR1.2).
+   chosen departments. While nothing is set, administrators only.
    A setting that cannot be read is treated as not set (fail closed).
 
 "Administrator" is the holder of ``settings:manage`` (the permission of the
-role that opens the feature), so the decision stays on permissions (ADR-005).
+role that opens the feature), so the decision stays on permissions.
 
-U6 (BR34, BR35.1): :meth:`AdvancedGenerationPolicy.availability` tells, with
+:meth:`AdvancedGenerationPolicy.availability` tells, with
 one read, whether the feature is usable and whether the AI detailed analysis
 is offered (allowed by the administrator and not the in-process sandbox).
-The setting is saved on the version read (optimistic lock, BR34.4); the
-setting is read with a strong read every time (BR34.5).
+The setting is saved on the version read (optimistic lock); the
+setting is read with a strong read every time.
 
 The ``AppSettingsStore`` is given to the constructor; this component never
 reads ``service_factory``.
@@ -50,15 +50,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: ``audience_mode`` values (contract C6).
+#: ``audience_mode`` values.
 AUDIENCE_ADMINS_ONLY = "admins_only"
 AUDIENCE_EVERYONE = "everyone"
 AUDIENCE_DEPARTMENTS = "departments"
 AUDIENCE_MODES = (AUDIENCE_ADMINS_ONLY, AUDIENCE_EVERYONE, AUDIENCE_DEPARTMENTS)
 _GROUP_PREFIX = "group:"
-#: Departments one setting may name (BR34.2).
+# Departments one setting may name.
 MAX_DEPARTMENTS = 100
-#: Version of the stored item (contract C6).
+#: Version of the stored item.
 SETTING_SCHEMA_VERSION = 1
 #: ``SettingSectionView.notice`` values.
 NOTICE_SAVED = "saved"
@@ -67,10 +67,10 @@ NOTICE_CONFLICT = "conflict"
 
 @dataclass(frozen=True)
 class Availability:
-    """What one read of the setting tells (U6 BR34.6, BR35.1, BR35.4).
+    """What one read of the setting tells.
 
     Attributes:
-        usable: The user may use the advanced generation (BR1.1).
+        usable: The user may use the advanced generation.
         detailed: The AI detailed analysis is offered to the user.
     """
 
@@ -80,7 +80,7 @@ class Availability:
 
 @dataclass(frozen=True)
 class AdvancedGenerationSetting:
-    """The administrator's setting (entities.md AdvancedGenerationSetting, C6).
+    """The administrator's setting.
 
     ``department_groups`` are group names without the ``group:`` prefix.
     """
@@ -96,7 +96,7 @@ class AdvancedGenerationSetting:
     def from_item(
         cls, item: Optional[Mapping[str, Any]]
     ) -> "AdvancedGenerationSetting":
-        """The stored item, or the defaults when there is none (BR35.1)."""
+        """The stored item, or the defaults when there is none."""
         if not item:
             return cls()
         mode = str(item.get("audience_mode") or AUDIENCE_ADMINS_ONLY)
@@ -115,12 +115,12 @@ class AdvancedGenerationSetting:
 
 @dataclass(frozen=True)
 class SettingSectionView:
-    """What the settings screen section shows (entities.md SettingSectionView).
+    """What the settings screen section shows.
 
     Attributes:
         setting: The current values and version.
         departments: Every department that exists now (the choices).
-        missing_groups: Saved departments that no longer exist (BR34.3).
+        missing_groups: Saved departments that no longer exist.
         updated_by_name: Display name of who saved last (filled by the Manager).
         notice: ``saved`` or ``conflict``.
     """
@@ -141,7 +141,7 @@ class AdvancedGenerationPolicy:
     def __init__(self, settings_store: "AppSettingsStore") -> None:
         """
         Args:
-            settings_store: Reads and writes the administrator's setting (C6).
+            settings_store: Reads and writes the administrator's setting.
         """
         self._settings = settings_store
 
@@ -150,13 +150,12 @@ class AdvancedGenerationPolicy:
     ) -> Availability:
         """Whether ``principal`` may use it and is offered the detailed analysis.
 
-        One strong read of the setting (BR34.5). An unreadable setting is
-        administrators only without the detailed analysis (NFR5.56).
+        One strong read of the setting. An unreadable setting is
+        administrators only without the detailed analysis.
 
         Args:
             principal: The user.
-            in_process: The sandbox runs in this process (no AI-written code,
-                ADR-004).
+            in_process: The sandbox runs in this process (no AI-written code).
         """
         if not self._environment_allows():
             return Availability(usable=False, detailed=False)
@@ -169,13 +168,13 @@ class AdvancedGenerationPolicy:
         return Availability(usable=usable, detailed=detailed)
 
     def is_available(self, principal: Principal) -> bool:
-        """Whether ``principal`` may use the advanced generation now (BR1.1)."""
+        """Whether ``principal`` may use the advanced generation now."""
         return self.availability(principal).usable
 
     def ensure_available(
         self, principal: Principal, error_type: type[CodedError] = CodedError
     ) -> None:
-        """Stop unless ``principal`` may use the advanced generation (BR1.1).
+        """Stop unless ``principal`` may use the advanced generation.
 
         Args:
             principal: The user.
@@ -196,14 +195,14 @@ class AdvancedGenerationPolicy:
 
     @staticmethod
     def upload_limit_bytes() -> int:
-        """Largest table this environment accepts (BR2.2; 10MB without a sandbox is U7)."""
+        """Largest table this environment accepts (10MB without a sandbox)."""
         return int(config.ADVANCED_UPLOAD_MAX_BYTES)
 
-    # --- U6: the settings screen section (BR34) ---------------------------------
+    # The settings screen section
 
     @staticmethod
     def feature_enabled() -> bool:
-        """Whether this environment has the feature at all (BR1.3, BR1.4).
+        """Whether this environment has the feature at all.
 
         ``ENABLE_ADVANCED_GENERATION`` only: the closed network Stage passes
         false. The settings section follows this so that an administrator can
@@ -212,7 +211,7 @@ class AdvancedGenerationPolicy:
         return bool(config.ENABLE_ADVANCED_GENERATION)
 
     def section_view(self, departments: Sequence[Department]) -> SettingSectionView:
-        """The current values, version, choices and missing departments (BR34.3).
+        """The current values, version, choices and missing departments.
 
         Raises:
             AppSettingsStoreError: The setting could not be read.
@@ -231,7 +230,7 @@ class AdvancedGenerationPolicy:
         now: datetime,
         error_type: type[CodedError] = CodedError,
     ) -> SettingSectionView:
-        """Check and save the section on the version read (BR34.2〜BR34.4).
+        """Check and save the section on the version read.
 
         Departments with none chosen are saved as ``admins_only``; other modes
         keep no departments. The caller checked ``settings:manage``.
@@ -310,8 +309,8 @@ class AdvancedGenerationPolicy:
             existing = {d.group_id for d in departments}
             vanished = sum(1 for g in groups if g not in existing)
             if vanished:
-                # BR34.3: the screen tells the cause; only the count is shown
-                # (the group ids are not, NFR3.38)
+                # The screen tells the cause; only the count is shown
+                # (the group ids are not).
                 raise error_type(
                     "advanced generation setting names a missing department",
                     code=ErrorCode.REQUEST_INVALID,
@@ -322,7 +321,7 @@ class AdvancedGenerationPolicy:
                     },
                 )
             if not groups:
-                # BR34.2 (FD6-Q2=A): no department chosen is administrators only
+                # No department chosen is administrators only
                 mode = AUDIENCE_ADMINS_ONLY
         allow = form.get("allow_detailed_analysis") in (True, "true", "on", "1")
         return mode, groups, allow, version
@@ -367,7 +366,7 @@ class AdvancedGenerationPolicy:
             )
         except CodedError as e:
             # Fail closed: an unreadable setting opens it to administrators
-            # only, without the detailed analysis (BR1.2, BR35.1, NFR5.56).
+            # only, without the detailed analysis.
             logger.warning(
                 "advanced generation setting unreadable (%s)", type(e).__name__
             )

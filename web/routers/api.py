@@ -1,8 +1,8 @@
 """
-REST API ルーター（JSON応答用）
+REST API router (JSON responses)
 
-ペルソナ、議論、インタビュー、インサイト生成のREST APIを提供する。
-AgentCore Gateway 経由で外部AIエージェントからも利用可能。
+Provides REST APIs for personas, discussions, interviews and insight generation.
+Also usable by external AI agents through AgentCore Gateway.
 """
 
 import logging
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# シングルトンマネージャーインスタンス（モジュールレベルで共有）
+# Singleton manager instances (shared at module level)
 _persona_manager: PersonaManager | None = None
 _discussion_manager: DiscussionManager | None = None
 _agent_discussion_manager: AgentDiscussionManager | None = None
@@ -39,7 +39,7 @@ _persona_generation_manager: PersonaGenerationManager | None = None
 
 
 def get_persona_manager() -> PersonaManager:
-    """PersonaManagerのシングルトンインスタンスを取得"""
+    """Get the PersonaManager singleton instance."""
     global _persona_manager
     if _persona_manager is None:
         _persona_manager = PersonaManager()
@@ -47,7 +47,7 @@ def get_persona_manager() -> PersonaManager:
 
 
 def get_discussion_manager() -> DiscussionManager:
-    """DiscussionManagerのシングルトンインスタンスを取得"""
+    """Get the DiscussionManager singleton instance."""
     global _discussion_manager
     if _discussion_manager is None:
         _discussion_manager = DiscussionManager()
@@ -83,7 +83,7 @@ def get_persona_generation_manager() -> PersonaGenerationManager:
 
 
 def _principal(request: Request) -> Principal:
-    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    """The signed-in user that ``AuthMiddleware`` put on the request."""
     principal: Principal = request.state.principal
     return principal
 
@@ -138,9 +138,9 @@ class JobResponse(BaseModel):
     status: str
     result: Any = None
     error: Optional[str] = None
-    #: U6 BR8.3 (C12 additive): the stable code of a failed job (never its text)
+    #: The stable code of a failed job (never its text)
     error_code: Optional[str] = None
-    #: Persona generation only (R-06, C12 additive): candidates not saved
+    #: Persona generation only (additive): candidates not saved
     failed_count: Optional[int] = None
     failed_names: Optional[List[str]] = None
 
@@ -149,7 +149,7 @@ class JobResponse(BaseModel):
 
 
 class GeneratePersonasRequest(BaseModel):
-    """ペルソナ生成リクエスト"""
+    """Persona generation request."""
 
     data_type: str = Field(
         description="データ種別: interview, market_report, review, purchase, other",
@@ -171,14 +171,14 @@ class GeneratePersonasRequest(BaseModel):
 
 
 class CategoryInput(BaseModel):
-    """インサイトカテゴリ入力"""
+    """Insight category input."""
 
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=500)
 
 
 class RunDiscussionRequest(BaseModel):
-    """議論実行リクエスト"""
+    """Discussion run request."""
 
     persona_ids: List[str] = Field(
         min_length=2, description="参加ペルソナIDリスト（2名以上）"
@@ -199,7 +199,7 @@ class RunDiscussionRequest(BaseModel):
 
 
 class GenerateInsightsRequest(BaseModel):
-    """インサイト生成リクエスト"""
+    """Insight generation request."""
 
     categories: Optional[List[CategoryInput]] = Field(
         default=None,
@@ -209,7 +209,7 @@ class GenerateInsightsRequest(BaseModel):
 
 
 class RunInterviewRequest(BaseModel):
-    """インタビュー実行リクエスト"""
+    """Interview run request."""
 
     persona_ids: List[str] = Field(
         min_length=1, max_length=5, description="参加ペルソナIDリスト（1-5名）"
@@ -219,7 +219,7 @@ class RunInterviewRequest(BaseModel):
 
 @router.get("/personas", response_model=List[PersonaResponse])
 async def list_personas(request: Request, search: Optional[str] = None) -> Any:
-    """ペルソナ一覧取得API（自分のものと共有されたものだけ、U4）"""
+    """Persona list API (only the caller's own and shared ones)."""
     try:
         persona_manager = get_persona_manager()
         personas = await anyio.to_thread.run_sync(
@@ -244,7 +244,7 @@ async def list_personas(request: Request, search: Optional[str] = None) -> Any:
             for p in personas
         ]
     except CodedError:
-        # 照合の障害（503 lookup_unavailable）などは共通の例外ハンドラに任せる（U4 レビュー P2）
+        # Lookup failures (503 lookup_unavailable) and the like are left to the shared exception handler
         raise
     except Exception as e:
         logger.error(f"Failed to fetch persona list: {e}")
@@ -256,7 +256,7 @@ async def list_personas(request: Request, search: Optional[str] = None) -> Any:
 
 @router.get("/personas/{persona_id}", response_model=PersonaResponse)
 async def get_persona(request: Request, persona_id: str) -> Any:
-    """ペルソナ詳細取得API（読める人だけ。読めなければ 404、BR6.2）"""
+    """Persona detail API (readable users only; 404 if unreadable)."""
     try:
         persona_manager = get_persona_manager()
         detail = await anyio.to_thread.run_sync(
@@ -279,7 +279,7 @@ async def get_persona(request: Request, persona_id: str) -> Any:
             tags=persona.tags,
         )
     except (HTTPException, CodedError):
-        # 読めない・存在しない（同じ 404）や 503 は共通の例外ハンドラが JSON にする
+        # Unreadable/nonexistent (the same 404) and 503 are turned into JSON by the shared exception handler
         raise
     except Exception as e:
         logger.error(f"Failed to fetch persona: {e}")
@@ -291,7 +291,7 @@ async def get_persona(request: Request, persona_id: str) -> Any:
 
 @router.get("/discussions")
 async def list_discussions(request: Request) -> Any:
-    """議論一覧取得API（自分のものと共有されたもの、admin は全件、U6 BR2.1）"""
+    """Discussion list API (the caller's own and shared ones; admin sees all)."""
     try:
         discussions = await anyio.to_thread.run_sync(
             get_discussion_manager().list_accessible_discussions, _principal(request)
@@ -307,7 +307,7 @@ async def list_discussions(request: Request) -> Any:
             for d in discussions
         ]
     except CodedError:
-        # 照合の障害（503）などは共通の例外ハンドラに任せる
+        # Lookup failures (503) and the like are left to the shared exception handler
         raise
     except Exception as e:
         logger.error(f"Failed to fetch discussion list: {type(e).__name__}")
@@ -319,7 +319,7 @@ async def list_discussions(request: Request) -> Any:
 
 @router.get("/health")
 async def health() -> Any:
-    """ヘルスチェックAPI"""
+    """Health check API."""
     return {"status": "ok"}
 
 
@@ -342,10 +342,10 @@ def _persona_to_response(p: Any) -> PersonaResponse:
 
 
 async def _resolve_personas(principal: Principal, persona_ids: List[str]) -> list:
-    """参加者を判定してから読む（U6 BR2.8）。
+    """Check the participants, then read.
 
-    ``ai:execute`` がなければ 403、1 体でも読めなければ 404（C12 の順。共通の
-    例外ハンドラが ``{detail, error_code}`` にする）。
+    403 without ``ai:execute``, 404 if even one cannot be read (in that order; the shared
+    exception handler turns it into ``{detail, error_code}``).
     """
     personas: list = await anyio.to_thread.run_sync(
         get_persona_manager().get_personas_for_use, principal, persona_ids
@@ -364,14 +364,14 @@ def _run_generate_personas(
     data_description: str | None,
     custom_prompt: str | None,
 ) -> dict[str, Any]:
-    """バックグラウンドスレッドで実行されるペルソナ生成処理。
+    """Persona generation run in a background thread.
 
-    画面と同じく、生成 → 押さえ → 保存 → 片付け（必ず呼ぶ）の順に呼ぶだけ（BR1.3、BR1.4）。
-    返す ID は保存したペルソナの ID（候補の ID ではない、BR1.5）。
+    Like the screen, it just calls generate -> hold -> save -> clean up (always called) in that order.
+    The ID returned is the saved persona's ID (not the candidate's ID).
 
-    R-06: ジョブに保存する結果は ``{"personas", "failed_count", "failed_names"}``。
-    ``GET /api/jobs/{job_id}`` は ``result`` を今までどおりペルソナの配列で返し、保存
-    できなかった件数と名前（本人の候補）を項目として足す（C12、互換を壊さない）。
+    The result stored on the job is ``{"personas", "failed_count", "failed_names"}``.
+    ``GET /api/jobs/{job_id}`` still returns ``result`` as a persona array and adds the count and
+    names of the ones that could not be saved (the caller's own candidates) as fields (compatible).
     """
     gen_manager = get_persona_generation_manager()
     generated = gen_manager.generate(
@@ -426,7 +426,7 @@ async def generate_personas(request: Request, req: GeneratePersonasRequest) -> A
         )
         return JobResponse(job_id=job_id, status="pending")
     except CodedError:
-        # 権限なし（ACCESS_DENIED）などは約束 C13 のハンドラに任せる
+        # No permission (ACCESS_DENIED) and the like are left to the shared exception handler
         raise
     except Exception as e:
         logger.error(f"Failed to submit persona generation job: {e}")
@@ -446,7 +446,7 @@ def _run_classic_discussion(
     categories: list | None,
     rounds: int = 3,
 ) -> dict:
-    """Classic議論をバックグラウンドで実行（投入した人として実行し保存する）"""
+    """Run a classic discussion in the background (run and saved as the submitting user)."""
     dm = get_discussion_manager()
     cats = (
         [InsightCategory.from_dict(c.model_dump()) for c in categories]
@@ -464,7 +464,7 @@ def _run_agent_discussion(
     categories: list | None,
     rounds: int = 3,
 ) -> dict:
-    """Agent議論をバックグラウンドで実行"""
+    """Run an agent discussion in the background."""
     adm = get_agent_discussion_manager()
     cats = (
         [InsightCategory.from_dict(c.model_dump()) for c in categories]
@@ -554,7 +554,7 @@ async def run_discussion(request: Request, req: RunDiscussionRequest) -> Any:
     description="指定されたIDの議論結果（メッセージ、インサイト含む）を取得します。",
 )
 async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
-    # 読めない・存在しないは DISCUSSION_NOT_FOUND（共通の例外ハンドラが 404 にする）
+    # Unreadable/nonexistent gives DISCUSSION_NOT_FOUND (the shared exception handler turns it into 404)
     try:
         view = await anyio.to_thread.run_sync(
             get_discussion_manager().get_discussion, _principal(request), discussion_id
@@ -586,7 +586,7 @@ async def generate_insights(
     try:
         dm = get_discussion_manager()
         principal = _principal(request)
-        # 投入の前に ai:execute と管理できるかを確かめる（403 / 404、C12）
+        # Before submitting, check ai:execute and that the caller can manage it (403 / 404)
         await anyio.to_thread.run_sync(
             dm.check_insights_allowed, principal, discussion_id
         )
@@ -598,7 +598,7 @@ async def generate_insights(
         )
 
         def _run(principal: Principal) -> list[dict]:
-            # 生成したインサイトを議論に保存する（再生成と同じ。レポート・資料は残る）
+            # Save the generated insights to the discussion (same as regeneration; the report and documents remain)
             insights = dm.regenerate_insights(principal, discussion_id, cats)
             return [
                 InsightResponse(
@@ -671,7 +671,7 @@ async def run_interview(request: Request, req: RunInterviewRequest) -> Any:
 # --- job status ---
 
 
-# 受け身の要求（BR1.9）: 状態の確認の繰り返し。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
+# Passive request: repeated status checks. Listed in PASSIVE_REQUESTS of web/auth_middleware.py
 @router.get(
     "/jobs/{job_id}",
     response_model=JobResponse,
@@ -679,16 +679,16 @@ async def run_interview(request: Request, req: RunInterviewRequest) -> Any:
     description="非同期ジョブ（ペルソナ生成、議論実行）のステータスと結果を取得します。statusがcompletedの場合、resultに結果が含まれます。",
 )
 async def get_job(request: Request, job_id: str) -> Any:
-    # 投入した本人だけ（BR2.12）。他人・投入者なし・存在しないは JobManager が
-    # JOB_NOT_FOUND を送出し、Jobs に届かなければ LOOKUP_UNAVAILABLE を送出する。
-    # どちらも約束 C13 のハンドラが {detail, error_code} にする（ここでは捕まえない）。
+    # Only the submitting user. Someone else's, no submitter, or nonexistent makes JobManager
+    # raise JOB_NOT_FOUND, and LOOKUP_UNAVAILABLE if Jobs is unreachable.
+    # Both become {detail, error_code} in the shared handler (not caught here).
     jm = get_job_manager()
     job = await anyio.to_thread.run_sync(jm.get, _principal(request), job_id)
     response = JobResponse(
         job_id=job.id,
         status=job.status.value,
         result=job.result,
-        # U6 BR8.3: 失敗はコードで持ち、文言はカタログから引く（例外文は返さない）
+        # A failure is kept as a code and the wording comes from the catalog (the exception text is not returned)
         error=user_message_for_code(job.error_code) if job.error_code else None,
         error_code=job.error_code,
     )
@@ -698,7 +698,7 @@ async def get_job(request: Request, job_id: str) -> Any:
         and isinstance(stored, dict)
         and "personas" in stored
     ):
-        # 生成ジョブ（R-06）: result はペルソナの配列のまま、保存できなかった分を足す
+        # Generation job: result stays a persona array, with the ones that could not be saved added
         response.result = stored["personas"]
         response.failed_count = stored.get("failed_count")
         response.failed_names = stored.get("failed_names")

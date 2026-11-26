@@ -1,9 +1,9 @@
-"""CircuitBreaker（src/services/cognito/circuit_breaker.py）のテスト。
+"""Tests for CircuitBreaker (src/services/cognito/circuit_breaker.py).
 
-U8 NFR Design Q1 A: OidcService の中にあった回路遮断を Cognito のサブパッケージに
-移し、OidcService と CognitoAuthService が同じ部品を使う。遮断中の ``before_call()``
-は中立の ``CircuitOpenError``（CodedError ではない）を投げ、各 Service が自分の
-エラーコード（OIDC_UNAVAILABLE、LOGIN_UNAVAILABLE）に変える（NFR9.44）。
+The circuit breaker formerly inside OidcService lives in the Cognito subpackage, and
+OidcService and CognitoAuthService share it. While open, ``before_call()`` raises the
+neutral ``CircuitOpenError`` (not a CodedError), and each Service converts it to its own
+error code (OIDC_UNAVAILABLE, LOGIN_UNAVAILABLE).
 """
 
 import pytest
@@ -44,7 +44,7 @@ def _fail(breaker: CircuitBreaker, times: int) -> None:
 
 
 def test_open_error_is_neutral():
-    """Service ごとのコードに変えられるよう、コード付きの例外ではない。"""
+    """Not a coded exception, so each Service can map it to its own code."""
     assert issubclass(CircuitOpenError, Exception)
     assert not issubclass(CircuitOpenError, CodedError)
 
@@ -77,9 +77,9 @@ def test_stays_open_for_sixty_seconds_then_allows_one_trial(breaker, clock):
         breaker.before_call()
 
     clock.now += 1
-    breaker.before_call()  # 半開の 1 回
+    breaker.before_call()  # The single half-open trial call
     with pytest.raises(CircuitOpenError):
-        breaker.before_call()  # 結果が出るまで他は通さない
+        breaker.before_call()  # Block everything else until the result is known
 
 
 def test_trial_success_closes_it(breaker, clock):

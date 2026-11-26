@@ -3,20 +3,21 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 
-/** 「自分のもの」の一覧と件数の GSI（src/services/stores/resource_share_store.py が Query する）。 */
+/** GSI for listing and counting "my own" items (queried by src/services/stores/resource_share_store.py). */
 export const OWNER_INDEX = 'OwnerIndex';
-/** 紐付けの逆引きの GSI（src/services/stores/persona_binding_store.py が Query する）。 */
+/** GSI for the reverse lookup of bindings (queried by src/services/stores/persona_binding_store.py). */
 export const TARGET_INDEX = 'TargetIndex';
-/** アンケートの待ちと実行中の疎な索引（src/services/stores/survey_store.py が Query する）。 */
+/** Sparse index of waiting and running surveys (queried by src/services/stores/survey_store.py). */
 export const RUN_QUEUE_INDEX = 'RunQueueIndex';
 /**
- * 高度な生成（ベータ、U1）の本人の一覧の GSI（src/services/stores/source_file_store.py・
- * advanced_generation_store.py の OWNER_INDEX）。OwnerIndex とは別の名前で、射影は ALL。
+ * GSI listing an owner's items for advanced generation (beta) (OWNER_INDEX in
+ * src/services/stores/source_file_store.py and advanced_generation_store.py). Named differently
+ * from OwnerIndex; projection is ALL.
  */
 export const OWNER_CREATED_AT_INDEX = 'owner_sub-created_at';
 /**
- * アプリが IndexName で Query する GSI。App スタックはこの名前の GSI だけをタスクロールに
- * 付ける（`<テーブルの ARN>/index/<名前>`、U9）。
+ * GSIs the app queries by IndexName. The App stack grants the task role access only to GSIs
+ * with these names (`<table ARN>/index/<name>`).
  */
 const APP_QUERIED_INDEXES: ReadonlySet<string> = new Set([
   OWNER_INDEX,
@@ -26,17 +27,18 @@ const APP_QUERIED_INDEXES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * v1.0.0 の DynamoDB テーブル（Data スタック）。
+ * The DynamoDB tables of v1.0.0 (Data stack), all created as TableV2.
  *
- * - 今と同じキー・GSI・PITR の 10 テーブルを TableV2 で新しく作る（形の作り直しは U4〜U7）
- * - U5: 生成候補（PersonaCandidates）と紐付け（PersonaBindings）を足し、UploadedFiles に TTL を足す
- * - U6: 議論の発言・レポートとインタビューの 4 テーブルを足し、Discussions に OwnerIndex を足す
- * - U7: カスタムペルソナデータの登録情報（CustomPersonaData）を足し、SurveyTemplates・Surveys に
- *   OwnerIndex を足す
- * - U9: 型固定の GSI 7 つを外す。古い紐付けの 2 テーブルの定義を外す
- * - ログインセッションの Sessions テーブルを足す（カスタマー管理の KMS キー、TTL、PITR なし）
- * - 物理名は自動生成にし、App スタックへは参照で渡す（約束 C10）
- * - すべて RETAIN と削除保護（NFR9.10、project.md の Forbidden）
+ * - Persona candidates (PersonaCandidates) and bindings (PersonaBindings) are included, and
+ *   UploadedFiles has a TTL.
+ * - Discussion messages and reports plus the interview tables are included, and Discussions
+ *   has an OwnerIndex.
+ * - Registration info for custom persona data (CustomPersonaData) is included, and
+ *   SurveyTemplates and Surveys have an OwnerIndex.
+ * - No type-fixed GSIs and no tables for the old bindings.
+ * - The login Sessions table uses a customer-managed KMS key, a TTL and no PITR.
+ * - Physical names are auto-generated and passed to the App stack by reference.
+ * - Everything is RETAIN with deletion protection (except where noted per table).
  */
 export class Database extends Construct {
   public readonly personasTable: dynamodb.TableV2;
@@ -50,59 +52,59 @@ export class Database extends Construct {
   public readonly sessionsTable: dynamodb.TableV2;
   public readonly sessionsKey: kms.Key;
   /**
-   * 部署ごとの共有の索引（U4、ADR-003）。applicationTables には入れない: そちらの
-   * 一括付与（grantReadWriteData）は Scan を含むため、App スタックが 7 つの操作だけを付ける。
+   * Index of sharing per department. Not in applicationTables: that bulk grant
+   * (grantReadWriteData) includes Scan, so the App stack grants only 7 actions.
    */
   public readonly resourceSharesTable: dynamodb.TableV2;
   /**
-   * 生成候補（U5、BR1.1）。8 時間の一時データで、TTL expires_at で消える。PITR と削除保護は
-   * 付けない（作り直しても失うものがない）。applicationTables には入れず、App スタックが
-   * 6 つの操作だけを付ける（Scan・Query なし）。
+   * Generated candidates: temporary 8-hour data expired by TTL expires_at. No PITR or deletion
+   * protection (nothing is lost if it is recreated). Not in applicationTables; the App stack
+   * grants only 6 actions (no Scan or Query).
    */
   public readonly personaCandidatesTable: dynamodb.TableV2;
   /**
-   * ペルソナと組織資産の紐付け（U5、ADR-007）。PK persona_id・SK target_key、逆引きの
-   * TargetIndex（KEYS_ONLY）。applicationTables には入れず、App スタックが Scan を除く
-   * 7 つの操作だけを付ける。
+   * Bindings between personas and organization assets. PK persona_id, SK target_key, with a
+   * reverse-lookup TargetIndex (KEYS_ONLY). Not in applicationTables; the App stack grants only
+   * 7 actions, without Scan.
    */
   public readonly personaBindingsTable: dynamodb.TableV2;
   /**
-   * 議論の発言（U6、ADR-002）。PK discussion_id・SK seq（数値）。本体の判定を通ったあとにだけ読む。
-   * 以下の U6 の 4 テーブルは applicationTables に入れず、App スタックが Scan を除く
-   * 8 つの操作を 1 つの文で付ける（タスクロールのポリシーの大きさ、NFR1.64）。
+   * Discussion messages. PK discussion_id, SK seq (number). Read only after the parent record's
+   * check passes. This and the three tables below are not in applicationTables; the App stack
+   * grants 8 actions without Scan in a single statement to keep the task role policy small.
    */
   public readonly discussionMessagesTable: dynamodb.TableV2;
-  /** 議論のレポート（U6、ADR-002）。PK discussion_id・SK report_id。 */
+  /** Discussion reports. PK discussion_id, SK report_id. */
   public readonly discussionReportsTable: dynamodb.TableV2;
   /**
-   * 実行中のインタビュー（U6、ADR-004）。最長 7 日の一時データで TTL expires_at で消える。
-   * PITR と削除保護は付けない（PersonaCandidates と同じ扱い）。
+   * Running interviews: temporary data of up to 7 days, expired by TTL expires_at. No PITR or
+   * deletion protection (same as PersonaCandidates).
    */
   public readonly interviewSessionsTable: dynamodb.TableV2;
-  /** 実行中のインタビューの発言（U6）。PK session_id・SK seq（数値）、TTL expires_at。 */
+  /** Messages of running interviews. PK session_id, SK seq (number), TTL expires_at. */
   public readonly interviewMessagesTable: dynamodb.TableV2;
   /**
-   * カスタムペルソナデータの登録情報（U7、BR4.3〜BR4.6）。PK id、GSI なし、PITR・削除保護・
-   * RETAIN・AWS 管理キー。applicationTables には入れず、App スタックが Query を除く
-   * 7 つの操作を 1 つの文で付ける（タスクロールのポリシーの大きさ、NFR1.81）。
+   * Registration info for custom persona data. PK id, no GSI, PITR, deletion protection, RETAIN
+   * and an AWS-managed key. Not in applicationTables; the App stack grants 7 actions without
+   * Query in a single statement to keep the task role policy small.
    */
   public readonly customPersonaDataTable: dynamodb.TableV2;
   /**
-   * アンケートの進行役の担当者の記録（PK id、1 行だけ。BR2.3）。applicationTables には入れず、
-   * App スタックが GetItem・PutItem・UpdateItem・DeleteItem の 4 つだけを付ける（NFR5.8）。
+   * Record of the survey coordinator's assignee (PK id, a single row). Not in
+   * applicationTables; the App stack grants only GetItem, PutItem, UpdateItem and DeleteItem.
    */
   public readonly surveyRunLeaseTable: dynamodb.TableV2;
   /**
-   * 高度な生成（ベータ、U1、契約 C4）: 上げたファイルの記録。PK source_file_id、GSI
-   * owner_sub-created_at。applicationTables に入れる（App スタックが一括の操作を付ける）。
+   * Advanced generation (beta): records of uploaded files. PK source_file_id, GSI
+   * owner_sub-created_at. In applicationTables (the App stack grants the bulk actions).
    */
   public readonly sourceFilesTable: dynamodb.TableV2;
   /**
-   * 高度な生成（契約 C5）: 生成・イベント・結果の分割・ロック。PK pk・SK sk、GSI
-   * owner_sub-created_at、TTL expires_at。
+   * Advanced generation: generations, events, result chunks and locks. PK pk, SK sk, GSI
+   * owner_sub-created_at, TTL expires_at.
    */
   public readonly advancedGenerationsTable: dynamodb.TableV2;
-  /** 管理者の設定（U1 は読むだけ）。PK setting_key。個人情報を持たない。 */
+  /** Administrator settings (read-only for the app). PK setting_key. Holds no personal data. */
   public readonly appSettingsTable: dynamodb.TableV2;
 
   /** The GSI names defined on each table (recorded where the table is created). */
@@ -123,31 +125,31 @@ export class Database extends Construct {
       ...(projectionType ? { projectionType } : {}),
     });
 
-    // 型固定の GSI 7 つ（NFR2.27）は U9 ですべて外した。dev は Stage を作り直して出すため
-    // 1 回で外す。既存のテーブルは 1 回の更新で各テーブル 1 つまでしか消せないため、
-    // 既存の環境には各テーブル 1 つずつ外した形で分けて出すか、Stage を作り直す
+    // The type-fixed GSIs are all removed. dev recreates its Stage, so they go in one change.
+    // An existing table can drop only one GSI per update, so an existing environment must
+    // either be deployed with one GSI removed per table at a time, or have its Stage recreated
     this.personasTable = this.table('Personas', {
       globalSecondaryIndexes: [
-        // 「自分のもの」の一覧と件数（U4、BR3.2）。owner_sub のない項目は入らない
+        // Listing and counting "my own" items; items without owner_sub are not indexed
         gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
     this.discussionsTable = this.table('Discussions', {
       globalSecondaryIndexes: [
-        // 「自分のもの」の一覧と件数（U6、BR2.1）。テーブルは置き換えない（NFR1.65）
+        // Listing and counting "my own" items; adding it does not replace the table
         gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
-    // U5: 紐付かなかったアップロードのメタデータは 24 時間後に TTL で消える（BR5.6）。
-    // TTL の設定はテーブルの属性の更新で、テーブルは置き換わらない
+    // Metadata of uploads that were never bound expires after 24 hours via TTL.
+    // Setting a TTL is an attribute update and does not replace the table
     this.uploadedFilesTable = this.table('UploadedFiles', {
       timeToLiveAttribute: 'expires_at',
     });
     this.datasetsTable = this.table('Datasets');
-    // 古い紐付けの PersonaDatasetBindings・PersonaKBBindings は U9 で CDK の管理から外した
-    // （NFR2.28）。RETAIN のため AWS には残る。管理に戻すときは、tableName に今の物理名を指定して
-    // cdk import で取り込む（新しく作らせない）
-    // 「自分のもの」の一覧と件数（U7、BR1.2）。テーブルは置き換えない（GSI の追加だけ）
+    // The old PersonaDatasetBindings and PersonaKBBindings tables are no longer managed by CDK.
+    // They remain in AWS because of RETAIN. To manage them again, import them with cdk import,
+    // giving tableName the current physical name (do not let CDK create new ones)
+    // Listing and counting "my own" items; only a GSI is added, so the table is not replaced
     this.surveyTemplatesTable = this.table('SurveyTemplates', {
       globalSecondaryIndexes: [
         gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
@@ -156,18 +158,18 @@ export class Database extends Construct {
     this.surveysTable = this.table('Surveys', {
       globalSecondaryIndexes: [
         gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
-        // 待ちと実行中だけが載る疎な索引（run_queue は queued・running の間だけ持つ。NFR3.10）。
-        // 射影は ALL（進行役が start_blocked_since などを索引だけで読む）。テーブルは置き換えず、
-        // 1 回の更新で GSI を 1 つ足すだけ（NFR3.11、NFR4.16）
+        // Sparse index holding only waiting and running items (run_queue exists only while queued
+        // or running). Projection is ALL so the coordinator can read start_blocked_since etc. from
+        // the index alone. The table is not replaced; one update adds just one GSI
         gsi(RUN_QUEUE_INDEX, 'run_queue', 'queued_at', dynamodb.ProjectionType.ALL),
       ],
     });
     this.knowledgeBasesTable = this.table('KnowledgeBases');
-    // Jobs: 非同期ジョブの追跡。今と同じく PITR なし、TTL は expires_at
+    // Jobs: tracks asynchronous jobs. No PITR; TTL is expires_at
     this.jobsTable = this.table('Jobs', { pitr: false, timeToLiveAttribute: 'expires_at' });
 
-    // Sessions: ログインセッション（NFR3.4、reliability-design.md）。
-    // 業務データを持たず、消えても再ログインで済むため PITR は付けない。
+    // Sessions: login sessions.
+    // They hold no business data and a lost session only means logging in again, so no PITR.
     this.sessionsKey = new kms.Key(this, 'SessionsKey', {
       description: 'AI Persona v1 Sessions table encryption',
       enableKeyRotation: true,
@@ -182,8 +184,8 @@ export class Database extends Construct {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
-    // ResourceShares: PK group_id、SK share_key（{resource_type}#{created_at}#{resource_id}、約束 C8）。
-    // 本体から作り直せる索引だが、作り直しの手間を避けるため PITR と RETAIN を付ける
+    // ResourceShares: PK group_id, SK share_key ({resource_type}#{created_at}#{resource_id}).
+    // The index can be rebuilt from the source records, but PITR and RETAIN avoid that effort
     this.resourceSharesTable = new dynamodb.TableV2(this, 'ResourceShares', {
       partitionKey: { name: 'group_id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'share_key', type: dynamodb.AttributeType.STRING },
@@ -194,7 +196,7 @@ export class Database extends Construct {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
-    // PersonaCandidates（U5、NFR1.40）: table() は PK を id に固定しているため直接作る
+    // PersonaCandidates: created directly because table() fixes the PK to id
     this.personaCandidatesTable = new dynamodb.TableV2(this, 'PersonaCandidates', {
       partitionKey: { name: 'candidate_id', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
@@ -203,7 +205,7 @@ export class Database extends Construct {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
-    // PersonaBindings（U5、ADR-007）: 紐付けは消えると戻せないため PITR と削除保護を付ける
+    // PersonaBindings: bindings cannot be restored once lost, so PITR and deletion protection are on
     const bindingIndexes = [
       gsi(TARGET_INDEX, 'target_id', undefined, dynamodb.ProjectionType.KEYS_ONLY),
     ];
@@ -219,15 +221,15 @@ export class Database extends Construct {
     });
     this.recordIndexes(this.personaBindingsTable, bindingIndexes);
 
-    // U7: カスタムペルソナデータの登録情報（PK id、名前の押さえの項目 id="name#{名前}" も同じ
-    // テーブル、約束 C8）。applicationTables には入れず、App スタックが絞った操作を付ける
+    // Registration info for custom persona data (PK id; the name-reservation item id="name#{name}"
+    // lives in the same table). Not in applicationTables; the App stack grants narrowed actions
     this.customPersonaDataTable = this.table('CustomPersonaData');
 
-    // アンケートの進行役の担当者の記録（BR2.3、基盤設計 2.1）。期限つきの 1 行で、失っても次の回で
-    // 作り直せるため PITR は付けない（NFR4.17）。削除保護・RETAIN・AWS 管理キーはほかと同じ
+    // Survey coordinator assignee record. A single row with an expiry that is recreated on the
+    // next run if lost, so no PITR. Deletion protection, RETAIN and the AWS-managed key match the others
     this.surveyRunLeaseTable = this.table('SurveyRunLease', { pitr: false });
 
-    // U6: 議論の発言とレポート（ADR-002）。消えると戻せないため PITR と削除保護を付ける
+    // Discussion messages and reports: cannot be restored once lost, so PITR and deletion protection are on
     const seq = { name: 'seq', type: dynamodb.AttributeType.NUMBER };
     this.discussionMessagesTable = this.childTable('DiscussionMessages', 'discussion_id', seq);
     this.discussionReportsTable = this.childTable('DiscussionReports', 'discussion_id', {
@@ -235,7 +237,7 @@ export class Database extends Construct {
       type: dynamodb.AttributeType.STRING,
     });
 
-    // U6: 実行中のインタビュー（ADR-004）。最長 7 日の一時データ
+    // Running interviews: temporary data of up to 7 days
     this.interviewSessionsTable = new dynamodb.TableV2(this, 'InterviewSessions', {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
@@ -243,7 +245,7 @@ export class Database extends Construct {
       timeToLiveAttribute: 'expires_at',
       removalPolicy: RemovalPolicy.RETAIN,
     });
-    // TTL はセッションの最長より長い（created_at + 8 日）
+    // The TTL is longer than the longest session (created_at + 8 days)
     this.interviewMessagesTable = new dynamodb.TableV2(this, 'InterviewMessages', {
       partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
       sortKey: seq,
@@ -253,12 +255,11 @@ export class Database extends Construct {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
-    // 高度な生成（ベータ、U1、infrastructure-specification.md）。オンデマンド・AWS 管理キー・
-    // PITR・RETAIN（自前の KMS キーは作らない、NFR3.1）。新しいテーブルの追加で、既存の
-    // テーブルは置き換えない
+    // Advanced generation (beta): on-demand, AWS-managed key, PITR and RETAIN (no custom KMS
+    // key). These are new tables, so existing tables are not replaced
     const ownerIndexes = [gsi(OWNER_CREATED_AT_INDEX, 'owner_sub', 'created_at')];
-    // U2（BR13.6）: 期限を過ぎた記録を TTL で消す（属性 expires_at、エポック秒）。TTL の追加は
-    // テーブルの更新で済み、置き換えにならない（論理 ID は test/data-stack-logical-ids.test.ts が固定）
+    // Expired records are deleted by TTL (attribute expires_at, epoch seconds). Adding a TTL is
+    // a table update, not a replacement (test/data-stack-logical-ids.test.ts pins the logical IDs)
     this.sourceFilesTable = this.advancedTable('SourceFiles', {
       partitionKey: { name: 'source_file_id', type: dynamodb.AttributeType.STRING },
       globalSecondaryIndexes: ownerIndexes,
@@ -270,7 +271,7 @@ export class Database extends Construct {
       globalSecondaryIndexes: ownerIndexes,
       timeToLiveAttribute: 'expires_at',
     });
-    // 管理者の設定は PITR と RETAIN だけ（設計どおり削除保護は付けない。U1 は読むだけ）
+    // Administrator settings get only PITR and RETAIN, no deletion protection (the app only reads them)
     this.appSettingsTable = this.advancedTable('AppSettings', {
       partitionKey: { name: 'setting_key', type: dynamodb.AttributeType.STRING },
       deletionProtection: false,
@@ -319,7 +320,7 @@ export class Database extends Construct {
     });
   }
 
-  /** U6 の 4 テーブル（App スタックが 1 つの文で絞った操作を付ける）。 */
+  /** The four discussion and interview tables (the App stack grants narrowed actions in one statement). */
   public get discussionChildTables(): Record<string, dynamodb.TableV2> {
     return {
       DISCUSSION_MESSAGES_TABLE_NAME: this.discussionMessagesTable,
@@ -365,7 +366,7 @@ export class Database extends Construct {
    * ARNs of the GSIs on `table` that the application queries (`<tableArn>/index/<name>`).
    *
    * Only indexes defined on this table and listed in APP_QUERIED_INDEXES are returned, so the
-   * task role never gets `<tableArn>/index/*` (U9). Tables without such an index return [].
+   * task role never gets `<tableArn>/index/*`. Tables without such an index return [].
    */
   public queriedIndexArns(table: dynamodb.TableV2): string[] {
     return (this.indexNames.get(table) ?? [])
@@ -374,10 +375,10 @@ export class Database extends Construct {
   }
 
   /**
-   * App スタックがタスクロールに権限を与え、環境変数に名前を渡す 11 テーブル。
-   * U5: 古い紐付けの 2 テーブル（PersonaDatasetBindings・PersonaKBBindings）は外した
-   * （U9 でテーブルの定義も外した。RETAIN のため AWS には残る）。
-   * 高度な生成（ベータ、U1）の 3 テーブルを足した（キーは src/config.py の *_TABLE_NAME）。
+   * The 11 tables the App stack grants the task role access to and passes by name through
+   * environment variables. The old bindings tables (PersonaDatasetBindings, PersonaKBBindings)
+   * are excluded; they remain in AWS because of RETAIN. Includes the three advanced generation
+   * (beta) tables (keys are *_TABLE_NAME in src/config.py).
    */
   public get applicationTables(): Record<string, dynamodb.TableV2> {
     return {

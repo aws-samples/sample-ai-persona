@@ -3,22 +3,22 @@
 {% from "components/icons.html" import icon_chat, icon_arrow_left, icon_cpu_chip, icon_bolt, icon_users, icon_persona, icon_lightbulb, icon_refresh, icon_trash %}
 {% from "components/status_label.html" import status_label %}
 {#
-  議論の詳細（U6）。
-  引数:
-    discussion    ... DiscussionView（本体の項目・発言・レポート・参加者の状態）
-    manageable    ... 削除・共有・再生成・レポートの保存と編集を出すか
-    document_urls ... 資料の ID -> アプリの配信のルート /discussion/{id}/documents/{資料の ID}
-                      （読めて S3 にある資料だけ。閉域対応 U4）
+  Discussion detail.
+  Arguments:
+    discussion    ... DiscussionView (body fields, messages, reports, participant states)
+    manageable    ... whether to show delete, share, regenerate, and report save/edit
+    document_urls ... document ID -> app delivery route /discussion/{id}/documents/{document ID}
+                      (only documents that are readable and in S3; needed for closed-network setups)
 #}
 
 {% block content %}
-{#- 参加者 ID -> 状態（発言の話者にも同じ文字を付ける、M9） #}
+{#- Participant ID -> state (the same text is attached to message speakers). #}
 {%- set participant_status = {} %}
 {%- for participant in discussion.participants %}
 {%- set _ = participant_status.update({participant.persona_id: participant.status}) %}
 {%- endfor %}
 <div class="max-w-6xl mx-auto">
-    <!-- ヘッダー -->
+    <!-- Header -->
     <div class="mb-8">
         <a href="/discussion/results" class="text-blue-600 hover:text-blue-800 text-sm mb-2 inline-flex items-center gap-1">
             {{ icon_arrow_left("w-4 h-4") }} 議論結果一覧に戻る
@@ -30,7 +30,7 @@
                 {{ icon_chat("w-8 h-8 text-green-600") }} {{ discussion.topic }}
             {% endif %}
         </h1>
-        {#- 2 段目: 日時と種類（左）、操作ボタン（右）。ペルソナの詳細と同じ並び。狭いときはボタンが下へ折り返す #}
+        {#- Row 2: date and kind (left), action buttons (right). Same layout as the persona detail. On narrow screens the buttons wrap below. #}
         <div class="flex flex-wrap items-center justify-between gap-3 mt-2">
             <div class="flex items-center gap-4">
                 <span class="text-gray-700">
@@ -40,7 +40,7 @@
                     {% if discussion.mode == 'agent' %}{{ icon_cpu_chip("w-3 h-3") }} しっかり議論{% elif discussion.mode == 'interview' %}{{ icon_persona("w-3 h-3") }} インタビュー{% else %}{{ icon_bolt("w-3 h-3") }} 簡易議論{% endif %}
                 </span>
             </div>
-            {#- エクスポートは読める人、共有・削除は管理できる人だけ（BR2.4、BR2.5、BR9.1） #}
+            {#- Export is for users who can read; share and delete are for users who can manage only. #}
             <div class="flex flex-wrap items-center gap-2" data-testid="discussion-detail-actions">
                 <a href="/discussion/{{ discussion.id }}/export" download data-testid="discussion-export-button"
                    class="whitespace-nowrap inline-flex items-center gap-1.5 bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors text-sm font-medium">
@@ -65,7 +65,7 @@
         </div>
     </div>
     
-    <!-- エージェントモードパラメータ -->
+    <!-- Agent mode parameters -->
     {% if discussion.mode == 'agent' and discussion.agent_config %}
     <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-6">
         <h3 class="text-sm font-semibold text-purple-800 mb-3 flex items-center gap-2">
@@ -104,13 +104,13 @@
     </div>
     {% endif %}
     
-    <!-- 参加ペルソナ（M9: 読めない・削除済みは文字で示し、リンクにしない。BR7.3） -->
+    <!-- Participating personas (unreadable or deleted ones are shown in text and not linked) -->
     {% if discussion.participants %}
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_users("w-5 h-5 text-indigo-600") }} 参加ペルソナ ({{ discussion.participants|length }}名)</h2>
         <div class="grid md:grid-cols-2 gap-4">
             {% for participant in discussion.participants %}
-            {#- 読めるペルソナだけ本体（属性・プロフィール）を持つ（BR7.3） #}
+            {#- Only readable personas carry the body (attributes and profile). #}
             {%- set persona = participant.persona %}
             <div class="bg-gray-50 rounded-lg p-4 border border-gray-200" data-testid="discussion-participant">
                 <div class="flex items-start justify-between">
@@ -159,7 +159,7 @@
     </div>
     {% endif %}
     
-    <!-- 参考資料 -->
+    <!-- Reference documents -->
     {% if discussion.documents and discussion.documents|length > 0 %}
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">
@@ -173,7 +173,7 @@
             {% set doc_id = doc.id if doc.id else doc.file_path %}
             {% set file_url = document_urls.get(doc_id) if document_urls else None %}
             <div class="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
-                {# 画像プレビュー（配信のルートがある場合。公開は 302、閉域はアプリが流す） #}
+                {# Image preview (when a delivery route exists; public setups answer 302, closed networks stream through the app) #}
                 {% if doc.mime_type and doc.mime_type.startswith('image/') and file_url %}
                 <a href="{{ file_url }}" target="_blank" class="block">
                     <div class="aspect-video bg-gray-100 flex items-center justify-center overflow-hidden">
@@ -185,7 +185,7 @@
                     </div>
                 </a>
                 {% elif doc.mime_type == 'application/pdf' and file_url %}
-                {# PDFプレビュー #}
+                {# PDF preview #}
                 <a href="{{ file_url }}" target="_blank" class="block">
                     <div class="aspect-video bg-red-50 flex items-center justify-center">
                         <div class="text-center">
@@ -197,7 +197,7 @@
                     </div>
                 </a>
                 {% elif doc.mime_type and doc.mime_type.startswith('image/') %}
-                {# 画像だがURLがない場合（インタビューモード等） #}
+                {# Image without a URL (for example interview mode) #}
                 <div class="aspect-video bg-purple-50 flex items-center justify-center">
                     <div class="text-center">
                         <svg class="w-12 h-12 text-purple-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -207,7 +207,7 @@
                     </div>
                 </div>
                 {% elif doc.mime_type == 'application/pdf' %}
-                {# PDFだがURLがない場合 #}
+                {# PDF without a URL #}
                 <div class="aspect-video bg-red-50 flex items-center justify-center">
                     <div class="text-center">
                         <svg class="w-12 h-12 text-red-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -218,7 +218,7 @@
                 </div>
                 {% endif %}
                 
-                {# ファイル情報 #}
+                {# File info #}
                 <div class="p-3">
                     <p class="font-medium text-gray-900 text-sm truncate" title="{{ doc.filename }}">{{ doc.filename }}</p>
                     <div class="flex items-center justify-between mt-1">
@@ -253,9 +253,9 @@
     </div>
     {% endif %}
     
-    <!-- タブUI: 議論内容 / インサイト / レポート生成 -->
+    <!-- Tab UI: discussion / insights / report generation -->
     <div x-data="{ activeTab: 'discussion' }" class="mb-6">
-        <!-- タブヘッダー -->
+        <!-- Tab header -->
         <div class="flex border-b border-gray-200 bg-white rounded-t-lg shadow-md px-2">
             <button @click="activeTab = 'discussion'"
                     :class="activeTab === 'discussion' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
@@ -280,8 +280,8 @@
             </button>
         </div>
 
-        <!-- タブコンテンツ -->
-        <!-- 議論内容 -->
+        <!-- Tab content -->
+        <!-- Discussion -->
         <div x-show="activeTab === 'discussion'" class="bg-white rounded-b-lg shadow-md p-4">
             {% if discussion.messages %}
             {% set persona_colors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'] %}
@@ -352,7 +352,7 @@
             {% endif %}
         </div>
 
-        <!-- インサイト -->
+        <!-- Insights -->
         <div x-show="activeTab === 'insights'" class="bg-white rounded-b-lg shadow-md p-6">
             {% if custom_categories %}
             <details class="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -374,7 +374,7 @@
             </div>
         </div>
 
-        <!-- レポート生成 -->
+        <!-- Report generation -->
         <div x-show="activeTab === 'reports'" class="bg-white rounded-b-lg shadow-md p-6">
             <div id="reports-container">
                 {% include "discussion/partials/reports.html" with context %}
@@ -382,7 +382,7 @@
         </div>
     </div>
     
-    <!-- 次の議論へ（操作ボタンはヘッダーにある） -->
+    <!-- To the next discussion (the action buttons are in the header) -->
     <div class="flex flex-wrap gap-4">
         <a href="/discussion/setup"
            class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">

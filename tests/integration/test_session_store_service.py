@@ -1,8 +1,8 @@
-"""SessionStoreService（Sessions テーブル）の結合テスト。moto の DynamoDB を使う。
+"""Integration tests for SessionStoreService (Sessions table). Uses moto's DynamoDB.
 
-BR1.10（last_accessed_at だけの部分更新）、BR1.12（version 付きの更新・削除）、
-BR1.18 / NFR9.8（届かなければ SESSION_STORE_UNAVAILABLE）、
-reliability-design.md（0.5 秒・0.5 秒・max_attempts=2・standard）。
+Covers partial update of last_accessed_at only, versioned update and delete,
+SESSION_STORE_UNAVAILABLE when unreachable, and the timeouts and retries
+(0.5 s, 0.5 s, max_attempts=2, standard).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -84,7 +84,7 @@ class TestActivityWrite:
         session = _session()
         store.put(session)
         later = _NOW + timedelta(minutes=6)
-        # 別の値を持つ手元の写しで touch しても、トークン・version は書かない
+        # Touching with a local copy holding different values does not write the token or version
         stale_copy = session.update(access_token_enc="v1.other").touch(later)
 
         store.touch(stale_copy)
@@ -127,7 +127,7 @@ class TestVersionedWrite:
         stored = store.get(session.session_id_hash)
         assert stored.refresh_failing_since is None
         assert stored.roles == frozenset()
-        # 部分更新で書いた last_accessed_at を上書きしない
+        # Does not overwrite last_accessed_at written by the partial update
         assert stored.last_accessed_at == later
 
     def test_delete_respects_the_version(self, store):
@@ -177,13 +177,13 @@ class TestFailures:
         cfg = store.client.meta.config
         assert cfg.connect_timeout == 0.5
         assert cfg.read_timeout == 0.5
-        # 試行は合計 2 回（botocore の total_max_attempts は最初の呼び出しを含む）
+        # 2 attempts in total (botocore's total_max_attempts includes the first call)
         assert cfg.retries["total_max_attempts"] == 2
         assert cfg.retries["mode"] == "standard"
 
 
 # =============================================================================
-# U8: LoginChallenge（BR2.2、BR2.7、NFR3.17、NFR9.42、NFR9.45）
+# LoginChallenge
 # =============================================================================
 
 
@@ -241,7 +241,7 @@ class TestChallenge:
         store.put(session)
         assert store.get_challenge(session.session_id_hash) is None
         assert store.claim_challenge(session.session_id_hash) is None
-        # 取り出しに失敗しても、ログインセッションは消えない
+        # Even if retrieval fails, the login session is not deleted
         assert store.get(session.session_id_hash) == session
 
     def test_unknown_challenge_is_none(self, store):

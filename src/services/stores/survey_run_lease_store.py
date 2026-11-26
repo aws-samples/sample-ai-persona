@@ -1,4 +1,4 @@
-"""DynamoDB reads and writes of the survey runner's lease (BR2.3).
+"""DynamoDB reads and writes of the survey runner's lease.
 
 ``SurveyRunLease``: PK ``id``. The deployment has one row, ``id=survey-run``,
 holding the task that may run the survey runner (``holder``) and until when
@@ -6,7 +6,7 @@ holding the task that may run the survey runner (``holder``) and until when
 
 - taken when the row is missing, expired, or already ours;
 - extended only while it is ours;
-- removed only while it is ours (a clean stop, NFR4.10).
+- removed only while it is ours (a clean stop).
 
 Which task works, and when it stops, is decided by ``SurveyRunManager``.
 """

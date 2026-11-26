@@ -1,9 +1,9 @@
-"""Value types of one survey execution on Step Functions (entities.md).
+"""Value types of one survey execution on Step Functions.
 
 - ``SurveyRunItem``: one line of the Distributed Map input (one persona's
   request). It carries either the encoded Anthropic Messages body or, for a
   survey with images or a large body, the ``s3://`` URI of a body stored
-  apart (BR6.3).
+  apart.
 - ``SurveyRunOutcome``: what the results of a finished execution add up to.
   It is built once when the execution ends and never stored.
 """
@@ -60,7 +60,7 @@ class SurveyRunItem:
 
 @dataclass(frozen=True)
 class SurveyRunOutcome:
-    """The summary of a finished execution's results (BR4.2).
+    """The summary of a finished execution's results.
 
     Attributes:
         execution_status: ``SUCCEEDED``, ``FAILED``, ``TIMED_OUT`` or ``ABORTED``.

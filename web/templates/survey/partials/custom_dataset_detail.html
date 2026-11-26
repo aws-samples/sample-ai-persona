@@ -1,9 +1,9 @@
 {% from "components/icons.html" import icon_cog %}
 {#
-  カスタムペルソナデータのマッピング情報（使える人だけ、U7 BR4.2）。
-  引数:
-    record           ... src/models/custom_persona_data.py の CustomPersonaData
-    standard_columns ... 標準項目の定義
+  Mapping information of custom persona data (only for users allowed to use it).
+  Arguments:
+    record           ... CustomPersonaData from src/models/custom_persona_data.py
+    standard_columns ... definitions of the standard fields
 #}
 <div class="bg-white border border-gray-200 rounded-lg p-4 mt-2 mb-2">
     <div class="flex items-center justify-between mb-3">
@@ -12,7 +12,7 @@
                 class="text-gray-500 hover:text-gray-700 text-lg leading-none">&times;</button>
     </div>
 
-    {# 標準マッピング #}
+    {# Standard mapping #}
     {% set mapping = record.standard_mapping %}
     {% if mapping %}
     <h5 class="text-xs font-semibold text-gray-600 mb-1">標準項目マッピング</h5>
@@ -38,7 +38,7 @@
     <p class="text-xs text-gray-500 mb-3">標準項目のマッピングはありません。</p>
     {% endif %}
 
-    {# その他カラム #}
+    {# Other columns #}
     {% set extras = record.extra_columns %}
     {% if extras %}
     <h5 class="text-xs font-semibold text-gray-600 mb-1">その他項目</h5>

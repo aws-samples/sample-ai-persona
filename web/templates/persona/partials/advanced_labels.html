@@ -1,12 +1,12 @@
 {#
-  高度な生成（ベータ）の表示の言葉（U1）。区画 A・D、分析の記録、詳細画面のバッジが共有する。
-  値は画面の言葉にする（作り手側の言い回しを避ける。project.md の Corrections）。
+  Display wording for advanced generation (beta). Shared by sections A and D, the analysis record, and the badge on the detail screen.
+  Values use screen wording (avoid maker-side phrasing).
 #}
 {% macro method_label(method) -%}
 {{ {"filter": "絞り込み", "compare": "群どうしの比較", "cluster": "クラスタ分析"}.get(method, method) }}
 {%- endmacro %}
 
-{# U6 の追加の設計: 計画の手順の種類と、読んだ定石の名前 #}
+{# Kinds of plan steps and names of the playbooks that were read. #}
 {% macro step_label(kind) -%}
 {{ {"filter": "対象を絞って集計", "compare": "群どうしの比較", "cluster": "似た人をまとめる", "join": "CSV を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定", "person_profile": "履歴を人ごとに集計"}.get(kind, kind) }}
 {%- endmacro %}
@@ -23,7 +23,7 @@
 {{ {"csv": "CSV", "tsv": "TSV", "pdf": "PDF", "docx": "Word", "txt": "テキスト", "md": "Markdown"}.get(fmt, fmt) }}
 {%- endmacro %}
 
-{# U4 BR22.3: 1 万字単位で切り上げた「約 N 万字」の N #}
+{# N of "約 N 万字", rounded up to units of 10,000 characters. #}
 {% macro man_chars(chars) -%}
 {{ ((chars + 9999) // 10000) }}
 {%- endmacro %}
@@ -32,20 +32,17 @@
 {{ "%.0f" | format(share * 100) }}%
 {%- endmacro %}
 
-{#
-  ai_written は U6（AI による詳細分析）で記録に現れる。U1 の記録は事前定義された関数（fixed）だけで、
-  この分岐はまだ通らない。U6 で使うため残している。
-#}
+{# ai_written appears in records for AI-written detailed analysis. Records so far use only predefined functions (fixed), so this branch is not reached yet. It is kept for that use. #}
 {% macro code_kind_label(kind) -%}
 {{ "AI による詳細分析" if kind == "ai_written" else "事前定義された関数" }}
 {%- endmacro %}
 
-{# 分析の記録: 分析エージェントが使った道具の名前（決まった 5 つ） #}
+{# Analysis record: names of the tools the analysis agent used (a fixed set of 5). #}
 {% macro tool_label(tool) -%}
 {{ {"profile_dataset": "データの全体像を確認", "analyze_dataset": "条件を指定して集計", "cluster_segments": "似た人のグループ分け", "run_code": "AI が書いたプログラムで分析", "load_playbook": "分析の定石を読み込み"}.get(tool, "分析") }}
 {%- endmacro %}
 
-{# 分析の記録: 実行したコードのブロックが何をしたか（関数名でなく処理の言葉）。固定の対応で、利用者のデータは入らない #}
+{# Analysis record: what each executed code block did, in terms of the operation rather than the function name. A fixed mapping; no user data goes in. #}
 {% macro block_summary(block) -%}
 {%- set code = block.get("code", "") -%}
 {%- if block.get("kind") == "ai_written" -%}AI が書いたプログラムによる分析

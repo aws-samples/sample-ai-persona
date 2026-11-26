@@ -1,9 +1,10 @@
-"""PersonaStore（ペルソナの本体の読み書き）の結合テスト。moto を使う。
+"""Integration tests for PersonaStore (reads and writes of the persona body), using moto.
 
-U4 BR6.1（新規は「まだない ID」の条件付きで、所有者は書くが共有は書かない）、BR6.7
-（編集は画面で変えられる列だけ。所有者・共有・アイコン・生成の記録・created_at は残す）、
-BR3.5（admin の「すべて」タブだけが Scan する）、NFR2.5（まとめ読みは強い整合性で、
-未処理のキーは読み直す）、アイコンの画像パスの比較つき書き込み。
+A new persona is written under a "no such ID yet" condition: the owner is
+written but shares are not. An edit changes only the columns editable on screen
+and keeps owner, shares, icon, generation record and created_at. Only the admin
+"all" tab scans. Batch reads are strongly consistent and re-read unprocessed
+keys. Icon writes compare the image path.
 """
 
 from datetime import datetime
@@ -97,7 +98,7 @@ class TestPutAndGet:
         assert isinstance(read.age, int)
 
     def test_advanced_generation_context_with_floats_reads_back(self, store):
-        """高度な生成の generation_context は構成比などの小数を持つ（BR9.4、C7）。"""
+        """generation_context of advanced generation holds fractions such as composition ratios."""
         context = {
             "mode": "advanced",
             "segments": [{"id": "s1", "share": 0.375, "size": 3, "overlaps": False}],
@@ -144,7 +145,7 @@ class TestPutAndGet:
         assert item["type"] == {"S": "persona"}
 
     def test_owner_is_written_but_never_the_shares(self, store, client):
-        """BR6.1: 共有は ResourceSharing だけが書く。"""
+        """Shares are written only by ResourceSharing."""
         persona = Persona.from_dict(
             {**_persona().owned_by("sub-a").to_dict(), "shared_group_ids": ["sales"]}
         )
@@ -163,7 +164,7 @@ class TestPutAndGet:
         assert stored.shared_group_ids == frozenset({"sales", "plan"})
 
     def test_existing_id_is_refused_and_the_body_stays(self, store, client):
-        """R-02: 新規の保存は本体を上書きしない（所有者・共有が残る）。"""
+        """A new save does not overwrite the body (owner and shares remain)."""
         persona = _persona().owned_by("sub-a")
         store.put_new(persona)
         _share(client, persona.id, "sales")
@@ -190,7 +191,7 @@ class TestPutAndGet:
             min_value=datetime(2020, 1, 1), max_value=datetime(2030, 12, 31)
         ),
     )
-    # 同じ moto のテーブルを使い回す（各入力の前に同じ ID の項目を消す）
+    # Reuse the same moto table (delete the item with the same ID before each input)
     @settings(
         max_examples=30,
         deadline=None,
@@ -226,7 +227,7 @@ class TestUpdateEditable:
         )
         store.put_new(persona)
         _share(client, persona.id, "sales")
-        # 編集画面から届いた値（所有者・アイコン・生成の記録を持たない形）
+        # Values arriving from the edit screen (no owner, icon or generation record)
         edited = Persona.from_dict(
             {
                 **{
@@ -317,7 +318,7 @@ class TestUpdateAvatar:
         assert store.get(persona.id) is None
 
     def test_refuses_when_the_path_changed_concurrently(self, store):
-        """同時アップロード: 先に書いた側の画像が上書きされない。"""
+        """Concurrent upload: the image written first is not overwritten."""
         persona = self._saved(store)
         assert store.update_avatar(
             persona.id, new_path=OLD_PATH, expected_path=None, updated_at=datetime.now()
@@ -351,7 +352,7 @@ class TestGetMany:
 
 class TestScanAll:
     def test_reads_every_scan_page(self, store, client):
-        """BR3.5: admin の「すべて」タブの検索だけが使う。"""
+        """Used only by the search behind the admin "all" tab."""
         made = [_persona() for _ in range(5)]
         for persona in made:
             store.put_new(persona)
@@ -378,7 +379,7 @@ class TestFailures:
 
 
 def test_a_save_of_an_existing_id_keeps_the_body_and_the_index(store, client):
-    """R-02: 新規の保存は本体も共有の索引も上書きしない（BR6.1 所有者、BR1 共有）。"""
+    """A new save overwrites neither the body nor the share index."""
     from src.managers.persona_manager import PersonaManager, PersonaManagerError
     from src.models.authz import Principal, ResourceType, Role
     from src.services.stores.resource_share_store import ResourceShareStore

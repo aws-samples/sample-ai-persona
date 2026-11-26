@@ -1,9 +1,7 @@
-"""
-DiscussionReport data model for the AI Persona System.
+"""DiscussionReport data model for the AI Persona System.
 
-Since v1.0.0 (U6, ADR-002) a saved report is one item of
-``DiscussionReports`` (PK ``discussion_id``, SK ``report_id``). The server
-assigns ``report_id`` (BR4.4); the screen never sends it.
+A saved report is one item of ``DiscussionReports`` (PK ``discussion_id``,
+SK ``report_id``). The server assigns ``report_id``; the screen never sends it.
 """
 
 from dataclasses import dataclass, replace
@@ -11,7 +9,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, Mapping
 import uuid
 
-#: The report templates (entities.md DiscussionReport).
+#: The report templates.
 REPORT_TEMPLATE_TYPES: tuple[str, ...] = ("summary", "review", "custom", "data_driven")
 
 
@@ -56,7 +54,7 @@ class DiscussionReport:
         *,
         now: Optional[datetime] = None,
     ) -> "DiscussionReport":
-        """A new report with a server-assigned ID (BR4.4)."""
+        """A new report with a server-assigned ID."""
         return cls(
             discussion_id=discussion_id,
             report_id=str(uuid.uuid4()),
@@ -89,7 +87,7 @@ class DiscussionReport:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DiscussionReport":
-        """Read a stored report (the pre-v1.0.0 inner shape uses ``id``)."""
+        """Read a stored report (the legacy inner shape uses ``id``)."""
         updated_at = data.get("updated_at")
         return cls(
             discussion_id=str(data.get("discussion_id") or ""),

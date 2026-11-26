@@ -1,8 +1,9 @@
-"""ロールのない利用者の入口（US1.4、BR2.8、BR2.13、NFR5.5、NFR6.1）の API テスト。
+"""API tests for the entry point of users without a role.
 
-ロールのない利用者は、画面ならロール未割り当て画面（M4、``/no-role``）へ 303、htmx は
-``HX-Redirect``、``/api/`` は 403（``ROLE_REQUIRED``）。M4・ログアウト・ログイン関連・
-静的ファイルはそのまま通す。ロールを付けて再ログインすれば、すぐに使える。
+A user without a role is redirected (303) to the no-role screen (``/no-role``) for
+pages, gets ``HX-Redirect`` for htmx, and 403 (``ROLE_REQUIRED``) for ``/api/``.
+The no-role screen, logout, login-related and static paths pass through. Once a
+role is assigned and the user logs in again, the app is usable immediately.
 """
 
 import json
@@ -77,7 +78,7 @@ class TestRoleRequired:
         assert response.headers.get("location") != NO_ROLE_PATH
 
     def test_a_role_works_right_after_logging_in_again(self, browser, no_role_user):
-        """admin がロールを付けたあとの再ログインで、すぐに使える（AC1.4.4、NFR5.5）。"""
+        """After admin assigns a role, the user can use the app right away on re-login."""
         no_role_user.login(browser)
         assert browser.get("/persona/management").status_code == 303
 
@@ -96,7 +97,7 @@ class TestRoleRequired:
         assert ROLE_EXEMPT_PATHS == frozenset({"/no-role", "/signout"})
 
     def test_every_other_route_stops_a_user_without_role(self, test_app, no_role_user):
-        """一覧にない URL は、ロールなしでは Manager まで届かない（BR2.8）。"""
+        """A URL not on the list never reaches the Manager without a role."""
         from tests.api.test_auth_middleware import _all_routes
 
         routes = _all_routes(test_app)
@@ -123,7 +124,7 @@ class TestRoleRequired:
 
 
 class TestNoRolePage:
-    """ロール未割り当て画面（M4、AC1.4.1、NFR6.1）。"""
+    """The no-role screen."""
 
     def _page(self, browser, user) -> str:
         user.login(browser)
@@ -136,7 +137,9 @@ class TestNoRolePage:
         html = self._page(browser, no_role_user)
         assert re.search(r"<h1[^>]*>\s*利用権限がまだありません\s*</h1>", html)
         assert "管理者に連絡してください" in html
-        assert "ログインし直す" in html  # ロールが付いたら再ログインで使える旨
+        assert (
+            "ログインし直す" in html
+        )  # After a role is assigned, the user can use the app by logging in again.
 
     def test_shows_who_is_signed_in(self, browser, no_role_user):
         html = self._page(browser, no_role_user)

@@ -1,5 +1,5 @@
 {% from "components/dialog.html" import dialog %}
-{# htmx で body の末尾に差し込まれ、差し込まれたら開き、閉じたら要素ごと消える（U3 WF2） #}
+{# Inserted at the end of body by htmx, opens when inserted, and the element is removed when closed. #}
 {% call dialog("edit-dataset-modal", "データセットを編集", autoopen=True, remove_on_close=True, panel_class="max-w-2xl") %}
             <form hx-put="/settings/datasets/{{ dataset.id }}"
                   hx-target="#dataset-list"

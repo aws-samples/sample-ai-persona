@@ -1,7 +1,6 @@
-"""SourceUploadManager: start, part URLs, completion and cancel (W2, W3).
+"""SourceUploadManager: start, part URLs, completion and cancel.
 
-US2.1, US3.1, BR2.1〜BR2.8, BR3.3, NFR1.3, NFR1.5, NFR5.19, NFR5.20. S3 and
-DynamoDB are moto; the stores and components are the real ones.
+S3 and DynamoDB are moto; the stores and components are the real ones.
 """
 
 from __future__ import annotations
@@ -157,7 +156,8 @@ class TestStart:
             _start(manager, size=PART + 1)
         assert _multipart_uploads(s3_client) == []
 
-    # U4 BR21.1: ".txt" is now a document, so it left this list
+        # ".txt" is now a document, so it left this list
+
     @pytest.mark.parametrize("name", ["book.xlsx", "image.png", "noext"])
     def test_not_csv_or_tsv_is_invalid(self, env, name: str) -> None:
         manager, _, s3_client, _ = env
@@ -268,7 +268,7 @@ class TestComplete:
             "error_code",
             "encoding",
             "estimated_rows",
-            "kind",  # U4: table or document
+            "kind",  # table or document
         }
         assert event["status"] == "ready" and event["estimated_rows"] == 3
 
@@ -282,7 +282,7 @@ class TestComplete:
             "src.managers.source_upload_manager.inspect_table_head", inspect
         )
 
-        # U2 BR11.4: the second tab gets the same row, without a second inspection.
+        # The second tab gets the same row, without a second inspection.
         again = manager.complete_upload(ADMIN, session.source_file_id, parts)
 
         assert again == first
@@ -373,7 +373,7 @@ class TestCancelAndRead:
             manager.get_upload(OTHER, session.source_file_id)
 
 
-# --- U2: 番号・期限・二重の確定・一覧・削除（W2-1〜W2-8） ----------------------------
+# --- numbers, expiry, double completion, listing, deletion ---------------------
 
 DAYS = config.ADVANCED_SOURCE_RETENTION_DAYS
 
@@ -724,7 +724,7 @@ class TestDelete:
         assert store.get(session.source_file_id) is None
 
 
-# --- U4: documents (BR21.1〜BR21.3, BR22.1〜BR22.3, AC2.2.1〜AC3.3.3) ---------
+# --- documents -------------------------------------------------------------
 
 
 def _start_document(
@@ -881,7 +881,7 @@ class TestDocumentComplete:
         assert ready.metadata.encoding is SourceEncoding.CP932
 
     def test_a_document_over_100mb_on_s3_is_refused(self, env, monkeypatch) -> None:
-        # The parts S3 holds are checked against the document limit (BR2.7)
+        # The parts S3 holds are checked against the document limit
         manager, store, s3_client, _ = env
         monkeypatch.setattr(config, "ADVANCED_DOCUMENT_MAX_BYTES", 10)
         data = b"%PDF-1.4 " + b"x" * 20

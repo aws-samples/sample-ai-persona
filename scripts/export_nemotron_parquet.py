@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Write the Nemotron Parquet for a closed network deployment (closed network U3, BR6.1).
+Write the Nemotron Parquet for a closed network deployment.
 
 The closed network never downloads from Hugging Face (``NEMOTRON_SOURCE=s3``).
 Run this on a machine that can reach Hugging Face; it builds the Parquet with

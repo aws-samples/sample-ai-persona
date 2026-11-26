@@ -1,13 +1,13 @@
-"""htmxフォームの配列/マップ形式キーを解析する共有ヘルパー（discussion / interview 両ルーターで使用）。"""
+"""Shared helper that parses array/map-style keys of htmx forms (used by both the discussion and interview routers)."""
 
 from typing import Optional
 
 
 def parse_persona_models(form_data) -> Optional[dict[str, str]]:  # type: ignore[no-untyped-def]
-    """フォームデータから persona_models[<persona_id>]=<model_id> を解析する。
+    """Parse persona_models[<persona_id>]=<model_id> from form data.
 
-    FastAPIはこの形式のキーを自動でdict化できないため、Request.form()の生キーを
-    手動でパースする。
+    FastAPI cannot turn keys of this form into a dict automatically, so the raw keys of
+    Request.form() are parsed by hand.
     """
     prefix = "persona_models["
     persona_models: dict[str, str] = {}

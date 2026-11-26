@@ -1,13 +1,13 @@
-"""The share dialog and saving the shares (WF1, WF2, U4).
+"""The share dialog and saving the shares.
 
 The entry points under ``/share/{resource_type}/...`` are the same for every
 shareable type. This Manager turns their values into ``ResourceSharing`` calls:
 
 - the dialog content (choices, the state of each department, the notes),
-- the change built from the picker's values (BR1.12; the browser's values are
-  never trusted, ``security-design.md`` §2),
+- the change built from the picker's values (the browser's values are
+  never trusted),
 - the result of a save, with failures counted without names when the user
-  may not read the target (BR2.4, NFR1.14).
+  may not read the target.
 
 The decisions themselves are ``ResourceSharing``'s (and ``AccessPolicy``'s).
 """
@@ -52,7 +52,7 @@ class SharingManagerError(CodedError):
 
 @dataclass(frozen=True)
 class ShareSaveResult:
-    """The result of a save (BR7.3).
+    """The result of a save.
 
     Attributes:
         resource_type: Type of the targets.
@@ -78,12 +78,12 @@ class ShareSaveResult:
 
     @property
     def unnamed_failure_count(self) -> int:
-        """Failures shown only as a count (BR2.4)."""
+        """Failures shown only as a count."""
         return sum(1 for f in self.failed if not f.display_name)
 
     @property
     def failed_ids(self) -> tuple[str, ...]:
-        """IDs to select again when the list is reloaded (BR7.3)."""
+        """IDs to select again when the list is reloaded."""
         return tuple(f.resource_id for f in self.failed)
 
 
@@ -133,8 +133,9 @@ class SharingManager:
     def dialog(
         self, principal: Principal, resource_type: str, resource_id: str
     ) -> ShareDialogView:
-        """The dialog for one target (WF1). 404 when unreadable, 403 when
-        readable only (BR1.1)."""
+        """The dialog for one target. 404 when unreadable, 403 when
+        readable only.
+        """
         table = self._table(resource_type)
         self._require_valid_id(table, resource_id)
         return self._guard(
@@ -146,7 +147,7 @@ class SharingManager:
     def bulk_dialog(
         self, principal: Principal, resource_type: str, resource_ids: Sequence[str]
     ) -> ShareDialogView:
-        """The dialog for a selection (WF2, BR7.1).
+        """The dialog for a selection.
 
         Targets that cannot be managed, and malformed IDs, are only counted.
         """
@@ -175,7 +176,7 @@ class SharingManager:
         unchanged: Iterable[str],
         initial: Iterable[str],
     ) -> ShareSaveResult:
-        """Save the shares of one target (WF1, BR1).
+        """Save the shares of one target.
 
         Raises:
             CodedError: The type's NOT_FOUND, sharing validation / capacity
@@ -206,7 +207,7 @@ class SharingManager:
         unchanged: Iterable[str],
         initial: Iterable[str],
     ) -> ShareSaveResult:
-        """Save the shares of a selection (WF2, BR2).
+        """Save the shares of a selection.
 
         The counts and the scope are checked once; then each target is saved
         and the failures are reported (malformed IDs fail as missing).

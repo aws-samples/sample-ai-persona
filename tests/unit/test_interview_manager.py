@@ -1,11 +1,8 @@
-"""InterviewManager の単体テスト（U6: アプリの外に置いたセッション）。
+"""Unit tests for InterviewManager (sessions held outside the app).
 
-BR3.1〜BR3.8、BR6.1、BR7.2、NFR1.48〜NFR1.50、NFR1.54、NFR1.59〜NFR1.61、
-NFR2.18、NFR8.19、NFR8.20、NFR9.31〜NFR9.33、AC2.4.1〜AC2.4.3、AC4.2.2、AC4.2.5。
-
-``InterviewSessionStore`` は moto の上の本物、``DiscussionRecords``・
-``ParticipantReader``・``AccessPolicy`` も本物（tests/unit/discussion_world.py）、
-AI はモック。時計は差し替える。
+``InterviewSessionStore`` is the real one on moto, and ``DiscussionRecords``,
+``ParticipantReader`` and ``AccessPolicy`` are real too (tests/unit/discussion_world.py).
+The AI is mocked and the clock is replaced.
 """
 
 import json
@@ -200,7 +197,7 @@ def _events(capsys, name: str) -> list[dict]:
 
 
 # =============================================================================
-# 開始（BR3.1、BR6.1）
+# Start
 # =============================================================================
 
 
@@ -273,7 +270,7 @@ class TestStart:
 
 
 # =============================================================================
-# 持ち主と期限（BR3.2、BR3.5）
+# Owner and expiry
 # =============================================================================
 
 
@@ -306,7 +303,7 @@ class TestOwnerAndExpiry:
         for _ in range(23):
             clock.advance(hours=7)
             manager.send_user_message(OWNER, session.id, "続けます")
-        # 最後の操作から 7 時間（8 時間未満）でも、始めてから 7 日で無効
+        # 7 hours after the last operation (under 8 hours) is still invalid once 7 days have passed since the start
         clock.advance(hours=7)
         with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
             manager.get_interview_session(OWNER, session.id)
@@ -320,7 +317,7 @@ class TestOwnerAndExpiry:
 
 
 # =============================================================================
-# 拒否のログ（NFR8.22、BR2.13。Build and Test の Loop-back 1）
+# Denial logging
 # =============================================================================
 
 
@@ -329,12 +326,12 @@ def _denied(capsys) -> list[dict]:
 
 
 class TestDenialLog:
-    """持ち主の照合で断ったら、U2 の ``authz.denied`` を 1 行書く。
+    """A denied owner check writes one ``authz.denied`` line.
 
-    理由は U2 の ``ensure_readable`` と同じ ``not_found``（応答が NOT_FOUND のため）。
-    インタビューのセッションは ``ResourceType`` に無いので、``resource_type`` は
-    U2 の ``require`` が種類なしで断ったときと同じく書かない。存在しない・期限切れも、
-    U2 で存在しない ID を ``ensure_readable`` が断ったときと同じく 1 行書く。
+    The reason is ``not_found``, the same as ``ensure_readable`` (the response is NOT_FOUND).
+    Interview sessions are not a ``ResourceType``, so ``resource_type`` is omitted, as when
+    ``require`` denies without a type. A missing or expired session also writes one line,
+    as when ``ensure_readable`` denies a nonexistent ID.
     """
 
     @pytest.mark.parametrize("principal", [PEER, ADMIN])
@@ -355,10 +352,10 @@ class TestDenialLog:
         lines = [json.loads(x) for x in out.splitlines() if x.startswith("{")]
         (line,) = [x for x in lines if x.get("event") == "authz.denied"]
         assert line["reason"] == "not_found"
-        # 種類なし（log_event は None の項目を書かない。U2 の require と同じ）
+        # no type (log_event omits None fields, as with require)
         assert line.get("resource_type") is None
         assert line["sub"] == principal.sub
-        # セッションの ID はログに出さない（NFR8.6）
+        # the session ID is not logged
         assert session.id not in out
 
     def test_the_owner_logs_no_denial(self, manager, world, capsys):
@@ -386,7 +383,7 @@ class TestDenialLog:
 
 
 # =============================================================================
-# 送信（BR3.3、BR7.2、NFR1.59〜NFR1.61）
+# Send
 # =============================================================================
 
 
@@ -465,7 +462,7 @@ class TestSend:
             manager.send_user_message(OWNER, session.id, "こんにちは")
         stored = store.get(session.id)
         assert stored.reply_token is None and stored.last_seq == 1
-        # すぐ次の送信と保存の判定が通る（印が残っていない）
+        # the next send and the save check pass right away (no marker is left)
         agents.respond = None
         for agent in agents.made:
             agent.respond.side_effect = lambda prompt, context=None: "回答です"
@@ -526,7 +523,7 @@ class TestSend:
     def test_later_personas_see_earlier_replies_of_the_same_send(
         self, store, world, clock, agents
     ):
-        """BR3.4「今の会話の進め方と同じく」: 2 体目の prompt に 1 体目の今回の応答が入る。"""
+        """Like the current conversation flow: the second persona's prompt includes the first persona's response from this turn."""
         manager = _manager(store, world, clock, agents)
         session = _start(manager, world)
         manager.send_user_message(OWNER, session.id, "質問1")
@@ -538,10 +535,10 @@ class TestSend:
         (_, second_p2_prompt) = [
             c.args[0] for c in agents.made[1].respond.call_args_list
         ]
-        # 1 体目の今回の応答（2 回目の送信の 佐藤の回答）は 2 体目にだけ見える
+        # the first persona's response in this turn (Sato's answer in the second send) is visible only to the second persona
         assert second_p2_prompt.count("佐藤: 佐藤の回答です") == 2
         assert second_p1_prompt.count("佐藤: 佐藤の回答です") == 1
-        # これまでの会話は最新の 5 件まで（質問1・佐藤・鈴木・質問2・佐藤）
+        # prior conversation is the latest 5 entries (question 1, Sato, Suzuki, question 2, Sato)
         context = second_p2_prompt.split("\n\n")[0].splitlines()[1:]
         assert len(context) == 5
         assert context[-1] == "佐藤: 佐藤の回答です"
@@ -549,7 +546,7 @@ class TestSend:
     def test_an_overlapping_send_keeps_the_agents_in_use(
         self, store, world, clock, agents, monkeypatch
     ):
-        """同じ台で送信が重なっても、応答中の送信のエージェントを捨てない。"""
+        """Overlapping sends on the same host do not discard the agent of a send still responding."""
         manager = _manager(store, world, clock, agents)
         session = _start(manager, world)
         stale = store.get(session.id)
@@ -557,7 +554,7 @@ class TestSend:
         overlapping: list = []
 
         def stale_once(session_id):
-            # 後の送信は、先の送信が (a) を書く前のセッションを読んだとする
+            # the later send read the session from before the earlier send wrote (a)
             monkeypatch.setattr(store, "get", real_get)
             return stale
 
@@ -590,13 +587,13 @@ class TestSend:
         for agent in agents.made:
             agent.respond.side_effect = slow
         manager.send_user_message(OWNER, session.id, "こんにちは")
-        # 2 体目の応答の時点で、印は 1 体目の応答のあとに更新されている
+        # at the second persona's response, the marker was updated after the first persona's response
         assert seen[0] == START
         assert seen[1] == START + timedelta(minutes=4)
 
 
 # =============================================================================
-# 作り直し（BR3.4、NFR9.31〜NFR9.33）
+# Regeneration
 # =============================================================================
 
 
@@ -668,7 +665,7 @@ class TestRebuild:
 
 
 # =============================================================================
-# 添付（BR3.6、NFR1.54）
+# Attachments
 # =============================================================================
 
 
@@ -682,7 +679,7 @@ class TestAttachments:
         assert stored.documents[0].filename == "資料.txt"
         (first, *_) = store.query_messages(session.id, up_to=1)
         assert first.document_ids == (FILE_1,)
-        # 追加する（置き換えない）。一時的な失敗で戻した添付を消さないため（#217）
+        # append, do not replace: a transient failure must not delete attachments that were put back (#217)
         agents.made[0].add_document_contents.assert_called()
         agents.made[0].set_document_contents.assert_not_called()
 
@@ -748,7 +745,7 @@ class TestAttachments:
 
 
 # =============================================================================
-# 保存（BR3.7、BR3.8）
+# Save
 # =============================================================================
 
 
@@ -779,7 +776,7 @@ class TestSave:
     def test_retry_after_the_id_was_not_recorded_reuses_the_discussion(
         self, manager, world, store, tmp_path
     ):
-        """初回の保存で議論の ID の記録だけ失敗しても、再保存は同じ議論に戻る。"""
+        """If only recording the discussion ID fails on the first save, a re-save returns to the same discussion."""
         world.files.attachable_file.side_effect = lambda p, i: _upload(tmp_path, i)
         session = _start(manager, world)
         manager.send_user_message(OWNER, session.id, "見て", [FILE_1])
@@ -793,7 +790,7 @@ class TestSave:
         assert len(world.store.bodies) == 1
         (first_id,) = world.store.bodies
 
-        # 添付は最初の議論に紐付いた（紐付け前としては読めない）
+        # the attachment was attached to the first discussion (not readable as before attaching)
         world.files.attachable_file.side_effect = CodedError(
             "attached", code=ErrorCode.FILE_NOT_FOUND
         )
@@ -810,7 +807,7 @@ class TestSave:
     def test_a_second_save_during_the_first_does_not_lose_messages(
         self, manager, world, store
     ):
-        """同じインタビューを同時に保存しても、成立した議論の発言は消えない。"""
+        """Saving the same interview concurrently keeps the statements of the discussion that succeeded."""
         session = _start(manager, world)
         manager.send_user_message(OWNER, session.id, "質問1")
 
@@ -818,7 +815,7 @@ class TestSave:
         second: dict[str, Any] = {}
 
         def save_new_with_a_second_request(principal, discussion, messages):
-            # 1 つ目の要求が保存している間に、2 つ目の要求が届く（入れ子は 1 回だけ）
+            # a second request arrives while the first is saving (nested only once)
             if "started" not in second:
                 second["started"] = True
                 try:
@@ -899,7 +896,7 @@ class TestSave:
 
 
 # =============================================================================
-# 参照・状態・終了
+# Lookup, state, and termination
 # =============================================================================
 
 
@@ -935,7 +932,7 @@ class TestReadAndEnd:
 
 
 # =============================================================================
-# 文面
+# Wording
 # =============================================================================
 
 

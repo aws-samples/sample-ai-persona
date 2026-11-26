@@ -1,16 +1,16 @@
 """
-共有の入口（U4、WF1・WF2、M7）。
+Entry points for sharing.
 
-4 種類（ペルソナ・議論・テンプレート・アンケート結果）で同じ URL の形にする。
-登録のない種類は 404。判定は SharingManager → ResourceSharing → AccessPolicy が持ち、
-ここは値の受け取りと応答の形（HX-Trigger、ダイアログの中のエラー）だけを持つ。
+The four kinds (personas, discussions, templates, survey results) share the same URL shape.
+A kind with no registration gets 404. SharingManager -> ResourceSharing -> AccessPolicy decide;
+this module only takes the input and shapes the response (HX-Trigger, errors inside the dialog).
 
-- GET  /share/{resource_type}/{resource_id}/dialog ... 1 件のダイアログの中身
-- GET  /share/{resource_type}/dialog?ids=...       ... 一括のダイアログの中身
-- POST /share/{resource_type}/{resource_id}        ... 1 件の保存
-- POST /share/{resource_type}                      ... 一括の保存
+- GET  /share/{resource_type}/{resource_id}/dialog ... contents of the dialog for one item
+- GET  /share/{resource_type}/dialog?ids=...       ... contents of the bulk dialog
+- POST /share/{resource_type}/{resource_id}        ... save for one item
+- POST /share/{resource_type}                      ... bulk save
 
-読めない対象と存在しない対象は、共通の例外ハンドラが同じ 404 にする（NFR1.14）。
+Unreadable and nonexistent targets get the same 404 from the shared exception handler.
 """
 
 import asyncio
@@ -51,9 +51,9 @@ DIALOG_ID = "share-dialog"
 #: The list panel each type reloads after a save (``list_tabpanel`` id).
 _LIST_TARGETS: dict[str, str] = {
     "persona": "#persona-list",
-    # U6: 議論・インタビュー結果の一覧（/discussion/results）
+    # List of discussion/interview results (/discussion/results)
     "discussion": "#discussion-list",
-    # U7: アンケートテンプレートと結果の一覧（/survey/templates、/survey/results）
+    # List of survey templates and results (/survey/templates, /survey/results)
     "survey_template": "#survey-template-list",
     "survey": "#survey-list",
 }
@@ -75,7 +75,7 @@ _sharing_manager: SharingManager | None = None
 
 
 def get_sharing_manager() -> SharingManager:
-    """SharingManager のシングルトンを取得する（遅延初期化）。"""
+    """Get the SharingManager singleton (lazy initialization)."""
     global _sharing_manager
     if _sharing_manager is None:
         _sharing_manager = SharingManager()
@@ -98,7 +98,7 @@ def _split_ids(values: list[str]) -> list[str]:
 
 
 # =============================================================================
-# ダイアログの中身
+# Contents of the dialog
 # =============================================================================
 
 
@@ -123,7 +123,7 @@ def _dialog_response(
 async def bulk_share_dialog(
     request: Request, resource_type: str, ids: list[str] = Query(default=[])
 ) -> Any:
-    """一括の共有ダイアログの中身（WF2、BR7.1）。"""
+    """Contents of the bulk sharing dialog."""
     view = await _run(
         get_sharing_manager().bulk_dialog,
         _principal(request),
@@ -135,7 +135,7 @@ async def bulk_share_dialog(
 
 @router.get("/share/{resource_type}/{resource_id}/dialog", response_class=HTMLResponse)
 async def share_dialog(request: Request, resource_type: str, resource_id: str) -> Any:
-    """1 件の共有ダイアログの中身（WF1）。404・403 は共通の例外ハンドラ。"""
+    """Contents of the sharing dialog for one item. 404 and 403 go to the shared exception handler."""
     view = await _run(
         get_sharing_manager().dialog, _principal(request), resource_type, resource_id
     )
@@ -145,7 +145,7 @@ async def share_dialog(request: Request, resource_type: str, resource_id: str) -
 
 
 # =============================================================================
-# 保存
+# Save
 # =============================================================================
 
 
@@ -159,7 +159,7 @@ async def _picker_values(request: Request) -> dict[str, list[str]]:
 
 
 def _saved_response(resource_type: str, result: ShareSaveResult, *, bulk: bool) -> Any:
-    """全件成功: 本文なしで閉じる・読み直す・トースト（BR7.3）。"""
+    """All succeeded: close with no body, reload, and show a toast."""
     message = (
         f"{len(result.updated)} 件の共有先を更新しました"
         if bulk
@@ -171,7 +171,7 @@ def _saved_response(resource_type: str, result: ShareSaveResult, *, bulk: bool) 
     }
     target = _LIST_TARGETS.get(resource_type)
     if target:
-        # 一覧（管理画面）と詳細のヘッダー（詳細画面）の両方を指す。画面にない方は app.js が飛ばす
+        # Refers to both the list (admin screen) and the detail header (detail screen). app.js skips the one that is not on the screen
         targets = [target, *_DETAIL_TARGETS.get(resource_type, ())]
         triggers["listReload"] = {"targets": targets}
     return Response(content="", headers={"HX-Trigger": json.dumps(triggers)})
@@ -180,15 +180,15 @@ def _saved_response(resource_type: str, result: ShareSaveResult, *, bulk: bool) 
 def _dialog_error(
     request: Request, resource_type: str, kind: ErrorKind, message: str
 ) -> Any:
-    """入力の誤り・再試行で直る失敗・403 をダイアログの中に出す（選択を保つ）。
+    """Show invalid input, failures that a retry fixes, and 403 inside the dialog (keeping the selection).
 
-    例外そのものではなく解決済みの文言と種類を受け取る（例外文の露出の検査が
-    効くようにするため、tests/api/test_error_exposure.py）。
+    Takes the resolved wording and kind rather than the exception itself (so the
+    check on exposed exception text, tests/api/test_error_exposure.py, applies).
     """
     headers: dict[str, str] = {}
     target = _LIST_TARGETS.get(resource_type)
     if kind is ErrorKind.FORBIDDEN and target:
-        # 閉じたら一覧を読み直す（権限を失っていた、BR7.3）
+        # After closing, reload the list (the user may have lost permission)
         headers["HX-Trigger"] = json.dumps({"shareReloadOnClose": {"target": target}})
     return mark_renderable(
         templates.TemplateResponse(
@@ -213,7 +213,7 @@ async def _save(
     except CodedError as e:
         kind = error_kind_of(e)
         if kind is ErrorKind.NOT_FOUND:
-            raise  # 読めない・存在しない・登録のない種類は同じ 404（共通の例外ハンドラ）
+            raise  # Unreadable, nonexistent and unregistered kinds all give the same 404 (shared exception handler)
         logger.info("Share save rejected", exc_info=True)
         return _dialog_error(request, resource_type, kind, user_message_for(e))
     except Exception as e:
@@ -230,7 +230,7 @@ async def _save(
 
 @router.post("/share/{resource_type}", response_class=HTMLResponse)
 async def save_bulk_shares(request: Request, resource_type: str) -> Any:
-    """一括の保存（WF2、BR2）。一部失敗はダイアログの中に結果を出す。"""
+    """Bulk save. A partial failure shows the result inside the dialog."""
     values = await _picker_values(request)
     form = await request.form()
     ids = _split_ids([str(v) for v in form.getlist("ids")])
@@ -246,7 +246,7 @@ async def save_bulk_shares(request: Request, resource_type: str) -> Any:
 
 @router.post("/share/{resource_type}/{resource_id}", response_class=HTMLResponse)
 async def save_shares(request: Request, resource_type: str, resource_id: str) -> Any:
-    """1 件の保存（WF1、BR1）。"""
+    """Save for one item."""
     values = await _picker_values(request)
     principal = _principal(request)
     manager = get_sharing_manager()

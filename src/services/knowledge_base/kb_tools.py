@@ -1,6 +1,6 @@
 """
 Knowledge Base Tools for Persona Agent
-ペルソナエージェントがBedrock Knowledge Baseを検索するためのStrands SDKツール
+Strands SDK tools that let a persona agent search Bedrock Knowledge Bases
 """
 
 import logging
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_metadata_filter(metadata_filters: Dict[str, str]) -> dict:
-    """メタデータフィルタをBedrock KB Retrieve API形式に変換"""
+    """Convert a metadata filter to the Bedrock KB Retrieve API format."""
     if not metadata_filters:
         return {}
 
@@ -55,16 +55,16 @@ def create_kb_retrieval_tool(
     kb_type: str = KB_TYPE_SELF_MANAGED,
 ) -> Callable:
     """
-    ペルソナ用のナレッジベース検索ツールを作成
+    Create a knowledge base search tool for a persona
 
     Args:
         knowledge_base_id: Bedrock Knowledge Base ID
-        metadata_filters: メタデータフィルタ（キー=値ペア）
-        region: AWSリージョン
-        kb_type: KB の種類（``self_managed`` または ``managed``。検索設定のキーが変わる）
+        metadata_filters: Metadata filters (key=value pairs)
+        region: AWS region
+        kb_type: KB type (``self_managed`` or ``managed``; the search config keys differ)
 
     Returns:
-        Callable: Strands SDKツールとして使用可能な関数
+        Callable: A function usable as a Strands SDK tool
     """
     client = boto3.client("bedrock-agent-runtime", region_name=region)
     filter_config = _build_metadata_filter(metadata_filters or {})
@@ -89,7 +89,7 @@ def create_kb_retrieval_tool(
 
             max_results = max(1, min(10, max_results))
 
-            # Retrieve APIリクエストを構築
+            # Build the Retrieve API request
             request_params = {
                 "knowledgeBaseId": knowledge_base_id,
                 "retrievalQuery": {"text": query.strip()},
@@ -107,7 +107,7 @@ def create_kb_retrieval_tool(
             if not results:
                 return "関連する情報は見つかりませんでした。"
 
-            # 結果をフォーマット
+            # Format the results
             output = "ナレッジベースからの検索結果:\n"
             for i, result in enumerate(results, 1):
                 content = result.get("content", {})

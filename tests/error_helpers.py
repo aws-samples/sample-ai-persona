@@ -1,8 +1,8 @@
-"""エラーコードを検証するテストヘルパー（Issue #112）。
+"""Test helper for asserting error codes (Issue #112).
 
-例外メッセージは診断情報（技術的事実）に限られ、ユーザー向け文言は
-`web/error_messages.py` のカタログが持つ。したがってテストは
-`pytest.raises(..., match="日本語")` ではなくエラーコードを検証する。
+Exception messages carry diagnostic facts only; user-facing text lives in the
+`web/error_messages.py` catalog. Tests therefore assert the error code instead
+of `pytest.raises(..., match="...")` on Japanese text.
 """
 
 from contextlib import contextmanager
@@ -17,12 +17,13 @@ from src.models.errors import CodedError, ErrorCode
 def raises_code(
     exc_type: type[CodedError], code: ErrorCode, **context: Any
 ) -> Generator[Any]:
-    """`exc_type` が送出され、そのコード（と任意のcontext値）が一致することを検証する。
+    """Assert that `exc_type` is raised with the given code (and optional context values).
 
     Args:
-        exc_type: 期待する例外型。
-        code: 期待する ErrorCode。
-        **context: 検証したい `CodedError.context` のキーと値。
+        exc_type: Expected exception type.
+        code: Expected ErrorCode.
+        **context: Keys and values expected in `CodedError.context`.
+
     """
     with pytest.raises(exc_type) as exc_info:
         yield exc_info

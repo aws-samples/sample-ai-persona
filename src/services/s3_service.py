@@ -1,6 +1,6 @@
 """
-S3サービス
-Amazon S3へのファイルアップロード・ダウンロード・削除を管理
+S3 service
+Manages file upload, download and deletion on Amazon S3
 """
 
 import logging
@@ -33,8 +33,8 @@ def _s3_client(region_name: str) -> Any:
 
     Presigned URLs (the existing GET and the part PUT of advanced generation)
     then look like ``https://<bucket>.s3.<region>.amazonaws.com/<key>?X-Amz-...``
-    (security-design.md §3, NFR3.12): SigV4 only, and no redirect from the
-    global endpoint that a browser PUT could not follow.
+    (SigV4 only, and no redirect from the
+    global endpoint that a browser PUT could not follow).
     """
     return boto3.client(
         "s3",
@@ -54,10 +54,10 @@ class UploadedPart:
 
 
 class S3ServiceError(CodedError):
-    """S3サービス関連のエラー
+    """Errors raised by the S3 service.
 
     Attributes:
-        failure: How a background caller should handle it (reliability 3.1).
+        failure: How a background caller should handle it.
     """
 
     def __init__(
@@ -78,12 +78,12 @@ class S3ObjectExistsError(S3ServiceError):
         super().__init__(message, code=ErrorCode.S3_OPERATION_FAILED)
 
 
-#: Size of one streamed read (closed network U4, BR2.2).
+#: Size of one streamed read.
 STREAM_CHUNK_SIZE = 256 * 1024
 
 
 def _closer(body: Any, s3_key: str) -> Callable[[], None]:
-    """An idempotent close of an S3 body (BR4.5)."""
+    """An idempotent close of an S3 body."""
     closed = False
 
     def close() -> None:
@@ -100,7 +100,7 @@ def _closer(body: Any, s3_key: str) -> Callable[[], None]:
 
 
 def _read_chunks(body: Any, s3_key: str, close: Callable[[], None]) -> Iterator[bytes]:
-    """Read ``body`` in chunks; always ``close`` it when the reading stops (BR4.5)."""
+    """Read ``body`` in chunks; always ``close`` it when the reading stops."""
     try:
         while True:
             chunk = body.read(STREAM_CHUNK_SIZE)
@@ -116,15 +116,15 @@ def _read_chunks(body: Any, s3_key: str, close: Callable[[], None]) -> Iterator[
 
 
 class S3Service:
-    """S3操作を管理するサービスクラス"""
+    """Service class that manages S3 operations."""
 
     def __init__(self, bucket_name: str, region_name: str = "us-east-1"):
         """
-        S3サービスを初期化
+        Initialize the S3 service
 
         Args:
-            bucket_name: S3バケット名
-            region_name: AWSリージョン名
+            bucket_name: S3 bucket name
+            region_name: AWS region name
         """
         self.bucket_name = bucket_name
         self.region_name = region_name
@@ -139,20 +139,20 @@ class S3Service:
         tags: Mapping[str, str] | None = None,
     ) -> str:
         """
-        S3にファイルをアップロード
+        Upload a file to S3
 
         Args:
-            file_content: アップロードするファイルの内容（バイト列）
-            s3_key: S3オブジェクトキー（例: "uploads/uuid_filename.txt"）
-            content_type: オブジェクトのContent-Type（未指定時はS3の既定値）
-            tags: Object tags to place with the object (U5: ``pending=true``
-                on unattached uploads, BR5.2)
+            file_content: File content (bytes)
+            s3_key: S3 object key (e.g. "uploads/uuid_filename.txt")
+            content_type: Content-Type of the object (S3 default if omitted)
+            tags: Object tags to place with the object (``pending=true``
+                on unattached uploads)
 
         Returns:
-            S3パス（例: "s3://bucket-name/uploads/uuid_filename.txt"）
+            S3 path (e.g. "s3://bucket-name/uploads/uuid_filename.txt")
 
         Raises:
-            Exception: アップロードに失敗した場合
+            Exception: If the upload fails
         """
         try:
             put_kwargs: dict[str, Any] = {
@@ -192,19 +192,19 @@ class S3Service:
 
     def download_file(self, s3_path: str) -> bytes:
         """
-        S3からファイルをダウンロード
+        Download a file from S3
 
         Args:
-            s3_path: S3パス（例: "s3://bucket-name/uploads/uuid_filename.txt"）
+            s3_path: S3 path (e.g. "s3://bucket-name/uploads/uuid_filename.txt")
 
         Returns:
-            ファイル内容（バイト列）
+            File content (bytes)
 
         Raises:
-            Exception: ダウンロードに失敗した場合
+            Exception: If the download fails
         """
         try:
-            # S3パスからバケット名とキーを抽出
+            # Extract the bucket name and key from the S3 path
             s3_key = self._extract_key_from_path(s3_path)
 
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
@@ -226,13 +226,13 @@ class S3Service:
             ) from e
 
     def open_stream(self, s3_path: str) -> AssetStream:
-        """Open an object to stream it in 256 KiB chunks (closed network U4).
+        """Open an object to stream it in 256 KiB chunks.
 
         The object is opened before anything is returned, so a missing or
-        unreadable object is an error code, never a half-sent response
-        (BR2.2, BR2.5, BR2.6). The body is closed when the chunks are read to
+        unreadable object is an error code, never a half-sent response.
+        The body is closed when the chunks are read to
         the end, when reading fails, when the iterator is discarded, or when
-        ``close`` is called; ``close`` may be called any number of times (BR4.5).
+        ``close`` is called; ``close`` may be called any number of times.
 
         Raises:
             S3ServiceError: ``S3_OBJECT_NOT_FOUND`` (no such key) or
@@ -268,19 +268,19 @@ class S3Service:
 
     def delete_file(self, s3_path: str) -> bool:
         """
-        S3からファイルを削除
+        Delete a file from S3
 
         Args:
-            s3_path: S3パス（例: "s3://bucket-name/uploads/uuid_filename.txt"）
+            s3_path: S3 path (e.g. "s3://bucket-name/uploads/uuid_filename.txt")
 
         Returns:
-            削除成功時True、失敗時False
+            True on success, False on failure
 
         Raises:
-            Exception: 削除に失敗した場合
+            Exception: If the deletion fails
         """
         try:
-            # S3パスからバケット名とキーを抽出
+            # Extract the bucket name and key from the S3 path
             s3_key = self._extract_key_from_path(s3_path)
 
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=s3_key)
@@ -295,7 +295,7 @@ class S3Service:
             ) from e
 
     def exists(self, s3_path: str) -> bool:
-        """Whether an object is at ``s3_path`` (U7 BR2.2, BR2.8).
+        """Whether an object is at ``s3_path``.
 
         Raises:
             S3ServiceError: The check itself failed (not a missing object).
@@ -321,7 +321,7 @@ class S3Service:
                 code=ErrorCode.S3_OPERATION_FAILED,
             ) from e
 
-    # --- U5: keys, tags and copies (BR5.2, BR5.3, BR6.1) ---------------------------
+    # --- Keys, tags and copies ---------------------------------------------------
 
     def path_of(self, s3_key: str) -> str:
         """The ``s3://bucket/key`` path of a key in this bucket."""
@@ -367,7 +367,7 @@ class S3Service:
         """Copy an object inside the bucket, without tags.
 
         ``TaggingDirective="REPLACE"`` with no tags means the copy needs no
-        tagging permission on the destination (infrastructure-specification.md).
+        tagging permission on the destination.
 
         Returns:
             The ``s3://`` path of the copy.
@@ -383,10 +383,10 @@ class S3Service:
         )
         return self.path_of(dest_key)
 
-    # --- Advanced generation U1: multipart uploads and head reads ------------------
+    # --- Multipart uploads and head reads ------------------------------------------
 
     def create_multipart_upload(self, s3_key: str, content_type: str) -> str:
-        """Start a multipart upload at ``s3_key`` (BR2.3).
+        """Start a multipart upload at ``s3_key``.
 
         Returns:
             The upload ID.
@@ -406,13 +406,13 @@ class S3Service:
         part_sizes: Mapping[int, int],
         expiration: int = 3600,
     ) -> list[PartUrl]:
-        """Presigned ``UploadPart`` URLs for the given part numbers (BR2.3, BR2.4).
+        """Presigned ``UploadPart`` URLs for the given part numbers.
 
         ``Bucket``, ``Key``, ``UploadId``, ``PartNumber`` and the part's
         ``Content-Length`` are signed, so S3 refuses a body of another size
         (the browser sets Content-Length itself). No Content-MD5 or checksum
         header is part of the signature, because the browser sends none
-        (PoC Q6). A URL writes to this one key only.
+        (measured in a PoC). A URL writes to this one key only.
 
         Args:
             s3_path: The object's ``s3://`` path.
@@ -444,12 +444,12 @@ class S3Service:
             raise S3ServiceError(
                 "part url generation failed", code=ErrorCode.S3_OPERATION_FAILED
             ) from e
-        # The URLs themselves are never logged (security-design.md §3).
+        # The URLs themselves are never logged.
         logger.info("Generated %d part URLs", len(urls))
         return urls
 
     def list_parts(self, s3_key: str, upload_id: str) -> list[UploadedPart]:
-        """Every part S3 holds for the upload, in part-number order (BR2.7).
+        """Every part S3 holds for the upload, in part-number order.
 
         Raises:
             S3ServiceError: ``S3_OBJECT_NOT_FOUND`` (no such upload) or
@@ -499,7 +499,7 @@ class S3Service:
         )
 
     def abort_multipart_upload(self, s3_key: str, upload_id: str) -> bool:
-        """Drop an upload and its parts (BR2.5, BR2.7). Idempotent.
+        """Drop an upload and its parts. Idempotent.
 
         Returns:
             ``False`` when the upload was already gone.
@@ -516,7 +516,7 @@ class S3Service:
         return True
 
     def read_range(self, s3_key: str, length: int) -> bytes:
-        """The first ``length`` bytes of an object (the whole object if shorter, BR3.1).
+        """The first ``length`` bytes of an object (the whole object if shorter).
 
         Raises:
             S3ServiceError: ``S3_OBJECT_NOT_FOUND`` or ``S3_OPERATION_FAILED``.
@@ -529,7 +529,7 @@ class S3Service:
     def read_tail(self, s3_key: str, length: int) -> bytes:
         """The last ``length`` bytes of an object (the whole object if shorter).
 
-        U4 NFR3.25: a PDF's trailer and a docx's ZIP directory are at the end.
+        A PDF's trailer and a docx's ZIP directory are at the end.
 
         Raises:
             S3ServiceError: ``S3_OBJECT_NOT_FOUND`` or ``S3_OPERATION_FAILED``.
@@ -540,7 +540,7 @@ class S3Service:
         return bytes(response["Body"].read())
 
     def get_checksum(self, s3_key: str) -> str | None:
-        """The whole-object ``ChecksumCRC64NVME`` of an object (BR3.3, contract C4).
+        """The whole-object ``ChecksumCRC64NVME`` of an object.
 
         Returns:
             The checksum, or ``None`` when S3 holds none for the object.
@@ -552,10 +552,10 @@ class S3Service:
         checksum = response.get("ChecksumCRC64NVME")
         return str(checksum) if checksum else None
 
-    # --- Advanced generation U2: deletion of every version and refresh ------------
+    # --- Deletion of every version and refresh ---------------------------------
 
     def delete_all_versions(self, s3_key: str) -> int:
-        """Delete every version and delete marker of exactly ``s3_key`` (BR14.1).
+        """Delete every version and delete marker of exactly ``s3_key``.
 
         The listing is by prefix, so only entries whose key equals ``s3_key``
         are deleted (``<key>-x`` stays). Deletions go 1,000 per request.
@@ -601,11 +601,11 @@ class S3Service:
         return len(targets)
 
     def refresh_object(self, s3_key: str) -> str | None:
-        """Copy an object onto its own key so its creation date is new (BR13.4).
+        """Copy an object onto its own key so its creation date is new.
 
         The copy replaces the metadata (keeping the content type), keeps
         SSE-S3, asks S3 for a new ``CRC64NVME`` checksum and writes no tags
-        (no tagging permission is needed, NFR3.19). The bytes never pass
+        (no tagging permission is needed). The bytes never pass
         through the application.
 
         Returns:
@@ -656,7 +656,7 @@ class S3Service:
         """Write an object only when nothing is at the key (``IfNoneMatch: *``).
 
         Used for the analysis record, written with ``pending=true`` until a
-        persona is saved (BR9.1).
+        persona is saved.
 
         Raises:
             S3ObjectExistsError: An object is already at the key.
@@ -714,19 +714,19 @@ class S3Service:
 
     def _extract_key_from_path(self, s3_path: str) -> str:
         """
-        S3パスからオブジェクトキーを抽出
+        Extract the object key from an S3 path
 
         Args:
-            s3_path: S3パス（例: "s3://bucket-name/uploads/uuid_filename.txt"）
+            s3_path: S3 path (e.g. "s3://bucket-name/uploads/uuid_filename.txt")
 
         Returns:
-            S3オブジェクトキー（例: "uploads/uuid_filename.txt"）
+            S3 object key (e.g. "uploads/uuid_filename.txt")
         """
-        # "s3://bucket-name/" の部分を削除
+        # Remove the "s3://bucket-name/" part
         if s3_path.startswith("s3://"):
-            # "s3://" を削除
+            # Remove "s3://"
             path_without_protocol = s3_path[5:]
-            # 最初の "/" までがバケット名、それ以降がキー
+            # Up to the first "/" is the bucket name; the rest is the key
             parts = path_without_protocol.split("/", 1)
             if len(parts) == 2:
                 return parts[1]
@@ -737,17 +737,17 @@ class S3Service:
 
     def generate_presigned_url(self, s3_path: str, expiration: int = 3600) -> str:
         """
-        S3オブジェクトの署名付きURLを生成
+        Generate a presigned URL for an S3 object
 
         Args:
-            s3_path: S3パス（例: "s3://bucket-name/discussion_documents/uuid_filename.png"）
-            expiration: URL有効期限（秒）、デフォルト1時間
+            s3_path: S3 path (e.g. "s3://bucket-name/discussion_documents/uuid_filename.png")
+            expiration: URL expiry in seconds (default 1 hour)
 
         Returns:
-            署名付きURL
+            Presigned URL
 
         Raises:
-            Exception: URL生成に失敗した場合
+            Exception: If URL generation fails
         """
         try:
             s3_key = self._extract_key_from_path(s3_path)

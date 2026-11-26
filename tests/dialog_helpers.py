@@ -1,4 +1,4 @@
-"""Assertions on dialogs rendered by ``components/dialog.html`` (U3, contract C6)."""
+"""Assertions on dialogs rendered by ``components/dialog.html``."""
 
 import re
 

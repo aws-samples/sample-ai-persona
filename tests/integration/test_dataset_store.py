@@ -1,8 +1,9 @@
-"""DatasetStore（データセットの登録の読み書き）の結合テスト。moto を使う。
+"""Integration tests (moto) for DatasetStore, which reads and writes dataset registrations.
 
-U5 BR6.1・BR6.2（ペルソナ専用のデータセットは owner_persona_id を持ち、一覧に出ない）、
-U7 BR1.5（新規の登録は上書きしない、編集は渡した列だけ）、BR5.2・BR5.6（利用範囲は
-ADD / DELETE で、組織資産だけ。全部外すと列が消える）、NFR1.77。
+Covers: persona-dedicated datasets carry owner_persona_id and are left out of the list;
+a new registration does not overwrite, and an edit changes only the passed columns;
+scope is ADD / DELETE, for organization assets only, and the column disappears when all
+are removed.
 """
 
 from datetime import datetime
@@ -82,14 +83,14 @@ class TestPutAndGet:
         assert "owner_persona_id" not in _raw(client, dataset.id)
 
     def test_dedicated_dataset_keeps_its_persona(self, store):
-        """U5 BR6.1: ペルソナ専用のデータセットは owner_persona_id を持つ。"""
+        """A persona-dedicated dataset has owner_persona_id."""
         dataset = _dataset(owner_persona_id="p1")
         store.put_new(dataset)
 
         assert store.get(dataset.id).owner_persona_id == "p1"
 
     def test_existing_id_is_refused_and_the_scope_stays(self, store):
-        """U7 BR1.5: 新規の登録は上書きしない（利用範囲が消えない）。"""
+        """A new registration does not overwrite (the scope is not lost)."""
         dataset = _dataset()
         store.put_new(dataset)
         store.update_scope(dataset.id, **_scope(add=frozenset({"sales"})))
@@ -141,7 +142,7 @@ class TestUpdateFields:
 
 class TestListAndDelete:
     def test_listing_leaves_out_dedicated_in_the_scan(self, store, client):
-        """U5 BR6.2: 一覧はペルソナ専用を scan の条件で外す。"""
+        """The list excludes persona-dedicated datasets with a scan condition."""
         org = _dataset()
         store.put_new(org)
         store.put_new(_dataset(owner_persona_id="p1"))
@@ -224,7 +225,7 @@ class TestUpdateScope:
         assert _raw(client, "gone") is None
 
     def test_dedicated_dataset_is_refused(self, store, client):
-        """BR5.6: 利用範囲は組織資産だけ（ペルソナ専用には付けない）。"""
+        """Scope applies to organization assets only (not to persona-dedicated ones)."""
         dedicated = _dataset(owner_persona_id="p1")
         store.put_new(dedicated)
 

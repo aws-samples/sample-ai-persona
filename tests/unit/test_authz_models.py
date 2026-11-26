@@ -1,4 +1,4 @@
-"""Principal / Role / Permission / AccessTarget / Department（約束 C1）の単体テスト。"""
+"""Unit tests for Principal / Role / Permission / AccessTarget / Department."""
 
 import dataclasses
 
@@ -56,7 +56,7 @@ class TestPrincipal:
 
 
 class TestPermission:
-    """ロールから権限への対応表（BR2.1、約束 C1）。"""
+    """Mapping from roles to permissions."""
 
     def test_six_permission_values(self):
         assert {p.value for p in Permission} == {
@@ -83,7 +83,7 @@ class TestPermission:
         assert permissions_of(frozenset()) == frozenset()
 
     def test_unknown_role_names_add_nothing(self):
-        """コードにない role: のグループだけなら、権限は空（BR2.9、NFR1.7）。"""
+        """Groups with only a role: not in the code yield empty permissions."""
         assert permissions_of({"owner"}) == frozenset()  # type: ignore[arg-type]
 
     def test_the_table_lists_only_known_roles(self):
@@ -95,7 +95,7 @@ class TestPermission:
 
 
 class TestAccessTarget:
-    """判定の対象（約束 C1、C3）。判定に要る項目だけを持つ。"""
+    """The target of a decision. Holds only the fields the decision needs."""
 
     def test_cannot_be_changed(self):
         target = AccessTarget(ResourceType.PERSONA, "p-1", owner_sub="user-1")

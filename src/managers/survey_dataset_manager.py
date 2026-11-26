@@ -1,23 +1,22 @@
 """
-SurveyDatasetManager
-データセット管理 + DWH連携 + フィルタ操作を担当するマネージャークラス。
+SurveyDatasetManager: dataset management, DWH integration and filter operations.
 
-v1.0.0 U7 (``functional-design/rules.md``):
+Rules:
 
-- BR4.1: managing persona data (Nemotron download, custom import, delete,
+- Managing persona data (Nemotron download, custom import, delete,
   rename, usage scope, DWH extraction, the temporary files of the import)
   needs ``settings:manage``; others get ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (the
   same 404 as a missing page). Reading is for everyone.
-- BR4.2 / BR5.3: custom data is listed, shown and used only when
+- Custom data is listed, shown and used only when
   ``can_use_asset`` holds (its scope meets the user's departments, or
   ``settings:manage``); otherwise it reads as missing. Nemotron needs no scope.
-- BR4.3〜BR4.5: an import gets a new ID; the file goes to
+- An import gets a new ID; the file goes to
   ``persona-dataset/custom/{id}.parquet`` first, then the record and its name
   reservation in one transaction (a failure removes the file). No
-  ``meta.json`` is written. A DWH import finds a free name (`` (2)``…).
-- BR4.6: delete removes the record and its reservation, then the file (three
+  ``meta.json`` is written. A DWH import finds a free name (`` (2)``...).
+- Delete removes the record and its reservation, then the file (three
   tries, then ``survey.cleanup_failed``).
-- BR5.2: the scope changes with ``ADD`` / ``DELETE``; only added departments
+- The scope changes with ``ADD`` / ``DELETE``; only added departments
   must exist (deleted groups can be removed). ``asset.scope_changed`` is logged.
 """
 
@@ -78,18 +77,18 @@ from .shared.structured_log import log_event
 logger = logging.getLogger(__name__)
 
 _CUSTOM = ResourceType.CUSTOM_PERSONA_DATA
-#: Most names tried when a DWH import's name is taken (BR4.4).
+#: Most names tried when a DWH import's name is taken.
 MAX_NAME_ATTEMPTS = 10
 
 
 class SurveyDatasetManagerError(CodedError):
-    """SurveyDatasetManager層の基底例外"""
+    """Base exception of the SurveyDatasetManager layer"""
 
     pass
 
 
 class SurveyDatasetValidationError(SurveyDatasetManagerError):
-    """バリデーションエラー"""
+    """Validation error"""
 
     pass
 
@@ -101,7 +100,7 @@ def _not_found(message: str) -> SurveyDatasetManagerError:
 
 
 def _nemotron_missing() -> SurveyDatasetManagerError:
-    """No Nemotron file: placed beforehand (s3) or downloaded (BR2.4).
+    """No Nemotron file: placed beforehand (s3) or downloaded.
 
     The S3 key is a file path, so it goes to the log only, never the context.
     """
@@ -126,9 +125,9 @@ def _is_missing_object(error: Exception) -> bool:
 
 
 class SurveyDatasetManager:
-    """データセット管理 + DWH連携 + フィルタ操作"""
+    """Dataset management + DWH integration + filter operations"""
 
-    #: A dataset must hold at least the rows one survey samples (FR4.1)
+    #: A dataset must hold at least the rows one survey samples
     MIN_SEGMENT_ROWS = MIN_SURVEY_PERSONAS
     MAX_SEGMENT_ROWS = 10000
 
@@ -152,7 +151,7 @@ class SurveyDatasetManager:
             s3_service: Persona data files and the import's temporary files.
             custom_persona_data_store: Custom persona data records.
             resource_lookup: The per-task ``ResourceLookup`` (decisions).
-            departments: The per-task department copy (scope choices, C4).
+            departments: The per-task department copy (scope choices).
             sleep: Wait between cleanup attempts (tests).
         """
         self.batch_service = (
@@ -196,7 +195,7 @@ class SurveyDatasetManager:
         )
 
     def ensure_manageable(self, principal: Principal) -> None:
-        """Refuse a user who may not manage persona data (admin only, BR4.1).
+        """Refuse a user who may not manage persona data (admin only).
 
         For the routers to check before work they run in the background or
         stream (Nemotron download, DWH extraction), whose failures would not
@@ -208,7 +207,7 @@ class SurveyDatasetManager:
         self._require_manage(principal)
 
     def import_scope_choices(self, principal: Principal) -> list[Department]:
-        """The departments an import may be scoped to (admin: all, BR5.2).
+        """The departments an import may be scoped to (admin: all).
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (not an admin) or
@@ -217,12 +216,12 @@ class SurveyDatasetManager:
         self._require_manage(principal)
         return self._department_list()
 
-    # =========================================================================
-    # Nemotron データセット
-    # =========================================================================
+    # ==========================================================================
+    # Nemotron dataset
+    # ==========================================================================
 
     def check_nemotron_status(self) -> NemotronDatasetStatus:
-        """The Nemotron file's state for the screens (no user data, BR2.2).
+        """The Nemotron file's state for the screens (no user data).
 
         Never raises: any HEAD failure (``ClientError``, a connection failure,
         ...) reads as "no file" and is logged as a warning, so the screens
@@ -245,7 +244,7 @@ class SurveyDatasetManager:
         )
 
     def ensure_nemotron_downloadable(self, principal: Principal) -> None:
-        """Refuse a Nemotron download before the router starts it (BR2.3).
+        """Refuse a Nemotron download before the router starts it.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (not an admin) or
@@ -263,7 +262,7 @@ class SurveyDatasetManager:
             )
 
     def download_nemotron_dataset(self, principal: Principal) -> NemotronDatasetStatus:
-        """Nemotronデータセットをダウンロード・S3配置する（admin、BR4.1、BR2.3）。"""
+        """Download the Nemotron dataset and place it in S3 (admin)."""
         self._require_manage(principal)
         self._refuse_placed_source()
         parquet_bytes = self.batch_service.download_nemotron_dataset()
@@ -278,7 +277,7 @@ class SurveyDatasetManager:
         return self.check_nemotron_status()
 
     def _ensure_parquet_uri(self) -> None:
-        """S3上にParquetが存在するか確認し、batch_serviceにURIをセットする。"""
+        """Check that the Parquet exists on S3 and set the URI on batch_service."""
         bucket = self.s3_service.bucket_name
         key = config.NEMOTRON_DATASET_KEY
         try:
@@ -290,16 +289,16 @@ class SurveyDatasetManager:
             raise _nemotron_missing() from e
         self.batch_service.set_parquet_s3_uri(f"s3://{bucket}/{key}")
 
-    # =========================================================================
-    # カスタムペルソナデータの参照（BR4.2、BR5.3）
-    # =========================================================================
+    # ==========================================================================
+    # Reading custom persona data
+    # ==========================================================================
 
     def list_persona_data(self, principal: Principal) -> PersonaDataListing:
         """The custom data the user may use; every record for admins.
 
         Raises:
             CodedError: ``LOOKUP_UNAVAILABLE`` when the table cannot be read
-                (never an empty list instead, NFR1.76).
+                (never an empty list instead).
         """
         try:
             records = self._records.list_all()
@@ -324,7 +323,7 @@ class SurveyDatasetManager:
     def get_custom_persona_data(
         self, principal: Principal, data_id: str
     ) -> CustomPersonaData:
-        """One record the user may use (BR4.2).
+        """One record the user may use.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (missing or out of scope).
@@ -338,7 +337,7 @@ class SurveyDatasetManager:
         return record
 
     def _usable_datasource(self, principal: Principal, datasource: str) -> str:
-        """The datasource value after its decision (BR2.12, BR4.2)."""
+        """The datasource value after its decision."""
         try:
             ref = PersonaDataRef.parse(datasource)
         except ValueError as e:
@@ -377,9 +376,9 @@ class SurveyDatasetManager:
     def _department_list(self) -> list[Department]:
         return list(self._department_directory.list_all())
 
-    # =========================================================================
-    # 取り込み・削除・名前の変更（admin、BR4.3〜BR4.6）
-    # =========================================================================
+    # ==========================================================================
+    # Import, delete, rename (admin)
+    # ==========================================================================
 
     def upload_custom_dataset(
         self,
@@ -391,17 +390,17 @@ class SurveyDatasetManager:
         shared_group_ids: frozenset[str] = frozenset(),
         avoid_name_conflict: bool = False,
     ) -> CustomPersonaData:
-        """Import a CSV as new custom persona data (BR4.3〜BR4.5).
+        """Import a CSV as new custom persona data.
 
         Args:
             principal: The admin.
             csv_bytes: The CSV.
-            name: Its name (1〜100 characters after stripping).
+            name: Its name (1 to 100 characters after stripping).
             column_mapping: Standard column -> CSV column.
             extra_columns: Columns outside the standard ones.
             shared_group_ids: The scope chosen in the dialog (empty = admin only).
             avoid_name_conflict: For a DWH import's generated name: try
-                ``{name} (2)`` … up to ten names.
+                ``{name} (2)`` ... up to ten names.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (not an admin),
@@ -415,9 +414,9 @@ class SurveyDatasetManager:
         df, parquet_bytes = self.batch_service.convert_csv_to_parquet(
             csv_bytes, column_mapping
         )
-        # アンケートの最小人数を下回るデータセットは、アンケート実行時に
-        # 必ず失敗する。DWH抽出経路と同じ下限をここでも適用し、使えない
-        # データセットを作らせない（Issue #118）。
+        # A dataset below the survey minimum always fails at survey run time.
+        # Apply the same lower bound as the DWH extraction path here, so an
+        # unusable dataset is never created (Issue #118).
         self._validate_dataset_row_count(len(df))
         record = CustomPersonaData.create_new(
             name=base,
@@ -467,7 +466,7 @@ class SurveyDatasetManager:
         )
 
     def delete_custom_dataset(self, principal: Principal, data_id: str) -> None:
-        """Delete the record and its reservation, then the file (BR4.6).
+        """Delete the record and its reservation, then the file.
 
         Surveys made from it stay (they show the name they were run with).
 
@@ -495,7 +494,7 @@ class SurveyDatasetManager:
     def rename_custom_dataset(
         self, principal: Principal, data_id: str, name: str
     ) -> CustomPersonaData:
-        """Rename one record; the reservation moves with it (BR4.4).
+        """Rename one record; the reservation moves with it.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` /
@@ -522,12 +521,12 @@ class SurveyDatasetManager:
             ) from e
         return record.renamed(new_name)
 
-    # =========================================================================
-    # 利用範囲（admin、BR5.2）
-    # =========================================================================
+    # ==========================================================================
+    # Usage scope (admin)
+    # ==========================================================================
 
     def scope_dialog(self, principal: Principal, data_id: str) -> AssetScopeDialog:
-        """What the usage-scope dialog shows (M10).
+        """What the usage-scope dialog shows.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND``.
@@ -547,7 +546,7 @@ class SurveyDatasetManager:
     def update_scope(
         self, principal: Principal, data_id: str, change: AssetScopeChange
     ) -> CustomPersonaData:
-        """Change the scope with ``ADD`` / ``DELETE`` (BR5.2).
+        """Change the scope with ``ADD`` / ``DELETE``.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` or ``SHARE_SCOPE_INVALID``
@@ -595,12 +594,12 @@ class SurveyDatasetManager:
             sleep=self._sleep,
         )
 
-    # =========================================================================
-    # DWH連携セグメント抽出（admin）
-    # =========================================================================
+    # ==========================================================================
+    # DWH segment extraction (admin)
+    # ==========================================================================
 
     def ensure_data_agent_allowed(self, principal: Principal) -> None:
-        """Refuse a DWH extraction before the router starts streaming (BR3.7).
+        """Refuse a DWH extraction before the router starts streaming.
 
         Raises:
             CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (not an admin) or
@@ -612,7 +611,7 @@ class SurveyDatasetManager:
     def extract_segment_from_dwh(
         self, principal: Principal, condition: str, event_queue: Any
     ) -> Dict[str, Any]:
-        """データ分析エージェント連携でDWHから顧客セグメントを抽出する。"""
+        """Extract customer segments from the DWH through the data analysis agent integration."""
         from ..services.data_agent_service import (
             DataAgentService,
             create_data_agent_tool,
@@ -715,7 +714,7 @@ class SurveyDatasetManager:
         }
 
     def _generate_dataset_name(self, condition: str) -> str:
-        """抽出条件からデータセット名を自動生成する。"""
+        """Auto-generate a dataset name from the extraction conditions."""
         if self.ai_service:
             prompt = build_dataset_name_prompt(condition)
             try:
@@ -732,7 +731,7 @@ class SurveyDatasetManager:
         return clean[:20] if len(clean) > 20 else clean
 
     def _validate_segment_row_count(self, row_count: int) -> None:
-        """抽出件数バリデーション。"""
+        """Validate the extracted row count."""
         if row_count < self.MIN_SEGMENT_ROWS:
             raise SurveyDatasetValidationError(
                 f"row count {row_count} below minimum {self.MIN_SEGMENT_ROWS}",
@@ -747,11 +746,12 @@ class SurveyDatasetManager:
             )
 
     def _validate_dataset_row_count(self, row_count: int) -> None:
-        """アップロードされたデータセットの件数バリデーション。
+        """Validate the row count of an uploaded dataset.
 
-        DWH抽出（:meth:`_validate_segment_row_count`）と下限は同じだが、
-        こちらは「フィルタでは救えない、ファイル自体が足りない」状況なので
-        別のコードで文言を分ける。
+        The lower bound is the same as for DWH extraction
+        (:meth:`_validate_segment_row_count`), but this is a situation where
+        "the file itself is too small and no filter can save it", so the wording
+        uses a different code.
         """
         if row_count < self.MIN_SEGMENT_ROWS:
             raise SurveyDatasetValidationError(
@@ -760,14 +760,14 @@ class SurveyDatasetManager:
                 context={"row_count": row_count, "min_rows": self.MIN_SEGMENT_ROWS},
             )
 
-    # =========================================================================
-    # カラムマッピング提案（admin）
-    # =========================================================================
+    # ==========================================================================
+    # Column mapping suggestion (admin)
+    # ==========================================================================
 
     def suggest_column_mapping(
         self, principal: Principal, columns: List[str], samples: Dict[str, List[str]]
     ) -> Dict[str, Any]:
-        """LLMを使ったカラムマッピング提案。"""
+        """Column mapping suggestion using an LLM."""
         self._require_manage(principal)
         if not self.agent_service:
             return {"mapping": {}, "extra_columns": []}
@@ -797,39 +797,39 @@ class SurveyDatasetManager:
 
         return {"mapping": {}, "extra_columns": []}
 
-    # =========================================================================
-    # 一時ファイル操作（admin。temp_key の扱いは今のまま、BR4.7）
-    # =========================================================================
+    # ==========================================================================
+    # Temporary file operations (admin; temp_key handling unchanged)
+    # ==========================================================================
 
     def upload_temp_file(self, principal: Principal, content: bytes, key: str) -> None:
-        """一時ファイルをS3にアップロードする。"""
+        """Upload a temporary file to S3."""
         self._require_manage(principal)
         self.s3_service.upload_file(content, key)
 
     def download_temp_file(self, principal: Principal, key: str) -> bytes:
-        """一時ファイルをS3からダウンロードする。"""
+        """Download a temporary file from S3."""
         self._require_manage(principal)
         bucket = self.s3_service.bucket_name
         return self.s3_service.download_file(f"s3://{bucket}/{key}")
 
     def delete_temp_file(self, principal: Principal, key: str) -> None:
-        """一時ファイルをS3から削除する。"""
+        """Delete a temporary file from S3."""
         self._require_manage(principal)
         self.s3_service.s3_client.delete_object(
             Bucket=self.s3_service.bucket_name, Key=key
         )
 
-    # =========================================================================
-    # CSV解析・プレビュー（admin）
-    # =========================================================================
+    # ==========================================================================
+    # CSV parsing and preview (admin)
+    # ==========================================================================
 
     def parse_csv_columns(self, principal: Principal, content: bytes) -> Dict[str, Any]:
-        """CSVファイルのカラムを解析する。"""
+        """Parse the columns of a CSV file."""
         self._require_manage(principal)
         return parse_csv_columns_with_samples(content, STANDARD_COLUMNS)
 
     def get_standard_columns(self) -> Dict[str, Dict[str, Any]]:
-        """標準カラム定義を取得する（利用者のデータを持たない）。"""
+        """Get the standard column definitions (holds no user data)."""
         return STANDARD_COLUMNS
 
     def preview_system_prompt(
@@ -839,19 +839,19 @@ class SurveyDatasetManager:
         column_mapping: Dict[str, str],
         extra_columns: Optional[List[Dict[str, str]]] = None,
     ) -> str:
-        """マッピング設定に基づくシステムプロンプトのプレビュー（取り込みの途中）。"""
+        """Preview of the system prompt from the mapping settings (mid-import)."""
         self._require_manage(principal)
         row = parse_csv_first_row_with_mapping(csv_bytes, column_mapping)
         return build_persona_system_prompt(row, extra_columns)
 
-    # =========================================================================
-    # フィルタ・プレビュー統計（データソースを判定してから読む、BR2.12）
-    # =========================================================================
+    # ==========================================================================
+    # Filters and preview statistics (the data source is decided before reading)
+    # ==========================================================================
 
     def get_available_filter_values(
         self, principal: Principal, datasource: str
     ) -> Dict[str, Dict[str, Any]]:
-        """利用可能なフィルター値を取得する。"""
+        """Get the available filter values."""
         source = self._usable_datasource(principal, datasource)
         return self.batch_service.get_available_filter_values(source)
 
@@ -861,7 +861,7 @@ class SurveyDatasetManager:
         filters: Optional[Dict[str, Any]] = None,
         datasource: str = "nemotron",
     ) -> int:
-        """フィルター条件に合致するレコード数を取得する。"""
+        """Get the number of records matching the filter conditions."""
         source = self._usable_datasource(principal, datasource)
         return self.batch_service.get_filtered_count(filters, source)
 
@@ -871,11 +871,11 @@ class SurveyDatasetManager:
         filters: Optional[Dict[str, Any]] = None,
         datasource: str = "nemotron",
     ) -> Dict[str, Any]:
-        """プレビュー用の統計情報を取得する。"""
+        """Get statistics for preview."""
         source = self._usable_datasource(principal, datasource)
         return self.batch_service.get_preview_stats(filters, source)
 
     def get_datasource_count(self, principal: Principal, datasource: str) -> int:
-        """データソースの総レコード数を取得する。"""
+        """Get the total number of records of the data source."""
         source = self._usable_datasource(principal, datasource)
         return self.batch_service.get_total_count(source)

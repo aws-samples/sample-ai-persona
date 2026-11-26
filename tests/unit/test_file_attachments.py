@@ -1,11 +1,10 @@
-"""FileAttachments（ファイルの親への紐付けと配信の判定、U5）の単体テスト。
+"""Unit tests for FileAttachments: attaching files to a parent and deciding delivery.
 
-security-design.md §3 の手順 1〜7、detach、can_read_file、register_parent。
-UploadedFileStore と S3Service は moto で本物を使い、AccessPolicy も本物を使う
-（判定をモックにしない）。並行の順序は、S3 のタグの操作とトランザクションに差し込みの
-関数を持たせたラッパーで作る（スレッドや time.sleep に頼らない）。
-
-BR5.3〜BR5.7、NFR1.27、NFR1.29、NFR1.34、NFR1.37〜NFR1.39、NFR8.15。
+Covers the attach steps 1-7, detach, can_read_file and register_parent.
+UploadedFileStore and S3Service are the real ones on moto, and so is AccessPolicy
+(the decision is never mocked). Concurrent ordering is built with wrappers that run
+an injected function inside the S3 tag operation and the transaction, so the tests
+need no threads or time.sleep.
 """
 
 from datetime import datetime, timezone
@@ -118,7 +117,7 @@ B = MEMBER_B.principal()
 
 
 # =============================================================================
-# attach_all（手順 1〜6）
+# attach_all (steps 1-6)
 # =============================================================================
 
 
@@ -202,7 +201,7 @@ class TestAttach:
 
 
 # =============================================================================
-# 失敗と付け直し（手順 3・4・5・7）
+# Failures and re-attaching (steps 3, 4, 5, 7)
 # =============================================================================
 
 
@@ -315,7 +314,7 @@ class TestAttachFailures:
 
 
 class TestConcurrentOrders:
-    """security-design.md §3 の並行の順序（A が紐付け、B が同じファイルで付け直し）。"""
+    """Concurrent ordering: A attaches, B re-attaches the same file."""
 
     def test_b_restores_between_a_tag_removal_and_a_transaction(self, store, s3, clock):
         f = _upload(store, s3)
@@ -404,7 +403,7 @@ class TestDetach:
 
 
 # =============================================================================
-# can_read_file と register_parent（BR5.4、BR5.5、BR5.7）
+# can_read_file and register_parent
 # =============================================================================
 
 
@@ -433,7 +432,7 @@ class TestCanReadFile:
 
         assert files.can_read_file(A, f.id)
         assert files.can_read_file(ADMIN.principal(), f.id)
-        # a department member is not served until U6 registers discussions
+        # a department member is not served until discussions are registered
         sales_peer = Principal(
             sub="local:peer@example.com",
             roles=A.roles,
@@ -475,7 +474,7 @@ class TestCanReadFile:
 
 
 # =============================================================================
-# 組み立て（logical-components.md「組み立て」、約束 C3）
+# Assembly
 # =============================================================================
 
 
@@ -505,7 +504,6 @@ class TestAssembly:
                 ResourceType.DISCUSSION: "topic",
                 ResourceType.DATASET: "name",
                 ResourceType.KNOWLEDGE_BASE: "name",
-                # U7（約束 C3）
                 ResourceType.SURVEY_TEMPLATE: "name",
                 ResourceType.SURVEY: "name",
                 ResourceType.CUSTOM_PERSONA_DATA: "name",
@@ -517,7 +515,7 @@ class TestAssembly:
     def test_discussion_parent_is_registered_with_the_discussion_readers(
         self, store, s3, clock
     ):
-        """U6 BR5.1: 議論を親とする資料は、議論を読める人に配信する（NFR1.53）。"""
+        """A file whose parent is a discussion is served to anyone who can read the discussion."""
         from src.managers.components.sharing_runtime import build_access_parts
         from src.models.authz import AccessTarget, ResourceType
 
@@ -558,7 +556,7 @@ class TestAssembly:
     def test_survey_template_parent_is_registered_with_the_template_readers(
         self, store, s3, clock
     ):
-        """U7 BR1.9: テンプレートの画像は、テンプレートを読める人に配信する（NFR1.71）。"""
+        """A template image is served to anyone who can read the template."""
         from src.managers.components.sharing_runtime import build_access_parts
         from src.models.authz import AccessTarget, ResourceType
 
@@ -594,7 +592,7 @@ class TestAssembly:
 
 
 class TestDeleteAttached:
-    """U6 BR1.5 (3): 議論の削除で、紐付いた資料（項目と S3 のオブジェクト）を消す。"""
+    """Deleting a discussion removes its attached files (items and S3 objects)."""
 
     def test_deletes_the_metadata_and_the_object(self, files, store, s3):
         f = _upload(store, s3)

@@ -6,7 +6,7 @@
 <div class="max-w-6xl mx-auto">
     <h1 class="text-2xl font-bold text-gray-800 mb-6">システム設定</h1>
     
-    <!-- U6: 高度な生成（ベータ）の公開範囲と AI による詳細分析（C11、BR34）。機能を切った環境（閉域）では出さない -->
+    <!-- Visibility of advanced generation (beta) and AI detailed analysis. Not shown in environments where the feature is off (closed network). -->
     {% if show_advanced_generation_settings %}
     <section aria-labelledby="advanced-generation-settings-title" class="bg-white rounded-lg shadow-md p-6 mb-6">
         <div class="flex flex-wrap items-center gap-2 mb-2">
@@ -21,7 +21,7 @@
     </section>
     {% endif %}
 
-    <!-- データ連携機能 + データセット管理（1つのカード） -->
+    <!-- Data integration + dataset management (one card) -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <div class="flex flex-wrap items-center gap-2 mb-4">
             <h2 class="text-lg font-semibold text-gray-700">データ連携機能</h2>
@@ -33,7 +33,7 @@
             より具体的で根拠のある発言ができるようになります。
         </p>
 
-        <!-- データセット管理（同カード内） -->
+        <!-- Dataset management (in the same card) -->
         <div class="border-t border-gray-200 mt-6 pt-6">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="text-base font-semibold text-gray-700">データセット管理</h3>
@@ -46,7 +46,7 @@
         </div>
     </div>
 
-    <!-- ナレッジベース管理 -->
+    <!-- Knowledge base management -->
     <div class="bg-white rounded-lg shadow-md p-6">
         <div class="flex justify-between items-center mb-4">
             <div>
@@ -64,7 +64,7 @@
         </div>
     </div>
 
-    <!-- データ分析エージェント DWH連携設定 -->
+    <!-- Data analysis agent DWH integration settings -->
     <div class="bg-white rounded-lg shadow-md p-6 mt-6">
         <div class="flex flex-wrap items-center gap-2 mb-2">
             <h2 class="text-lg font-semibold text-gray-700">データ分析エージェント 連携</h2>
@@ -78,7 +78,7 @@
     </div>
 </div>
 
-<!-- ナレッジベース登録ダイアログ（開閉は app.js の Dialog。保存に成功したら dialogClose で閉じる） -->
+<!-- Knowledge base registration dialog (Dialog in app.js handles open/close; closed with dialogClose after a successful save) -->
 {% call dialog("kb-register-modal", "ナレッジベースを登録") %}
             <form hx-post="/settings/knowledge-bases"
                   hx-target="#kb-list"
@@ -131,10 +131,10 @@
             </form>
 {% endcall %}
 
-<!-- アップロードダイアログ（閉じたときの入力の初期化は dialog:closed で行う） -->
+<!-- Upload dialog (input is reset on dialog:closed when it closes) -->
 {% call dialog("upload-modal", "データセットをアップロード", panel_class="max-w-2xl") %}
             <form id="upload-form" x-data="{ step: 1, columns: [], filename: '', rowCount: 0, uploading: false }">
-                <!-- Step 1: ファイル選択 -->
+                <!-- Step 1: file selection -->
                 <div x-show="step === 1">
                     <div class="mb-4 p-4 bg-gray-50 rounded-md">
                         <p class="text-sm text-gray-600">
@@ -181,7 +181,7 @@
                     </div>
                 </div>
                 
-                <!-- Step 2: スキーマ確認・編集 -->
+                <!-- Step 2: schema review and editing -->
                 <div x-show="step === 2">
                     <div id="schema-preview" class="mb-4"></div>
                     
@@ -230,8 +230,8 @@
 {% endcall %}
 
 <script>
-// 安全なinnerHTML設定（DOMPurifyでサニタイズ）
-// NOTE: onchangeはサーバーサイドテンプレート(schema_preview.html)で使用されるため許可
+// Safe innerHTML assignment (sanitized with DOMPurify)
+// NOTE: onchange is allowed because it is used by the server-side template (schema_preview.html)
 function safeSetInnerHTML(elementOrId, html) {
     const el = typeof elementOrId === 'string' ? document.getElementById(elementOrId) : elementOrId;
     if (el) {
@@ -255,7 +255,7 @@ function updateColumnDesc(index, value) {
 
 let uploadFormData = { columns: [], filename: '', rowCount: 0 };
 
-// アップロードダイアログが閉じたら（×・Escape・アップロード後）入力を初期化する
+// Reset the input when the upload dialog closes (x, Escape, or after upload)
 document.addEventListener('dialog:closed', function(evt) {
     if (evt.detail && evt.detail.id === 'upload-modal') resetUploadForm();
 });
@@ -265,13 +265,13 @@ function closeUploadModal() {
 }
 
 function resetUploadForm() {
-    // フォームをリセット
+    // Reset the form
     const form = document.getElementById('upload-form');
     form.reset();
     document.getElementById('csv-selected-file').textContent = '';
     safeSetInnerHTML('schema-preview', '');
     uploadFormData = { columns: [], filename: '', rowCount: 0 };
-    // Alpine.jsのstepをリセット
+    // Reset the Alpine.js step
     if (form._x_dataStack) {
         form._x_dataStack[0].step = 1;
         form._x_dataStack[0].uploading = false;
@@ -287,13 +287,13 @@ function handleCsvFileSelect(file) {
     document.getElementById('csv-selected-file').textContent = `選択中: ${file.name}`;
     uploadFormData.filename = file.name;
     
-    // Alpine.jsのuploadingをtrueに
+    // Set Alpine.js uploading to true
     const form = document.getElementById('upload-form');
     if (form._x_dataStack) {
         form._x_dataStack[0].uploading = true;
     }
     
-    // スキーマ解析
+    // Schema analysis
     const formData = new FormData();
     formData.append('file', file);
     
@@ -302,14 +302,14 @@ function handleCsvFileSelect(file) {
         .then(html => {
             safeSetInnerHTML('schema-preview', html);
             
-            // スキーマデータを取得
+            // Get the schema data
             const colData = document.querySelector('#schema-preview [data-columns]');
             if (colData) {
                 uploadFormData.columns = JSON.parse(colData.dataset.columns);
                 uploadFormData.rowCount = parseInt(colData.dataset.rowcount || 0);
             }
             
-            // Step 2に進む
+            // Go to Step 2
             if (form._x_dataStack) {
                 form._x_dataStack[0].step = 2;
                 form._x_dataStack[0].uploading = false;

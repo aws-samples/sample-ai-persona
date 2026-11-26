@@ -1,14 +1,14 @@
 /**
- * 包含の判定（テスト用の補助、閉域対応 U2 BR1.4）。
+ * Coverage check (a test helper).
  *
- * ロールの文の (Action, Resource) が、エンドポイントのポリシーの Allow の文に含まれるかを判定する。
- * - ワイルドカードは IAM と同じ解釈: `*` はスラッシュ・コロンを含む任意の文字列（空も含む）、`?` は 1 文字
- * - ロール側の `*`・`?` はそれ自体が範囲を表すため、エンドポイント側のより広いワイルドカードにだけ含まれる
- * - Action は大文字・小文字を区別しない（IAM と同じ）
- * - CloudFormation の参照（Ref・Fn::GetAtt・Fn::ImportValue・Fn::Join）は flattenPolicyValue で 1 つの
- *   まとまりの文字列にし、同じ式どうしを同じ値として比べる（参照の中の文字はワイルドカードに使わない）
+ * Decides whether a role statement's (Action, Resource) is covered by an Allow statement of an endpoint policy.
+ * - Wildcards are read as IAM does: `*` matches any string including slashes and colons (and empty), `?` one character
+ * - `*` and `?` on the role side express a range themselves, so they are covered only by a broader wildcard on the endpoint side
+ * - Action is case-insensitive (as in IAM)
+ * - CloudFormation references (Ref, Fn::GetAtt, Fn::ImportValue, Fn::Join) are turned into one unit string
+ *   by flattenPolicyValue and compared as the same value when the expressions are the same (characters inside a reference are not used as wildcards)
  *
- * テンプレートの値は手で書き写さず、合成したテンプレートの文をそのまま渡す（unit-test-instructions.md）。
+ * Template values are not copied by hand; the statements of the synthesized template are passed as is.
  */
 
 /** One IAM policy statement as it appears in a synthesized template. */

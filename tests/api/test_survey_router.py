@@ -1,9 +1,6 @@
-"""Survey ルーターの API テスト（U7）。
+"""Survey router API tests.
 
-本物の U7 の Manager と判定の部品を moto の上で動かす（tests/api/u7_world.py）。
-BR1.2〜BR1.4、BR1.9、BR2.1、BR2.6、BR2.8、BR2.11、BR2.12、BR4.1、BR4.2、BR5.2、
-NFR1.66〜NFR1.74、NFR1.79、NFR4.14、AC2.1.2、AC2.1.3、AC2.2.4、AC2.5.1〜AC2.5.3、
-AC4.1.1〜AC4.1.5、AC4.4.1、AC4.4.2、AC4.4.4、AC5.1.1、AC5.1.3、AC5.2.2。
+Runs the real Managers and decision components on top of moto (tests/api/u7_world.py).
 """
 
 import json
@@ -32,7 +29,7 @@ _QUESTIONS = json.dumps(
 
 @pytest.fixture
 def aw(client, survey_world):
-    """ME signed in, with the real U7 Managers behind the routers."""
+    """ME signed in, with the real Managers behind the routers."""
     ME.login(client)
     world = ApiWorld(survey_world)
     with ExitStack() as stack:
@@ -49,7 +46,7 @@ def _preview_route(file_path: str) -> str:
 
 
 # =============================================================================
-# 画面の入口（今のまま）
+# Screen entry (unchanged)
 # =============================================================================
 
 
@@ -62,7 +59,7 @@ def test_template_new_form_loads(client):
 
 
 # =============================================================================
-# テンプレートの一覧（BR1.2、AC2.1.2、AC2.1.3、AC4.1.1、AC4.1.4、AC5.1.1）
+# Template list
 # =============================================================================
 
 
@@ -128,7 +125,7 @@ class TestTemplateList:
 
 
 # =============================================================================
-# テンプレートの読む・変える・消す（BR1.3、BR1.4、AC4.1.3、AC4.4.1）
+# Read, change and delete templates
 # =============================================================================
 
 
@@ -212,7 +209,7 @@ class TestTemplateAccess:
 
 
 # =============================================================================
-# アンケートの開始（BR2.1、BR2.12、AC2.5.1、AC2.5.2、AC4.4.5）
+# Start a survey
 # =============================================================================
 
 
@@ -281,7 +278,7 @@ class TestStart:
         assert listed.items[0].status == "queued"
 
     def test_execute_wakes_the_runner_without_waiting(self, aw, client):
-        """NFR1.4・WF1: 受付は保存して進行役を 1 回起こすだけ（推論を待たない）。"""
+        """Intake only saves and wakes the coordinator once (it does not wait for inference)."""
         template = aw.template()
 
         response = client.post(
@@ -294,7 +291,7 @@ class TestStart:
         aw.runner.start_execution.assert_not_called()
 
     def test_ten_personas_are_accepted(self, aw, client):
-        """FR4.1: 下限は 10。"""
+        """The lower bound is 10."""
         template = aw.template()
         assert (
             client.post(
@@ -311,7 +308,7 @@ class TestStart:
         assert response.headers["HX-Retarget"] == "#execute-error"
 
     def test_no_runner_is_a_config_error_and_nothing_is_saved(self, aw, client):
-        """BR9.1・FR10.1: 手元では CONFIG のエラーを開始画面に出し、何も保存しない。"""
+        """Locally, a CONFIG error is shown on the start screen and nothing is saved."""
         from src.models.errors import ErrorCode
         from web.error_messages import user_message_for_code
 
@@ -343,7 +340,7 @@ class TestStart:
     def test_preview_judges_with_the_minimum_from_the_model(
         self, aw, client, monkeypatch
     ):
-        """FR4.1: 最少人数はテンプレートに直接書かず、MIN_SURVEY_PERSONAS を使う。"""
+        """The minimum head count is not written into the template directly; MIN_SURVEY_PERSONAS is used."""
         import web.routers.survey as survey_router
 
         monkeypatch.setattr(survey_router, "MIN_SURVEY_PERSONAS", 600)
@@ -355,7 +352,7 @@ class TestStart:
 
 
 # =============================================================================
-# 結果（BR1.2〜BR1.4、BR2.6、BR2.8、BR2.11、AC4.1.2、AC4.4.4）
+# Results
 # =============================================================================
 
 
@@ -406,7 +403,7 @@ class TestResults:
         aw.ai.generate_standard_report_streaming.assert_not_called()
 
     def test_report_starts_only_from_a_checked_post(self, aw, client):
-        # GET（リンクの遷移・画像）や他サイトのフォームからは生成を始めない（NFR4.13）
+        # A GET (link navigation, image) or a form from another site must not start generation
         survey = aw.survey(name="自分の結果")
         url = f"/survey/results/{survey.id}/report/generate"
         assert client.get(url).status_code == 405
@@ -441,7 +438,7 @@ class TestResults:
         assert "results.csv" in response.headers["location"]
 
     def test_download_streams_the_csv_in_proxy_mode(self, aw, client, monkeypatch):
-        """閉域対応 U4 BR2.2、BR4.1: 本文が S3 の中身と同じで、日本語の名前で落ちる"""
+        """Closed network: the body equals the S3 content, even with a Japanese file name"""
         from src.config import config
 
         monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
@@ -462,7 +459,7 @@ class TestResults:
         assert response.headers["Cache-Control"] == "private, no-store"
 
     def test_too_large_csv_is_refused_in_proxy_mode(self, aw, client, monkeypatch):
-        """閉域対応 U4 BR2.3: 上限を超えると ASSET_TOO_LARGE（本文は流さない）"""
+        """Closed network: exceeding the limit gives ASSET_TOO_LARGE (the body is not streamed)"""
         from src.config import config
         from src.models.asset_delivery import SizeLimit
         from src.models.errors import ErrorCode
@@ -557,7 +554,7 @@ class TestResults:
         assert aw.world.survey_store.get(survey.id) is None
 
     def test_deleting_a_running_survey_stops_it_and_wakes_the_runner(self, aw, client):
-        """BR7.1・WF6: 実行中を消したら実行を止め、進行役を 1 回起こして次を始める。"""
+        """Deleting a running one stops the run, wakes the coordinator once and starts the next."""
         arn = "arn:aws:states:r:1:execution:sm:x"
         survey = aw.survey(status="running", execution_arn=arn)
 
@@ -567,7 +564,7 @@ class TestResults:
         aw.runner_loop.wake.assert_called_once_with()
 
     def test_detail_of_an_interrupted_old_survey_shows_the_error(self, aw, client):
-        """BR8.1: 切り替え前の running は中断のエラーとして出る。"""
+        """A running one from before the switch is reported as an interruption error."""
         from src.models.errors import ErrorCode
         from web.error_messages import user_message_for_code
 
@@ -580,7 +577,7 @@ class TestResults:
 
 
 # =============================================================================
-# ペルソナ元データ（BR4.1、BR4.2、BR5.2、NFR1.73、NFR1.74、AC2.5.3、AC5.2.2）
+# Persona source data
 # =============================================================================
 
 _MANAGEMENT_ROUTES = [
@@ -703,7 +700,7 @@ class TestPersonaData:
 
 
 # =============================================================================
-# 画像のアップロードと配信（BR1.9、U5 のまま）
+# Image upload and delivery
 # =============================================================================
 
 
@@ -739,7 +736,7 @@ class TestSurveyImages:
         ],
     )
     def test_image_preview_of_any_other_path_is_not_found(self, client, path):
-        """任意のパス・他人のパスは 404 で URL を作らない（BR1.9）"""
+        """An arbitrary path or someone else's path returns 404 and no URL is built"""
         from src.managers.file_manager import FileManager
         from src.models.errors import CodedError, ErrorCode
 
@@ -812,7 +809,7 @@ class TestSurveyImages:
     def test_preview_file_of_any_other_path_is_404_without_s3(
         self, client, monkeypatch, path, mode
     ):
-        """閉域対応 U4 BR3.4、BR4.4: 任意のパス・他人のパスは開かず署名もしない"""
+        """Closed network: an arbitrary path or someone else's path is not opened or signed"""
         from src.config import config
         from src.managers.file_manager import FileManager
         from src.models.errors import CodedError, ErrorCode
@@ -878,7 +875,7 @@ class TestSurveyImages:
 
 
 # =============================================================================
-# CSRF（NFR4.14）
+# CSRF
 # =============================================================================
 
 
@@ -906,7 +903,7 @@ def test_changes_need_the_csrf_header(test_app, method, path):
 
 
 def test_unrelated_user_sees_nothing_of_mine(aw, client):
-    """AC4.4.2: 部署の違う人の一覧に、私のテンプレート・結果が出ない。"""
+    """A user in a different department does not see my templates or results in their list."""
     aw.template(name="私のテンプレート")
     aw.survey(name="私の結果")
     _as(client, OTHER)
@@ -915,7 +912,7 @@ def test_unrelated_user_sees_nothing_of_mine(aw, client):
 
 
 # =============================================================================
-# 閉域対応 U3: Nemotron の入手先（BR2.2〜BR2.5）と DWH 抽出（BR3.2 の 4、BR3.7）
+# Closed network: where Nemotron is obtained, and DWH extraction
 # =============================================================================
 
 NEMOTRON_KEY = "persona-dataset/nemotron-personas-japan.parquet"
@@ -979,7 +976,7 @@ class TestNemotronSourceRoutes:
 
 
 class TestPersonaDataScreenByEnvironment:
-    """BR4.1、BR3.5: 画面は Manager の状態だけで出し分ける（data-testid で確かめる）。"""
+    """The screen shows or hides parts by the Manager's state alone (checked via data-testid)."""
 
     def test_closed_missing_file_shows_the_placement_guide(
         self, aw, client, closed_source

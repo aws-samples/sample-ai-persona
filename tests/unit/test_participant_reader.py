@@ -1,8 +1,8 @@
-"""ParticipantReader（参加者のペルソナの判定付きの読み）の単体テスト。
+"""Unit tests for ParticipantReader (reading participant personas with an access decision).
 
-BR2.8（開始時に全員の can_read）、BR7.1〜BR7.3（実行中の確かめ直し、参加者の状態）、
-NFR1.46、NFR1.47、NFR1.63（読み取りに届かなければ 503）、NFR2.16、NFR2.17
-（参加者のまとめ読みは 1 回）。判定は本物の AccessPolicy を使う。
+Covers can_read for everyone at start, re-checking while running, participant state,
+503 when the read is unreachable, and a single bulk read of participants. The decision
+uses the real AccessPolicy.
 """
 
 from datetime import datetime
@@ -182,7 +182,7 @@ class TestStatuses:
 
 
 class TestStatusesWithBodies:
-    """議論の詳細の参加者のカード: 読めるペルソナだけ本体を読む（BR7.3）。"""
+    """Participant cards in the discussion detail: only readable personas have their body read."""
 
     def test_reads_bodies_of_readable_participants_only(self):
         participants, reader, bodies = _world()

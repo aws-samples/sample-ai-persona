@@ -1,17 +1,16 @@
 /**
- * 高度な生成（ベータ）のページの動き（U1、S2〜S10）。
+ * Behavior of the advanced-generation (beta) page.
  *
- * - 区画 A: 表を 16MB（サーバーが決めた大きさ）ずつ、署名付き URL へ同時に最大 4 本で PUT する。
- *   失敗したパートは 1・2・4 秒あけて 3 回まで送り直し、尽きたら取り消す（BR2.5、C2）。
- *   URL の期限の 5 分前に、まだ送っていないパートの URL を取り直す（BR2.4）。
- *   ファイルの中身はアプリに送らない（BR2.6）。URL は画面にもログにも出さない。
- * - 区画 B: 準備OK の表を選ぶまで「ペルソナを生成」を押せない。理由は文字で出す。
- * - 区画 C: 進み具合は EventSource で読む（C3）。切れたら自動でつなぎ直し（Last-Event-ID）、
- *   2 分つながらなければ読み直しを案内する。done を受けたら閉じる。
- * - 区画 D: 結果の HTML はサーバーが描いたもの（自動エスケープ済み）。候補を選ぶまで保存できない。
+ * - Section A: PUTs the table to signed URLs in 16MB parts (size decided by the server), up to 4 at a time.
+ *   A failed part is retried up to 3 times after waiting 1, 2, and 4 seconds; when attempts run out the upload is canceled.
+ *   The URLs of parts not yet sent are re-fetched 5 minutes before the URL expires.
+ *   File contents are never sent to the app. URLs are not shown on screen or in logs.
+ * - Section B: "ペルソナを生成" cannot be pressed until a ready table is selected. The reason is shown as text.
+ * - Section C: progress is read with EventSource. On disconnect it reconnects automatically (Last-Event-ID); if it stays disconnected for 2 minutes it tells the user to reload. It closes on done.
+ * - Section D: the result HTML is rendered by the server (already auto-escaped). Saving is not possible until a candidate is selected.
  *
- * htmx のイベントには登録しない（htmx のハンドラは app.js に集める。frontend.md）。
- * 待ち時間は window.ADVANCED_UPLOAD_TIMING で上書きできる（部品のテスト用）。
+ * It does not register on htmx events (htmx handlers are collected in app.js; see .claude/rules/frontend.md).
+ * Wait times can be overridden with window.ADVANCED_UPLOAD_TIMING (for component tests).
  */
 (function () {
     'use strict';
@@ -24,19 +23,19 @@
         refreshLeadMs: 5 * 60 * 1000,
         reconnectDelaysMs: [3000, 6000, 12000, 24000, 30000],
         disconnectAfterMs: 2 * 60 * 1000,
-        // U2 NFR1.11: 検査中の行の取り直し（間隔と打ち切りはページの data-* が config の値を持つ）
+        // Re-fetching rows that are being checked (the interval and the give-up time come from the page's data-* attributes, which carry the config values)
         inspectPollMs: (Number(page.dataset.inspectPollSeconds) || 2) * 1000,
         inspectStopMs: (Number(page.dataset.inspectStopSeconds) || 900) * 1000
     }, window.ADVANCED_UPLOAD_TIMING || {});
 
     var MAX_REFRESHES = 24;
     var MAX_TIMER_MS = 2147483647;
-    // U5: 計画の確認待ちは、計画を確かめる生成でだけ出す（その段に入ったら表示する）
+    // The wait for plan confirmation is shown only for generations that check the plan (displayed once that stage is reached)
     var AWAITING = 'awaiting_plan_approval';
     var STAGES = ['preparing', 'planning', AWAITING, 'running', 'synthesizing', 'verifying'];
     var MARKS = { pending: '', current: '●', done: '✓', failed: '×' };
     var STATE_WORDS = { pending: '未', current: '進行中', done: '済', failed: '失敗' };
-    // 段階の丸・線・文字のクラス（Tailwind が拾えるよう、全体を書く）
+    // Classes for stage circles, lines, and text (written in full so Tailwind can pick them up)
     var MARK_CLASS = {
         pending: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-gray-300 bg-white text-xs font-bold text-gray-500',
         current: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-blue-600 bg-white text-xs font-bold text-blue-700',
@@ -47,7 +46,7 @@
         reached: 'absolute top-3 right-1/2 w-full h-0.5 bg-blue-600',
         pending: 'absolute top-3 right-1/2 w-full h-0.5 bg-gray-300'
     };
-    // 進行中・失敗は、段階の名前と区別できるラベル（塗りの角丸）にする
+    // In-progress and failed use a label (filled rounded box) that can be told apart from the stage name
     var STATE_CLASS = {
         current: 'inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-600 text-white',
         failed: 'inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-700 text-white',
@@ -73,7 +72,7 @@
     var running = false;
     var submitting = false;
 
-    // --- 共通 ------------------------------------------------------------
+    // --- Common ---
 
     function toast(message) {
         if (typeof window.showFlashMessage === 'function') window.showFlashMessage(message, 'error');
@@ -123,9 +122,9 @@
         if (emptyNote) emptyNote.hidden = rows.querySelector('[data-testid="advanced-upload-row"]') !== null;
     }
 
-    // --- 区画 B: 生成のボタン --------------------------------------------
+    // --- Section B: generate button ---
 
-    // U4 BR23.2: 選んだ文書の文字数の見込みの合計（目安で、これだけでは止めない）
+    // Estimated total character count of the selected documents (a guideline; it does not block on its own)
     function updateDocumentEstimate(chosen) {
         var note = page.querySelector('[data-testid="advanced-document-estimate"]');
         if (!note) return;
@@ -158,7 +157,7 @@
             document.querySelectorAll('[name="source_file_ids"]:checked')
         );
         var tables = chosen.filter(function (input) { return input.dataset.kind !== 'document'; });
-        // U6 BR37.1: up to three tables (the limit comes from the page; the server refuses too)
+        // up to three tables (the limit comes from the page; the server refuses too)
         var form = generateButton.form;
         var maxTables = Number((form && form.dataset.maxTables) || 3);
         var tooMany = tables.length > maxTables;
@@ -180,10 +179,10 @@
     if (form) {
         form.addEventListener('submit', function () {
             submitting = true;
-            // htmx が値を集めたあとで押せなくする
+            // Disable the button after htmx has collected the values
             setTimeout(updateGenerateState, 0);
         });
-        // 送信が断られた（フォームの中の誤り、トースト）ら押せる状態に戻す
+        // Re-enable it when the submit is refused (an error inside the form, a toast)
         var formError = form.querySelector('.advanced-form-error');
         var toasts = document.getElementById('toast-alert');
         var release = function () {
@@ -202,9 +201,9 @@
         if (target.matches('[data-testid="advanced-candidate-check"]')) updateSaveState(target.form);
     });
 
-    // --- 区画 A: アップロード ---------------------------------------------
+    // --- Section A: upload ---
 
-    // U4 BR21.1, BR21.2: 表（.csv・.tsv）と文書（.pdf・.docx・.txt・.md）。.doc には案内を出す
+    // Tables (.csv, .tsv) and documents (.pdf, .docx, .txt, .md). .doc gets a notice
     var TABLE_EXTENSIONS = ['.csv', '.tsv'];
     var DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md'];
 
@@ -378,7 +377,7 @@
         if (upload.finished || upload.refreshes >= MAX_REFRESHES) return;
         var delay = Math.max(0, Date.parse(upload.expiresAt) - TIMING.refreshLeadMs - Date.now());
         if (delay > MAX_TIMER_MS) {
-            // setTimeout は 2^31-1 ミリ秒を超えるとすぐに動くので、刻んで待つ
+            // setTimeout fires immediately above 2^31-1 ms, so wait in chunks
             upload.refreshTimer = setTimeout(function () { scheduleRefresh(upload); }, MAX_TIMER_MS);
             return;
         }
@@ -398,7 +397,7 @@
             part_numbers: numbers
         }).then(function (response) {
             return readJson(response).then(function (body) {
-                if (!response.ok) return; // 取り直せないときは、期限切れの送信が送り直しの扱いになる
+                if (!response.ok) return; // When the URLs cannot be re-fetched, the expired send is treated as a retry
                 body.part_urls.forEach(function (p) { upload.urls.set(p.part_number, p.url); });
                 upload.expiresAt = body.expires_at;
                 if (Date.parse(body.expires_at) > Date.parse(previous)) scheduleRefresh(upload);
@@ -449,7 +448,7 @@
         postJson('/persona/advanced/uploads/' + encodeURIComponent(upload.id) + '/complete', { parts: parts })
             .then(function (response) {
                 return readJson(response).then(function (body) {
-                    // 入力を直せば解決する誤りは、行の断片がエラーの文で出す
+                    // An error fixable by correcting input is shown by the row fragment as the error text
                     if (!response.ok && body.kind !== 'validation' && body.kind !== 'capacity') {
                         toast(body.detail || '確定できませんでした。時間をおいて再度お試しください');
                     }
@@ -461,7 +460,7 @@
 
     function replaceRow(upload) {
         return fetchRow(upload.id).then(function (fresh) {
-            if (!fresh) return; // 行はそのまま残す（失敗はトーストで出した）
+            if (!fresh) return; // The row is kept as it is (the failure was shown as a toast)
             upload.row.replaceWith(fresh);
             upload.row = fresh;
             announceRow(fresh);
@@ -469,7 +468,7 @@
         });
     }
 
-    // --- 区画 A: 上げたファイルの一覧（U2 の W2-1・W2-3・W2-6） ---------------
+    // --- Section A: list of uploaded files ---
 
     function rowStatusText(row) {
         var status = row.querySelector('[data-testid="advanced-upload-status"]');
@@ -480,7 +479,7 @@
         announce((row.dataset.displayName || '') + ': ' + rowStatusText(row));
     }
 
-    // 行の断片を読み直す。読めなければ null（他人・ない・期限切れはトーストを出さない）
+    // Re-read the row fragment. Returns null if it cannot be read (another user's, missing, or expired rows show no toast)
     function fetchRow(id) {
         return fetch('/persona/advanced/uploads/' + encodeURIComponent(id), {
             headers: { 'HX-Request': 'true' },
@@ -499,8 +498,8 @@
         return rows.querySelector('[data-testid="advanced-upload-row"][data-source-file-id="' + CSS.escape(id) + '"]');
     }
 
-    // 生成が終わったら、「生成中」で選べなかった行をサーバーから読み直して差し替える。
-    // 読み直さないと、ページを開き直すまで再利用も削除もできない
+    // When generation ends, re-read from the server the rows that could not be selected during "generating" and swap them.
+    // Without re-reading, they cannot be reused or deleted until the page is reopened
     function refreshInUseRows() {
         if (!rows) return;
         var busy = rows.querySelectorAll('[data-testid="advanced-upload-in-use"]');
@@ -510,22 +509,22 @@
             if (!id) return;
             fetchRow(id).then(function (fresh) {
                 var current = currentRow(id);
-                if (!fresh || !current) return; // 読めなければそのまま残す
+                if (!fresh || !current) return; // If it cannot be read, leave the row as it is
                 current.replaceWith(fresh);
                 updateGenerateState();
             });
         });
     }
 
-    // 検査中の行を間隔ごとに読み直し、打ち切りの時間がたったら止めて「確定し直す」を出す（NFR1.11）。
-    // 2 つ目のタブの確定（BR11.4）や開き直したページの検査中の行も、ここで検査の終わりを待つ
+    // Re-read rows that are being checked at each interval; when the give-up time passes, stop and show "re-confirm".
+    // Rows being checked after confirmation in a second tab, or on a reopened page, also wait for the check to end here
     var watching = {};
 
     function watchInspecting(row) {
         if (!row || row.dataset.state !== 'inspecting') return;
         var id = row.dataset.sourceFileId;
         if (!id || watching[id]) return;
-        if (row.querySelector('[data-action="recomplete"]')) return; // サーバーが止まったと判断した
+        if (row.querySelector('[data-action="recomplete"]')) return; // The server judged that it stalled
         watching[id] = { startedAt: Date.now() };
         var tick = function () {
             var state = watching[id];
@@ -573,7 +572,7 @@
         announceRow(row);
     }
 
-    // 止まった検査を確定し直す（パートはもう S3 で 1 つになっているので、空の一覧で送る）
+    // Re-confirm a stalled check (the parts are already one object in S3, so send an empty list)
     function recomplete(row) {
         var id = row.dataset.sourceFileId;
         postJson('/persona/advanced/uploads/' + encodeURIComponent(id) + '/complete', { parts: [] })
@@ -603,13 +602,13 @@
         if (row) recomplete(row);
     });
 
-    // 削除の成功（HX-Trigger: advancedSourceDeleted）。押したボタンの行はこのあと htmx が消す
+    // Delete succeeded (HX-Trigger: advancedSourceDeleted). htmx removes the pressed button's row afterwards
     document.addEventListener('advancedSourceDeleted', function (evt) {
         var row = evt.target instanceof Element ? evt.target.closest('[data-testid="advanced-upload-row"]') : null;
         if (row) announce((row.dataset.displayName || '') + ' を削除しました');
     });
 
-    // 行が増えた・消えた（削除、検査の終わり）ら、空の案内と生成のボタンを合わせる
+    // When rows are added or removed (delete, check finished), sync the empty notice and the generate button
     new MutationObserver(function () {
         updateEmptyNote();
         updateGenerateState();
@@ -635,7 +634,7 @@
         });
     }
 
-    // --- 区画 C: 進み具合 ---------------------------------------------------
+    // --- Section C: progress ---
 
     function setStages(panel, current, failed) {
         var index = STAGES.indexOf(current);
@@ -663,7 +662,7 @@
         updateBar(panel, current, failed);
     }
 
-    // 段階の数から出す目安の棒（実際の割合ではない）。表示している段階だけを数える
+    // A rough bar based on the number of stages (not the actual ratio). Counts only the stages being shown
     function updateBar(panel, current, failed) {
         var bar = panel.querySelector('[data-testid="advanced-progress-bar"]');
         if (!bar) return;
@@ -722,9 +721,9 @@
         return (minutes < 10 ? '0' : '') + minutes + ':' + (rest < 10 ? '0' : '') + rest;
     }
 
-    // 経過時間（AC9.1.1）: サーバーが描いた秒から 1 秒ごとに進める。終わった生成は進めない。
-    // 表示は aria-live の外にあり、毎秒の書き換えは読み上げない。
-    // U5 W5-1.3: 計画の確認を待っている間は止め（pause）、続きで進め直す（resume）。
+    // Elapsed time: advance every second from the seconds the server rendered. A finished generation does not advance.
+    // The display is outside aria-live, so the per-second rewrite is not announced.
+    // Pause while waiting for plan confirmation and resume to advance again afterwards.
     function startClock(panel) {
         var element = panel.querySelector('[data-testid="advanced-elapsed"]');
         var none = { stop: function () {}, pause: function () {}, resume: function () {} };
@@ -770,7 +769,7 @@
         var disconnected = panel.querySelector('[data-testid="advanced-disconnected"]');
         rememberGeneration(panel.dataset.generationId);
 
-        // 同じ接続の続き（id のないフレーム）は受け、手動でつなぎ直したときの送り直しは捨てる
+        // Accept a continuation of the same connection (frames without an id); discard what is resent after a manual reconnect
         var fresh = function (evt, connection) {
             var raw = evt.lastEventId || '';
             if (raw === connection.previous) return true;
@@ -791,9 +790,9 @@
             clock.stop();
             running = false;
             reconnecting.hidden = true;
-            // U5 BR31.1: 終わった生成には中止も計画のカードも出さない
+            // A finished generation shows neither cancel nor the plan card
             if (cancelArea) {
-                // flex が hidden 属性より強いので、クラスでも隠す
+                // flex overrides the hidden attribute, so hide it with a class too
                 cancelArea.hidden = true;
                 cancelArea.classList.add('hidden');
             }
@@ -809,7 +808,7 @@
                 setStages(panel, data.status, false);
                 running = true;
                 if (inputs) inputs.open = false;
-                // U5 W5-1.3: 計画の確認を待つ間は経過時間を止める
+                // Stop the elapsed time while waiting for plan confirmation
                 if (data.status === AWAITING) {
                     clock.pause();
                 } else {
@@ -824,7 +823,7 @@
             plan: function (data, evt) {
                 var raw = String(evt.data || '').trim();
                 if (raw.charAt(0) === '<' && planArea) {
-                    // U5 BR29.2: サーバーが描いた計画のカード（自動エスケープ済み）
+                    // The plan card rendered by the server (already auto-escaped)
                     planArea.innerHTML = raw;
                     if (window.htmx) window.htmx.process(planArea);
                     var heading = planArea.querySelector('#advanced-plan-title');
@@ -836,7 +835,7 @@
                 addLog(panel, text);
             },
             cancelled: function () {
-                // U5 BR31.4: 中止はエラーの見た目にしない。フォームはそのまま（BR33.3）
+                // Cancellation is not styled as an error. The form is left as it is
                 setStages(panel, state.current || 'preparing', true);
                 var cancelled = panel.querySelector('[data-testid="advanced-cancelled"]');
                 cancelled.hidden = false;
@@ -847,7 +846,7 @@
             result: function (data, evt) {
                 setStages(panel, 'done', false);
                 var area = document.getElementById('advanced-result');
-                area.innerHTML = evt.data; // サーバーが描いた区画 D（自動エスケープ済み）
+                area.innerHTML = evt.data; // Section D rendered by the server (already auto-escaped)
                 if (window.htmx) window.htmx.process(area);
                 finish();
                 if (inputs) inputs.open = false;
@@ -872,7 +871,7 @@
 
         var open = function () {
             var connection = { previous: '' };
-            // 自分でつなぎ直すときは、受け取った最後の番号をクエリで伝える（ヘッダーは付けられない）
+            // When reconnecting itself, pass the last received number in the query (a header cannot be set)
             var target = state.lastId > 0
                 ? url + (url.indexOf('?') === -1 ? '?' : '&') + 'last_event_id=' + state.lastId
                 : url;
@@ -880,7 +879,7 @@
             state.source = source;
             Object.keys(handlers).forEach(function (name) {
                 source.addEventListener(name, function (evt) {
-                    // 接続が切れたときの EventSource 自身の error（MessageEvent でない）は onerror が扱う
+                    // The EventSource's own error on disconnect (not a MessageEvent) is handled by onerror
                     if (!(evt instanceof MessageEvent)) return;
                     if (state.finished && name !== 'done') return;
                     if (!fresh(evt, connection)) return;
@@ -905,8 +904,8 @@
                     disconnected.hidden = false;
                     return;
                 }
-                // ブラウザ任せにせず自分でつなぎ直す（3・6・12…最大 30 秒あける。interaction-spec）。
-                // 続きの番号はクエリで渡すので、つなぎ直しの仕組みによらず続きから届く
+                // Reconnect on our own instead of leaving it to the browser (waiting 3, 6, 12... up to 30 seconds).
+                // The continuation number is passed in the query, so events resume from where they stopped regardless of the reconnect mechanism
                 source.close();
                 reconnecting.hidden = false;
                 var delays = TIMING.reconnectDelaysMs;
@@ -922,7 +921,7 @@
     }
 
     function rememberGeneration(generationId) {
-        // 読み直しても同じ生成を開けるよう、URL に生成の ID を残す（W1-5）
+        // Keep the generation ID in the URL so the same generation can be reopened after a reload
         if (!generationId || !window.history || !window.history.replaceState) return;
         var current = new URL(window.location.href);
         if (current.searchParams.get('generation') === generationId) return;
@@ -931,7 +930,7 @@
     }
 
     function connectNewPanel() {
-        // U5 BR30.2: 実行中の生成の案内だけが届いたときも、開始中の表示を戻す
+        // Restore the starting display also when only the notice about a running generation arrives
         if (submitting) {
             submitting = false;
             updateGenerateState();
@@ -949,7 +948,7 @@
         if (existing) connect(existing);
     }
 
-    // --- 区画 D: 保存 ------------------------------------------------------
+    // --- Section D: save ---
 
     function updateSaveState(saveForm) {
         if (!saveForm) return;

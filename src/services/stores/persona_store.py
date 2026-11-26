@@ -1,18 +1,18 @@
-"""DynamoDB reads and writes of persona bodies (U4, U5).
+"""DynamoDB reads and writes of persona bodies.
 
-``Personas``: PK ``id``. ``owner_sub`` is the creator (BR6.1);
+``Personas``: PK ``id``. ``owner_sub`` is the creator;
 ``shared_group_ids`` is the copy of the shares, written only by
-``ResourceSharing`` together with ``ResourceShares`` (BR1.6).
+``ResourceSharing`` together with ``ResourceShares``.
 
 - A new persona is written only when the ``id`` does not exist yet, so a save
-  never overwrites a stored owner or shares (R-02).
-- An edit writes only the columns the edit screen can change (BR6.7); the
+  never overwrites a stored owner or shares.
+- An edit writes only the columns the edit screen can change; the
   owner, the shares, the avatar, the generation log and ``created_at`` stay.
   Optional columns that became empty are removed.
 - The avatar path changes with a compare-and-set on the path read before.
 - Batch reads are strongly consistent; unprocessed keys are read again and
-  are never silently dropped (NFR2.5).
-- Only the admin's ``all`` tab search scans the table (U4 BR3.5).
+  are never silently dropped.
+- Only the admin's ``all`` tab search scans the table.
 
 Who may save, read or edit a persona is decided by ``PersonaManager``.
 """
@@ -127,7 +127,7 @@ class PersonaStore:
         """One persona, or ``None`` when it does not exist.
 
         Authorization reads pass ``consistent=True`` so a share removed a
-        moment ago is never seen (NFR1.12).
+        moment ago is never seen.
         """
         response = self._call(
             "get_item",
@@ -155,7 +155,7 @@ class PersonaStore:
         return found
 
     def scan_all(self) -> list[Persona]:
-        """Every persona, every scan page (the admin's ``all`` tab, BR3.5)."""
+        """Every persona, every scan page (the admin's ``all`` tab)."""
         params: dict[str, Any] = {"TableName": self.table_name}
         found: list[Persona] = []
         while True:
@@ -167,7 +167,7 @@ class PersonaStore:
             params["ExclusiveStartKey"] = last
 
     def update_editable(self, persona: Persona) -> bool:
-        """Write the columns the edit screen can change (BR6.7).
+        """Write the columns the edit screen can change.
 
         Returns:
             ``False`` when the persona does not exist (nothing is created).

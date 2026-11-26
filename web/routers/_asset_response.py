@@ -1,4 +1,4 @@
-"""Turn a :class:`DeliveryResult` into a response (closed network U4, BR4.1).
+"""Turn a :class:`DeliveryResult` into a response.
 
 Shared by the five file routes (avatar, result CSV, result image, template
 image preview, discussion document). Router layer only: it reads the Models
@@ -9,7 +9,7 @@ value the Manager returned and imports no Service.
   ``Content-Type`` / ``Content-Length`` / ``Content-Disposition`` (RFC 5987 for
   Japanese names) / ``X-Content-Type-Options: nosniff`` / ``Cache-Control``.
   The body is closed when the response ends on any path: read to the end, S3
-  failing mid-way, or sending failing before or after the first chunk (BR4.5).
+  failing mid-way, or sending failing before or after the first chunk.
 """
 
 from collections.abc import Iterator
@@ -21,7 +21,7 @@ from starlette.types import Receive, Scope, Send
 
 from src.models.asset_delivery import AssetStream, DeliveryKind, DeliveryResult
 
-#: ``Cache-Control`` of a streamed file unless the route says otherwise (BR4.3).
+#: ``Cache-Control`` of a streamed file unless the route says otherwise.
 STREAM_CACHE_CONTROL = "private, no-store"
 
 
@@ -77,7 +77,7 @@ class _ClosingStreamingResponse(StreamingResponse):
     Starlette skips the background task when sending fails (a dropped
     connection surfaces as ``ClientDisconnect``), and the body iterator is then
     abandoned mid-way or never started, so its own ``finally`` would wait for
-    GC. Wrapping the whole response closes the body on every path (BR4.5).
+    GC. Wrapping the whole response closes the body on every path.
     """
 
     def __init__(self, asset: AssetStream, *args: Any, **kwargs: Any) -> None:
@@ -92,7 +92,7 @@ class _ClosingStreamingResponse(StreamingResponse):
 
 
 def _body(asset: AssetStream) -> Iterator[bytes]:
-    """The chunks; closes the body when they end or fail (BR4.5)."""
+    """The chunks; closes the body when they end or fail."""
     try:
         yield from asset.chunks
     finally:

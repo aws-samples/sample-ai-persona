@@ -1,9 +1,8 @@
-"""The owner-name copy, cached per task (BR5.1〜BR5.3, U4).
+"""The owner-name copy, cached per task.
 
 Owner columns of the lists show the owner's name. Each task keeps one copy of
-the user list (``UserDirectoryService``) and refreshes it in the background
-(``performance-design.md`` §3), the same way ``DepartmentDirectory`` keeps the
-departments:
+the user list (``UserDirectoryService``) and refreshes it in the background,
+the same way ``DepartmentDirectory`` keeps the departments:
 
 - Younger than :data:`REFRESH_INTERVAL_SECONDS`: served as is.
 - Older: the request that notices it starts one refresh on another thread and
@@ -12,9 +11,9 @@ departments:
 - A failed refresh keeps the previous copy for up to
   :data:`MAX_STALENESS_SECONDS` and Cognito is not asked again for
   :data:`FAILURE_BACKOFF_SECONDS`. Failures write ``authz.owners_stale``
-  (``age_seconds``, ``served``) (NFR8.13).
+  (``age_seconds``, ``served``).
 
-The copy is for display only (BR5.3): this class has no decision port and
+The copy is for display only: this class has no decision port and
 nothing here is used to decide who may read what.
 """
 
@@ -36,7 +35,7 @@ REFRESH_INTERVAL_SECONDS = 300
 FAILURE_BACKOFF_SECONDS = 60
 #: The previous copy is served for at most this long after it was fetched.
 MAX_STALENESS_SECONDS = 3600
-#: Label of an owner that is unknown, disabled, nameless or missing (BR5.2).
+# Label of an owner that is unknown, disabled, nameless or missing.
 OWNER_UNKNOWN = "所有者不明"
 
 
@@ -85,7 +84,7 @@ class OwnerDirectory:
     # --- queries -------------------------------------------------------------------
 
     def labels(self, subs: Iterable[str]) -> dict[str, str] | None:
-        """Owner labels of ``subs`` (BR5.2).
+        """Owner labels of ``subs``.
 
         Returns:
             ``sub -> name`` (``所有者不明`` for unknown, disabled or nameless
@@ -135,7 +134,7 @@ class OwnerDirectory:
         except Exception:
             # The refresh never started: clear the flag (otherwise no refresh
             # would ever run again) and treat it as a failed refresh so the
-            # back-off and ``authz.owners_stale`` apply (R-03).
+            # back-off and ``authz.owners_stale`` apply.
             logger.exception("owner copy refresh could not start")
             self._record_failure()
 

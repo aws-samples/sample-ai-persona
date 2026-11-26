@@ -1,10 +1,8 @@
 """
-Types for department sharing and the tabbed lists (contract C7, U4).
+Types for department sharing and the tabbed lists.
 
 ``ResourceSharing`` (``src/managers/components/resource_sharing.py``) works on
-these values; this module only holds data and pure helpers. See
-``construction/sharing/functional-design/entities.md`` for the meaning of each
-field.
+these values; this module only holds data and pure helpers.
 """
 
 from dataclasses import dataclass, field
@@ -14,7 +12,7 @@ from typing import Generic, Iterable, TypeVar
 from .authz import AccessTarget, Department, ResourceType
 from .errors import ErrorCode
 
-#: The resource types that can be shared with departments (BR1, FR3).
+#: The resource types that can be shared with departments.
 SHAREABLE_TYPES: frozenset[ResourceType] = frozenset(
     {
         ResourceType.PERSONA,
@@ -29,7 +27,7 @@ SHARE_KEY_SEPARATOR = "#"
 
 
 class ListTab(StrEnum):
-    """The three list tabs (M6)."""
+    """The three list tabs."""
 
     MINE = "mine"
     SHARED = "shared"
@@ -48,14 +46,14 @@ class ListTab(StrEnum):
 
 @dataclass(frozen=True)
 class ShareChange:
-    """A difference to apply to ``shared_group_ids`` (contract C7).
+    """A difference to apply to ``shared_group_ids``.
 
     Departments in neither set stay as they are (the mixed state of a bulk
-    share, BR2.3).
+    share).
 
     Raises:
         TypeError: ``add`` or ``remove`` is not a frozenset.
-        ValueError: A department is in both sets (BR1.5).
+        ValueError: A department is in both sets.
     """
 
     add: frozenset[str] = frozenset()
@@ -77,7 +75,7 @@ class ShareChange:
 
 @dataclass(frozen=True)
 class AssetScopeChange:
-    """A change of an organization asset's usage scope (U7 BR5.2, M10).
+    """A change of an organization asset's usage scope.
 
     The same shape as :class:`ShareChange`: ``add`` is the departments chosen,
     ``remove`` those unchecked that were in the scope when the dialog opened.
@@ -105,7 +103,7 @@ class AssetScopeChange:
         """The change of the dialog: add what is checked, remove what was unchecked.
 
         ``initial`` is the scope when the dialog opened, so a department another
-        admin added meanwhile is left as it is (BR5.2).
+        admin added meanwhile is left as it is.
         """
         chosen = frozenset(g for g in selected if g)
         opened = frozenset(g for g in initial if g)
@@ -123,7 +121,7 @@ class AssetScopeChange:
 
 @dataclass(frozen=True)
 class AssetScopeDialog:
-    """The content of the usage-scope dialog (M10, U7 BR5.2).
+    """The content of the usage-scope dialog.
 
     Attributes:
         resource_type: ``knowledge_base``, ``dataset`` or ``custom_persona_data``.
@@ -148,7 +146,7 @@ _AssetT = TypeVar("_AssetT")
 
 @dataclass(frozen=True)
 class ScopedAssets(Generic[_AssetT]):
-    """Organization assets on the settings screen with their scope (U7 BR5.1).
+    """Organization assets on the settings screen with their scope.
 
     Attributes:
         items: The assets.
@@ -162,7 +160,7 @@ class ScopedAssets(Generic[_AssetT]):
 
 @dataclass(frozen=True)
 class ListPage:
-    """One page of a tab (contract C7).
+    """One page of a tab.
 
     Attributes:
         items: At most one page of targets. The caller reads the bodies.
@@ -177,7 +175,7 @@ class ListPage:
 
 @dataclass(frozen=True)
 class BulkShareFailure:
-    """One target a bulk share could not update (BR2.4).
+    """One target a bulk share could not update.
 
     Attributes:
         resource_id: The target.
@@ -192,7 +190,7 @@ class BulkShareFailure:
 
 @dataclass(frozen=True)
 class BulkShareResult:
-    """The result of ``bulk_update_shares`` (BR2.2)."""
+    """The result of ``bulk_update_shares``."""
 
     updated: list[str]
     failed: list[BulkShareFailure]
@@ -200,7 +198,7 @@ class BulkShareResult:
 
 @dataclass(frozen=True)
 class SharingTable:
-    """Registration of one shareable resource type (entities.md SharingTable).
+    """Registration of one shareable resource type.
 
     Attributes:
         resource_type: The type.
@@ -209,7 +207,7 @@ class SharingTable:
         not_found: Code for an unreadable or missing target.
         delete_failed: Code when the delete transaction keeps conflicting.
         cleanup_attributes: Columns the caller cleans up after deleting; they
-            are part of the delete condition (BR4.1).
+            are part of the delete condition.
     """
 
     resource_type: ResourceType
@@ -222,7 +220,7 @@ class SharingTable:
 
 @dataclass(frozen=True)
 class ResourceShareEntry:
-    """One item of the ``ResourceShares`` table (entities.md ResourceShare)."""
+    """One item of the ``ResourceShares`` table."""
 
     group_id: str
     resource_type: ResourceType
@@ -238,7 +236,7 @@ class ResourceShareEntry:
 
 @dataclass(frozen=True)
 class OwnerSummary:
-    """A user in the owner copy (display only, BR5.3)."""
+    """A user in the owner copy (display only)."""
 
     sub: str
     display_name: str | None
@@ -246,7 +244,7 @@ class OwnerSummary:
 
 
 def share_key(resource_type: ResourceType, created_at: str, resource_id: str) -> str:
-    """Build ``{resource_type}#{created_at}#{resource_id}`` (contract C8)."""
+    """Build ``{resource_type}#{created_at}#{resource_id}``."""
     return SHARE_KEY_SEPARATOR.join((resource_type.value, created_at, resource_id))
 
 
@@ -272,11 +270,11 @@ _ItemT = TypeVar("_ItemT")
 
 @dataclass(frozen=True)
 class TabbedList(Generic[_ItemT]):
-    """What a tabbed list screen shows (M6), built by the owning Manager.
+    """What a tabbed list screen shows, built by the owning Manager.
 
     Attributes:
         tab: The tab actually shown (``all`` becomes ``mine`` without
-            ``resource:read_all``, BR3.1).
+            ``resource:read_all``).
         items: The rows, newest first.
         next_cursor: Cursor of the next page (``None`` when there is none).
         counts: Count per visible tab; ``None`` when it could not be read.
@@ -286,8 +284,8 @@ class TabbedList(Generic[_ItemT]):
         shared_with: Row id -> names of the departments it is shared with
             (``mine`` / ``all``) or shared from (``shared``).
         manageable: Row ids the user may edit, delete and share.
-        no_department: The user belongs to no department (BR3.10).
-        search_truncated: A search stopped at the newest 500 items (BR3.8).
+        no_department: The user belongs to no department.
+        search_truncated: A search stopped at the newest 500 items.
     """
 
     tab: ListTab
@@ -304,21 +302,21 @@ class TabbedList(Generic[_ItemT]):
 
 @dataclass(frozen=True)
 class ShareDialogView:
-    """The content of the share dialog (M7, WF1, WF2).
+    """The content of the share dialog.
 
     Attributes:
         resource_type: Type of the targets.
         target_ids: Targets the user may manage (sent back on save).
         target_label: ``佐藤 太郎`` or ``佐藤 太郎 ほか 2 件``.
-        choices: Departments the user may choose (BR1.2).
+        choices: Departments the user may choose.
         vanished: Departments that no longer exist but are still shared;
-            only for ``share:any_group`` (security-design.md §2).
+            only for ``share:any_group``.
         selected: Departments shared by every target.
         mixed: For a bulk dialog, ``{group_id: (shared, total)}``.
         unmanageable_count: Targets left out because they cannot be managed.
-        show_scope_note: Show "選べるのは所属グループだけです" (BR7.5).
-        show_persona_notice: Show the long-term memory notice (BR6.5).
-        no_department: No department to choose; saving is disabled (BR1.4).
+        show_scope_note: Show "選べるのは所属グループだけです".
+        show_persona_notice: Show the long-term memory notice.
+        no_department: No department to choose; saving is disabled.
     """
 
     resource_type: ResourceType

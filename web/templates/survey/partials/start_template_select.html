@@ -1,10 +1,10 @@
 {#
-  アンケート開始のテンプレートの選択（U7 BR1.2・BR2.1）。タブ（list_tabpanel）の中身。
-  読めるテンプレートだけを、タブごとに新しい順で出す（1 ページ分。見つからなければ検索する）。
-  引数:
-    listing           ... TabbedList（items は SurveyTemplate）
-    current_search    ... 検索語
-    selected_template ... 初めに選んでおくテンプレートの ID（一覧の「使う」から）
+  Template selection for starting a survey. Content of the tab (list_tabpanel).
+  Shows only readable templates, newest first per tab (one page; searches if not found).
+  Arguments:
+    listing           ... TabbedList (items are SurveyTemplate)
+    current_search    ... search term
+    selected_template ... ID of the template to preselect (from "use" in the list)
 #}
 {%- set tab = listing.tab.value -%}
 <input type="hidden" name="tab" value="{{ tab }}" data-start-template-tab>

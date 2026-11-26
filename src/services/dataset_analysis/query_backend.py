@@ -1,20 +1,20 @@
 """DuckDB query backend for the analyze_dataset tool.
 
-責務: dataset の backend パス（S3 / ローカル）を VIEW 化し、parameterized SQL を
-実行して ``(columns, rows)`` を返す。access allowlist・httpfs LOAD（S3 時のみ）・
-S3 認証情報設定・soft timeout（中断・後片付け）をこの層に閉じる。
+Responsibility: turn a dataset's backend path (S3 / local) into a VIEW, run parameterized SQL
+and return ``(columns, rows)``. The access allowlist, httpfs LOAD (S3 only),
+S3 credential setup and the soft timeout (interrupt and cleanup) all stay in this layer.
 
-**timeout は soft**: Python thread は強制終了できず、DuckDB ``close()`` は worker の
-終了前に戻る。よって「worker 終了を待つ」と「無期限に停止しない」は thread では両立
-しない。本 backend は以下で有界時間の返却を保証する:
+**The timeout is soft**: a Python thread cannot be killed, and DuckDB ``close()`` returns before the worker
+ends. So "wait for the worker to end" and "never stall indefinitely" cannot both hold with threads.
+This backend guarantees a bounded return time as follows:
 
-1. 同期 query を専用 worker で実行し、watchdog が timeout 超過で ``interrupt()`` を呼ぶ。
-2. request スレッドは timeout + 短い join 猶予まで待って戻る（無期限ブロックしない）。
-3. worker が interrupt 後も残る場合、connection を強制 close せず worker 自身の終了に
-   委ね、Semaphore スロットは worker が実際に終了するまで解放しない
-   （＝残存 worker は同時実行枠を占有し続けるので実同時実行数は超えない）。
+1. The sync query runs on a dedicated worker, and a watchdog calls ``interrupt()`` after the timeout.
+2. The request thread waits up to the timeout plus a short join grace, then returns (no indefinite block).
+3. If the worker survives the interrupt, the connection is not force-closed; it is left to the worker's own exit,
+   and the Semaphore slot is not released until the worker really ends
+   (a lingering worker keeps holding its slot, so real concurrency never exceeds the limit).
 
-厳密な wall-clock hard timeout が必要な場合の process 分離は将来対応（スコープ外）。
+A hard wall-clock timeout would need process isolation, which is out of scope.
 """
 
 import logging
@@ -28,26 +28,26 @@ logger = logging.getLogger(__name__)
 
 
 class DatasetAccessError(ValueError):
-    """backend パスが access allowlist を通らない場合に送出する。"""
+    """Raised when a backend path does not pass the access allowlist."""
 
 
 class DatasetQueryTimeout(Exception):
-    """query が soft timeout 内に完了しなかった場合に送出する。"""
+    """Raised when a query did not finish within the soft timeout."""
 
 
 @dataclass(frozen=True)
 class _ViewSpec:
-    """検証済みの読み取り対象。``path`` は VIEW 化に使う正規化済みパス。"""
+    """A validated read target. ``path`` is the normalized path used for the VIEW."""
 
     path: str
     is_s3: bool
 
 
 class DatasetQueryBackend(Protocol):
-    """analyze_dataset の実行 backend。将来 Athena 等へ差し替える継ぎ目。
+    """Execution backend for analyze_dataset. A seam for swapping in Athena etc. later.
 
-    timeout・中断・後片付けは backend の責務。Service 側から connection を直接
-    interrupt する前提を置かない。
+    Timeout, interruption and cleanup are the backend's job. Callers must not assume they
+    can interrupt the connection directly.
     """
 
     def execute(
@@ -58,15 +58,15 @@ class DatasetQueryBackend(Protocol):
         *,
         timeout: float,
     ) -> Tuple[List[str], List[List[Any]]]:
-        """source を VIEW 化し SQL を実行。(columns, rows) を返す。
+        """Turn the source into a VIEW and run the SQL. Returns (columns, rows).
 
-        timeout 超過時は ``DatasetQueryTimeout`` を送出する。
+        Raises ``DatasetQueryTimeout`` when the timeout is exceeded.
         """
         raise NotImplementedError
 
 
 class DuckDBQueryBackend:
-    """DuckDB による :class:`DatasetQueryBackend` 実装。"""
+    """DuckDB implementation of :class:`DatasetQueryBackend`."""
 
     def __init__(
         self,
@@ -83,14 +83,14 @@ class DuckDBQueryBackend:
         self.allowed_s3_prefixes = allowed_s3_prefixes or [
             "datasets/",
             "persona-dataset/",
-            "persona_datasets/",  # ペルソナ専用のデータセット（行動データ、U5）
+            "persona_datasets/",  # Persona-only datasets (behavior data)
         ]
         roots = allowed_local_roots or [
             tempfile.gettempdir(),
-            "/tmp",  # save_temp_csv はここに直接書く
-            "datasets",  # local:// フォールバックの実体（dataset_manager）
+            "/tmp",  # save_temp_csv writes here directly
+            "datasets",  # Real location behind the local:// fallback (dataset_manager)
         ]
-        # realpath 正規化（/tmp -> /private/tmp 等の差異を吸収）。
+        # Normalize with realpath (absorbs differences such as /tmp -> /private/tmp).
         self._allowed_local_roots = sorted({os.path.realpath(r) for r in roots})
         self._sem = threading.BoundedSemaphore(max_concurrent_queries)
         self._join_grace = join_grace_seconds
@@ -100,7 +100,7 @@ class DuckDBQueryBackend:
     # ------------------------------------------------------------------
 
     def _resolve(self, source: str) -> _ViewSpec:
-        """backend パスを検証し、正規化済み ``_ViewSpec`` を返す。"""
+        """Validate the backend path and return a normalized ``_ViewSpec``."""
         if source.startswith("s3://"):
             prefix = f"s3://{self.bucket_name}/"
             if not self.bucket_name or not source.startswith(prefix):
@@ -140,7 +140,7 @@ class DuckDBQueryBackend:
         start = time.monotonic()
         if not self._sem.acquire(timeout=timeout):
             raise DatasetQueryTimeout("timed out waiting for a query slot")
-        # Semaphore は worker の finally が解放する（残存 worker が枠を占有し続けるため）。
+        # The worker's finally releases the Semaphore (a lingering worker keeps holding its slot).
         acquired_by_worker = False
         try:
             remaining = timeout - (time.monotonic() - start)
@@ -170,7 +170,7 @@ class DuckDBQueryBackend:
                     columns = [d[0] for d in rel.description]
                     rows = [list(r) for r in rel.fetchall()]
                     holder["result"] = (columns, rows)
-                except Exception as e:  # noqa: BLE001 - request 側へ受け渡す
+                except Exception as e:  # noqa: BLE001 - handed over to the request side
                     holder["error"] = e
                 finally:
                     if conn is not None:
@@ -183,22 +183,22 @@ class DuckDBQueryBackend:
 
             thread = threading.Thread(target=worker, daemon=True)
             thread.start()
-            # start() 成功後は worker の finally が唯一の解放者。start() が
-            # 例外で失敗した場合は False のままなので外側 finally が解放する
-            # （True を start() 前に立てるとスロットが永久リークする）。
+            # After start() succeeds, the worker's finally is the only releaser. If start()
+            # fails with an exception the flag stays False, so the outer finally releases it
+            # (setting True before start() would leak the slot permanently).
             acquired_by_worker = True
 
             if not done.wait(timeout=remaining):
-                # watchdog: timeout。実行中の query を中断する。
+                # watchdog: timeout. Interrupts the running query.
                 conn = conn_box.get("conn")
                 if conn is not None:
                     try:
                         conn.interrupt()
                     except Exception:  # noqa: BLE001 - best effort
                         pass
-                # interrupt が効いて worker が有界時間内に終わっても、request からは
-                # timeout として扱う（境界での成功結果は破棄）。worker の finally が
-                # connection close と Semaphore 解放を行う（残存中は枠を占有し続ける）。
+                # Even if the interrupt works and the worker ends within bounded time, the request
+                # treats it as a timeout (a success at the boundary is discarded). The worker's finally
+                # closes the connection and releases the Semaphore (while it lingers it keeps its slot).
                 done.wait(timeout=self._join_grace)
                 raise DatasetQueryTimeout("query exceeded timeout")
 
@@ -207,8 +207,8 @@ class DuckDBQueryBackend:
             columns, rows = holder["result"]
             return columns, rows
         finally:
-            # 正常経路（worker 起動前の早期 return / 例外）では request が解放する。
-            # worker を起動した後は worker の finally が唯一の解放者。
+            # On normal paths (early return / exception before the worker starts) the request releases it.
+            # Once the worker has started, the worker's finally is the only releaser.
             if not acquired_by_worker:
                 self._sem.release()
 
@@ -216,25 +216,25 @@ class DuckDBQueryBackend:
         conn.execute("SET autoinstall_known_extensions=false;")
         conn.execute("SET autoload_known_extensions=false;")
         if view_spec.is_s3:
-            # httpfs はコンテナ／ローカルとも事前 INSTALL 済みの前提（runtime は
-            # 実行時ダウンロードしない＝閉域では欠落時に LOAD で即失敗させる）。
-            # ローカルの事前 INSTALL 手順は docs/local_development.md を参照。
+            # httpfs is assumed to be pre-INSTALLed in both container and local (the runtime
+            # does not download at run time; in a closed network a missing one fails fast at LOAD).
+            # For the local pre-INSTALL steps see docs/local_development.md.
             conn.execute("LOAD httpfs;")  # nosemgrep: sqlalchemy-execute-raw-query
             self._set_s3_credentials(conn)
         escaped = view_spec.path.replace("'", "''")
         if view_spec.path.endswith(".parquet"):
             source = f"read_parquet('{escaped}')"
         else:
-            # header=true で 1 行目を常にヘッダー扱いにする（全数値の先頭行を
-            # DuckDB がデータと誤判定し column0.. を割り当てて、スキーマ解析
-            # （csv.reader）由来の allowlist 列名と乖離するのを防ぐ）。
+            # header=true always treats the first row as the header (prevents DuckDB from taking an all-numeric
+            # first row as data and assigning column0.., which would diverge from the allowlist column names
+            # derived from schema parsing (csv.reader)).
             source = f"read_csv_auto('{escaped}', header=true)"
         conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
             f"CREATE VIEW dataset AS SELECT * FROM {source};"
         )
 
     def _set_s3_credentials(self, conn: Any) -> None:
-        """boto3 の認証情報チェーンから S3 認証情報を DuckDB 接続に設定する。"""
+        """Set S3 credentials on the DuckDB connection from the boto3 credential chain."""
         import boto3
 
         session = boto3.Session()

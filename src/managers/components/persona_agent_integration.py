@@ -1,24 +1,27 @@
-"""ペルソナエージェントへの統合機能（KB / データセット分析）と記憶の扱いを組み立てるコンポーネント。
+"""Component that assembles agent integrations (KB / dataset analysis) and memory handling for persona agents.
 
-AgentDiscussionManager / InterviewManager が共通で使うビジネスワークフロー。以前は
-両 Manager に同一メソッド（`_build_integration_sections` / `_resolve_dataset_bindings`）が
-コピーされており、security-sensitive な fail-closed dedup が2箇所に分散していた。単一
-ソース化するためこの Component に集約する。
+Business workflow shared by AgentDiscussionManager and InterviewManager. Both
+Managers used to carry identical methods (`_build_integration_sections` /
+`_resolve_dataset_bindings`), which spread the security-sensitive fail-closed
+dedup over two places. It is collected here as a single source.
 
-配置の理由: 中身は「有効判定・binding の fail-closed 除外・ツール構築・prompt section
-構築」というビジネスルールなので shared/（純粋ヘルパー）には置けない。かといって
-Manager 同士は import できない。よって Manager → Component → Service の依存方向を持つ
-Manager 層のワークフロー部品とする。Router/Manager は import しない。
+Why a Component: the content is business rules (enable checks, fail-closed
+exclusion of bindings, tool construction, prompt section construction), so it
+cannot live in shared/ (pure helpers), and Managers cannot import each other.
+It is therefore a workflow part of the Manager layer with the dependency
+direction Manager -> Component -> Service. It does not import Routers or Managers.
 
-U6（約束 C1・C9、BR6.1、BR6.3）:
+Per-user rules:
 
-- :meth:`PersonaAgentIntegration.build_agent` は参加者ごとの ``ExecutionContext`` を
-  受け取る。``write_memory`` が偽（所有者でない、admin を含む）なら、利用者が選んだ
-  ``full`` を ``retrieve_only`` にする（会話を長期記憶に書き込まない）。
-- :meth:`PersonaAgentIntegration.asset_filter` は、紐付いた KB・データセットのうち
-  ``can_use_asset`` が偽のものを除く（prompt にもツールにも入れない）。ペルソナ専用の
-  データセット（``PersonaBinding.dedicated``）は除かない。利用範囲の読み取りに届かない
-  資産も除いて（fail-closed）会話は続ける。除いた資産は ``agent.asset_excluded`` に出す。
+- :meth:`PersonaAgentIntegration.build_agent` receives an ``ExecutionContext``
+  per participant. When ``write_memory`` is false (not the owner, admins
+  included), the ``full`` the user chose becomes ``retrieve_only`` (the
+  conversation is not written to long-term memory).
+- :meth:`PersonaAgentIntegration.asset_filter` drops bound KBs and datasets for
+  which ``can_use_asset`` is false (they enter neither prompt nor tools).
+  Persona-dedicated datasets (``PersonaBinding.dedicated``) are not dropped.
+  Assets whose usage scope cannot be read are also dropped (fail closed) and
+  the conversation goes on. Dropped assets are logged as ``agent.asset_excluded``.
 """
 
 from dataclasses import dataclass
@@ -36,7 +39,7 @@ from .resource_lookup import ResourceLookup
 
 @dataclass(frozen=True)
 class IntegrationBundle:
-    """統合機能の組み立て結果。Manager はこれを agent 生成にそのまま渡す。"""
+    """Result of assembling the integrations. The Manager passes it straight to agent creation."""
 
     enhanced_prompt: str
     additional_tools: Optional[List[Any]]
@@ -49,10 +52,10 @@ def _asset_type(binding: PersonaBinding) -> ResourceType:
 
 
 class PersonaAgentIntegration:
-    """KB・データセット分析ツールと prompt section を組み立てる Manager 層の部品。
+    """Manager-layer part that assembles KB / dataset analysis tools and prompt sections.
 
-    Service は Manager と同様にコンストラクタ注入で受け取る（Component は
-    service_factory を知らず、テスト時はモックを注入できる）。
+    Services are taken by constructor injection like Managers (the Component
+    knows nothing of service_factory, so tests can inject mocks).
     """
 
     def __init__(
@@ -70,9 +73,9 @@ class PersonaAgentIntegration:
             knowledge_base_store: Reads the bound knowledge base.
             agent_service: Builds the KB tool and the agent.
             dataset_analysis_service: Builds the dataset tools.
-            binding_store: ``PersonaBindingStore`` (U5): bindings are read
+            binding_store: ``PersonaBindingStore``: bindings are read
                 with a ``persona_id`` query, never from the old tables.
-            resource_lookup: Usage scopes of the organization assets (U6).
+            resource_lookup: Usage scopes of the organization assets.
                 Without it no organization asset is handed over (fail closed).
         """
         self._datasets = dataset_store
@@ -94,12 +97,12 @@ class PersonaAgentIntegration:
         """Use ``lookup`` for asset usage scopes (for managers that build it lazily)."""
         self._lookup = lookup
 
-    # --- 組織資産の除外（BR6.3） ------------------------------------------------------
+    # Excluding organization assets
 
     def asset_filter(
         self, principal: Principal, persona_id: str, bindings: List[PersonaBinding]
     ) -> List[PersonaBinding]:
-        """The bindings whose asset ``principal`` may use (BR6.3, NFR1.51).
+        """The bindings whose asset ``principal`` may use.
 
         Dedicated datasets are always kept. Assets whose usage scope cannot be
         read are dropped (``reason=lookup_failed``); the conversation goes on.
@@ -141,7 +144,7 @@ class PersonaAgentIntegration:
                 reason=reason,
             )
 
-    # --- 組み立て ------------------------------------------------------------------
+    # Assembly
 
     def prepare(
         self,
@@ -152,11 +155,12 @@ class PersonaAgentIntegration:
         enable_dataset: bool,
         principal: Principal,
     ) -> IntegrationBundle:
-        """KB / データセット統合を解決し、prompt と tool を合成して返す。
+        """Resolve KB / dataset integrations, combine prompt and tools, and return them.
 
-        有効判定・DB 解決・資産の除外（``principal`` が使えるものだけ）・fail-closed
-        除外・ツール構築はここで行い、prompt と tool の純粋な合成のみ shared の
-        :func:`combine_integration` に委譲する。
+        Enable checks, DB resolution, asset exclusion (only what ``principal``
+        may use), fail-closed exclusion and tool construction happen here; only
+        the pure combination of prompt and tools is delegated to shared
+        :func:`combine_integration`.
         """
         sections, tool_groups = self._build_sections(
             persona_id,
@@ -185,14 +189,14 @@ class PersonaAgentIntegration:
         model_id: Optional[str] = None,
         initial_messages: Optional[List[dict[str, Any]]] = None,
     ) -> Any:
-        """One participant's agent, built for the user who runs it (C9, BR6.1).
+        """One participant's agent, built for the user who runs it.
 
         Args:
             context: The runner and the persona's owner (``ExecutionContext``).
             memory_mode: The user's choice; ``full`` becomes ``retrieve_only``
                 when ``context.write_memory`` is false.
-            initial_messages: History put into the agent directly (a rebuild,
-                BR3.4); it never goes through the memory's save path.
+            initial_messages: History put into the agent directly (a rebuild);
+                it never goes through the memory's save path.
         """
         effective_mode = memory_mode
         if memory_mode == "full" and not context.write_memory:
@@ -223,7 +227,7 @@ class PersonaAgentIntegration:
         enable_dataset: bool,
         principal: Principal,
     ) -> tuple[list[str], list[list[Any]]]:
-        """KB / データセット統合の prompt section と tool group を組み立てる。"""
+        """Assemble the prompt sections and tool groups of the KB / dataset integrations."""
         from ...prompts.discussion_interview_prompts import (
             build_dataset_prompt_section,
             build_kb_prompt_section,
@@ -254,7 +258,7 @@ class PersonaAgentIntegration:
             if kb_info:
                 sections.append(build_kb_prompt_section(**kb_info))
 
-        # global kill switch と session フラグの AND。
+        # AND of the global kill switch and the session flag.
         if use_dataset:
             accepted_bindings, datasets = self._resolve_dataset_bindings(
                 persona_id, bindings
@@ -271,13 +275,14 @@ class PersonaAgentIntegration:
     def _resolve_dataset_bindings(
         self, persona_id: str, bindings: Optional[List[PersonaBinding]] = None
     ) -> tuple[list[dict[str, Any]], list[Any]]:
-        """ペルソナの binding を解決し、重複 dataset を丸ごと除外して返す。
+        """Resolve a persona's bindings, dropping duplicated datasets entirely.
 
-        persona×dataset に複数 binding が存在する dataset はどれを使うか一意に定まらない
-        ため、その dataset を丸ごと除外する（fail-closed）。一意な空 binding_keys は
-        従来どおり全行アクセスとして許可する。U5 の PersonaBindings はキーが
-        persona_id + target_key のため重複は起きないが、除外の規則は残す。
-        組織資産の除外（約束 C9 の asset_filter）は呼び出し側（``_build_sections``）で済ませる。
+        A dataset with several bindings for one persona has no unique choice,
+        so it is dropped entirely (fail closed). A unique empty binding_keys
+        still means access to all rows. Keys are persona_id + target_key, so
+        duplicates should not occur, but the exclusion rule is kept.
+        Exclusion of organization assets (``asset_filter``) is done by the
+        caller (``_build_sections``).
         """
         dataset_bindings = [
             b

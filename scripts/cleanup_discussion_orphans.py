@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Find what a discussion delete left behind (U6, BR1.6, NFR1.58).
+Find what a discussion delete left behind.
 
 Deleting a discussion removes its body and shares in one transaction, then
 removes the messages, the reports and the attached files, retrying three
@@ -197,7 +197,7 @@ def _report(plan: CleanupPlan) -> list[str]:
         *counted("本体のないレポート", plan.reports),
         f"親の議論がないファイル: {len(plan.files)} 件",
         *[f"  {f.id}\t{f.parent_id}" for f in plan.files],
-        # 保存の途中かもしれないため、今回は対象にしない
+        # May be mid-save, so skip it this run.
         f"書かれてから 1 時間たっていない議論: {len(plan.recent)} 件（今回は対象外）",
         *[f"  {discussion_id}" for discussion_id in plan.recent],
     ]

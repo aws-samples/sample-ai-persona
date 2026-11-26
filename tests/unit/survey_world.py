@@ -1,4 +1,4 @@
-"""Shared world for the U7 Manager tests (surveys, templates, organization assets).
+"""Shared world for the Manager tests (surveys, templates, organization assets).
 
 DynamoDB and S3 are moto; ``SurveyStore``, ``SurveyTemplateStore``,
 ``ResourceShareStore``, ``CustomPersonaDataStore``, ``PersonaBindingStore``, ``AuthzLookupService`` and
@@ -6,7 +6,7 @@ DynamoDB and S3 are moto; ``SurveyStore``, ``SurveyTemplateStore``,
 ``DepartmentDirectory`` are the real components (decisions are never mocked).
 ``FileAttachments`` and ``OwnerDirectory`` are fakes; AI is mocked by each test.
 
-People (unit-test-instructions.md「テストのデータ」): member A and B in
+People: member A and B in
 ``sales``, member C in ``plan``, an admin in no department, no role.
 """
 
@@ -100,7 +100,7 @@ def make_files() -> Mock:
 
 
 class SurveyWorld:
-    """Everything a U7 Manager test wires together (inside ``mock_aws``)."""
+    """Everything a survey Manager test wires together (inside ``mock_aws``)."""
 
     def __init__(self) -> None:
         self.client = boto3.client("dynamodb", region_name=REGION)

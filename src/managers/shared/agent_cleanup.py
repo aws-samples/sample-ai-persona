@@ -1,8 +1,7 @@
-"""
-エージェント破棄処理の共通ユーティリティ
+"""Shared utility for disposing agents.
 
-AgentDiscussionManager, InterviewManager から共通利用される
-「dispose()を試行し、失敗してもリークさせず警告ログに残す」ループ。
+Used by AgentDiscussionManager and InterviewManager: try ``dispose()`` on
+every agent and log a warning on failure instead of leaking.
 """
 
 import logging
@@ -17,17 +16,17 @@ def dispose_agents(
     ),
     success_message: Optional[Callable[[Any], str]] = None,
 ) -> None:
-    """エージェント群のdispose()を全て試行する。
+    """Try ``dispose()`` on every agent.
 
-    1体の失敗が他のエージェントの解放を妨げないよう、例外は個別に捕捉して
-    警告ログに残すのみで呼び出し元には伝播させない（リソースリーク防止が目的のため、
-    ここで例外を投げると他のエージェントが未解放のまま残ってしまう）。
+    One failure must not block the release of the others, so each exception
+    is caught individually and only logged as a warning, never propagated
+    (raising here would leave the remaining agents undisposed).
 
     Args:
-        agents: 破棄対象のエージェント群
-        logger: 呼び出し元のロガー
-        error_message: (agent, exception) -> 警告ログの文言（既定は汎用文言）
-        success_message: agent -> 成功時のdebugログ文言（省略時はログ出力しない）
+        agents: Agents to dispose.
+        logger: The caller's logger.
+        error_message: (agent, exception) -> warning text (generic by default).
+        success_message: agent -> debug text on success (no log if omitted).
     """
     for agent in agents:
         try:

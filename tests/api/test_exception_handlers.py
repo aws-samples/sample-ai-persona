@@ -1,13 +1,14 @@
-"""例外から HTTP 応答への変換（約束 C13、BR2.14、NFR3.6、NFR9.21）の API テスト。
+"""API tests for converting exceptions into HTTP responses.
 
-4 つのハンドラ（CodedError・RequestValidationError・StarletteHTTPException・Exception）を
-小さなアプリに登録し、種類ごとの状態コードと API の本文 ``{detail, error_code}`` を確かめる。
-htmx と画面は、既存の表示（トースト・エラー画面・ログイン画面への移動）のまま。
+Four handlers (CodedError, RequestValidationError, StarletteHTTPException,
+Exception) are registered on a small app, and we check the status code per kind
+and the API body ``{detail, error_code}``. htmx and screens keep the existing
+display (toast, error screen, redirect to login).
 
-想定外の例外（``Exception``）のハンドラは、Starlette では一番外側の
-``ServerErrorMiddleware`` で動く（ほかのミドルウェアの外側）。TestClient は既定で
-例外を送り直すため、``raise_server_exceptions=False`` で作って応答を確かめる
-（NFR Design R-06）。
+The handler for unexpected exceptions (``Exception``) runs in Starlette's outermost
+``ServerErrorMiddleware`` (outside all other middleware). TestClient re-raises
+exceptions by default, so the client is built with ``raise_server_exceptions=False``
+to inspect the response.
 """
 
 import json
@@ -127,7 +128,7 @@ def test_malformed_api_request_is_request_invalid(api):
 
 
 def test_validation_log_has_no_submitted_values(api, caplog):
-    """U8 NFR3.16: 422 のログは方法・パス・件数・欄の位置だけ（送信値も例外の文字列化も出さない）。"""
+    """The 422 log has only method, path, count and field locations (no submitted values, no stringified exception)."""
     caplog.set_level("DEBUG", logger="web.main")
     secret = "Pw-SENTINEL-422-value"
     response = api.post("/api/things", json={"name": secret, "count": f"x{secret}"})
@@ -141,7 +142,7 @@ def test_validation_log_has_no_submitted_values(api, caplog):
     assert secret not in caplog.text
     assert "POST" in text and "/api/things" in text
     assert "count" in text
-    assert "1" in text  # エラーの件数
+    assert "1" in text  # Error count
 
 
 @pytest.mark.parametrize(
@@ -190,7 +191,7 @@ class TestHtmxAndPages:
         )
         assert response.status_code == 404
         assert "text/html" in response.headers["content-type"]
-        # 404 の画面は理由を区別しない（M11）。資源別の文言は出さない
+        # The 404 screen does not distinguish the reason; no per-resource text is shown
         assert _not_found_text(response.text) == M11
         assert SECRET not in response.text
 
@@ -206,7 +207,7 @@ class TestHtmxAndPages:
         assert SECRET not in response.text
 
 
-#: M11（mockups.md）の固定の見出しと本文。画面の仕様の固定文言として確かめる
+#: Fixed heading and body of the 404 screen, checked as fixed UI text
 M11 = ("ページが見つかりません", "指定されたページは存在しないか、表示できません。")
 BROWSER = {"accept": "text/html"}
 
@@ -227,7 +228,7 @@ def _title(html: str) -> str:
 
 
 class TestNotFoundPage:
-    """M11 / NFR1.9: one 404 screen whatever the reason (WF8)."""
+    """One 404 screen whatever the reason."""
 
     def test_heading_body_links_and_title(self, api):
         response = api.get(

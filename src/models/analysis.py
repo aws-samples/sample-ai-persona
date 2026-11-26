@@ -1,4 +1,4 @@
-"""Result contract of advanced generation (beta) analysis (contract C8, entities.md).
+"""Result contract of advanced generation (beta) analysis.
 
 Every method returns the same shapes so that ``AnalysisVerifier`` checks only
 these: the preparation report, the plan, the segments a persona stands for,
@@ -17,24 +17,24 @@ from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 from ._advanced_common import drop_none, iso, parse_dt
 from .source_file import SourceEncoding
 
-#: Version of the analysis record body (contract C7).
+#: Version of the analysis record body.
 RECORD_SCHEMA_VERSION = 1
 
-#: Seed used when a run does not say otherwise (BR5.3).
+#: Seed used when a run does not say otherwise.
 DEFAULT_SEED = 42
 
-#: Keys of ``AnalysisToolPolicy.limits`` (NFR5.8〜NFR5.10).
+#: Keys of ``AnalysisToolPolicy.limits``.
 LIMIT_MAX_CALLS = "max_calls"
 LIMIT_MAX_TOTAL_SECONDS = "max_total_seconds"
 LIMIT_MAX_OUTPUT_CHARS = "max_output_chars"
-#: U6 keys of the AI-written code (BR36.2).
+#: Keys of the AI-written code limits.
 LIMIT_RUN_CODE_MAX_FAILURES = "run_code_max_failures"
 LIMIT_RUN_CODE_TIMEOUT_SECONDS = "run_code_timeout_seconds"
 LIMIT_RUN_CODE_MAX_CHARS = "run_code_max_chars"
 
-#: Names of the tables of one generation, in the order chosen (BR37.2).
+#: Names of the tables of one generation, in the order chosen.
 TABLE_ALIASES: tuple[str, ...] = ("source_1", "source_2", "source_3")
-#: ``source_n`` or ``join:<axis>+<table>[+<table>]`` (BR37.4).
+#: ``source_n`` or ``join:<axis>+<table>[+<table>]``.
 _POPULATION_SOURCE = re.compile(
     r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$"
 )
@@ -46,7 +46,7 @@ _SAFE_ATTR = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def wrap_untrusted_data(text: str, source: str, **attributes: str) -> str:
-    """Put file values or tool output between data markers (BR5.6, NFR4.1).
+    """Put file values or tool output between data markers.
 
     The prompts tell the agent that what is inside ``<data ...>…</data>`` is
     data, not instructions. A marker that appears inside the data is broken
@@ -60,7 +60,7 @@ def wrap_untrusted_data(text: str, source: str, **attributes: str) -> str:
 
 
 class AnalysisMethod(StrEnum):
-    """Methods U1 can run (time series, text and others come in later units)."""
+    """Methods that can run (time series, text and others are not supported yet)."""
 
     FILTER = "filter"
     COMPARE = "compare"
@@ -68,7 +68,7 @@ class AnalysisMethod(StrEnum):
 
 
 class AnalysisStepKind(StrEnum):
-    """Kinds of one step of a plan (U6 addendum: the plan as steps).
+    """Kinds of one step of a plan (the plan is a sequence of steps).
 
     The first three run with the fixed tools; the last three need the AI
     detailed analysis (``run_code`` and the playbooks).
@@ -95,15 +95,15 @@ DETAILED_STEP_KINDS: frozenset[AnalysisStepKind] = frozenset(
 )
 #: Steps one plan may hold.
 MAX_PLAN_STEPS = 4
-#: The playbooks ``load_playbook`` reads (BR39.1); the only names recorded.
+#: The playbooks ``load_playbook`` reads; the only names recorded.
 PLAYBOOK_NAMES: tuple[str, ...] = ("join", "compare_groups", "rfm", "person_profile")
 
 
 def step_method(kind: AnalysisStepKind | str) -> Optional["AnalysisMethod"]:
     """The method a step stands for when it makes the segments.
 
-    ``rfm`` makes its segments as a filter (matched by ``segment_key``,
-    BR36.3) and ``compare_groups`` as a comparison; ``join`` and
+    ``rfm`` makes its segments as a filter (matched by ``segment_key``)
+    and ``compare_groups`` as a comparison; ``join`` and
     ``person_profile`` make none.
     """
     kind = AnalysisStepKind(kind)
@@ -158,7 +158,7 @@ class AnalysisStep:
 
 
 class SegmentDefinitionKind(StrEnum):
-    """How a segment can be reproduced on the same data (FR10.5)."""
+    """How a segment can be reproduced on the same data."""
 
     FILTER = "filter"
     CLUSTER = "cluster"
@@ -177,7 +177,7 @@ class EvidenceKind(StrEnum):
 
 
 class DocumentMode(StrEnum):
-    """How a generation uses its documents (U4 BR25.2)."""
+    """How a generation uses its documents."""
 
     FULL_TEXT = "full_text"
     EXTRACTION = "extraction"
@@ -188,21 +188,21 @@ DOCUMENT_PREPARE_VERSION = "doc-1"
 
 
 class AnalysisTool(StrEnum):
-    """Tools an analysis agent may use (BR5.2; U6 adds the last two, BR35.3)."""
+    """Tools an analysis agent may use (the last two need the AI detailed analysis)."""
 
     PROFILE_DATASET = "profile_dataset"
     ANALYZE_DATASET = "analyze_dataset"
     CLUSTER_SEGMENTS = "cluster_segments"
-    #: U6 addendum: count the features of the layers a fixed tool made
+    #: Count the features of the layers a fixed tool made
     PROFILE_SEGMENTS = "profile_segments"
-    #: U6: run AI-written code in the generation's session (BR36)
+    #: Run AI-written code in the generation's session
     RUN_CODE = "run_code"
-    #: U6: read one playbook by name (BR39.1)
+    #: Read one playbook by name
     LOAD_PLAYBOOK = "load_playbook"
 
 
-#: The fixed tools, in the order they are offered (BR5.2; U6 addendum adds
-#: ``profile_segments``).
+#: The fixed tools, in the order they are offered (``profile_segments`` is
+#: the last).
 U1_ANALYSIS_TOOLS: tuple[AnalysisTool, ...] = (
     AnalysisTool.PROFILE_DATASET,
     AnalysisTool.ANALYZE_DATASET,
@@ -238,7 +238,7 @@ class ReportColumn:
 
 @dataclass(frozen=True)
 class PrepareReport:
-    """Result of the preparation of one table in the sandbox (BR4.2〜BR4.4).
+    """Result of the preparation of one table in the sandbox.
 
     Attributes:
         source_id: The source file.
@@ -247,12 +247,11 @@ class PrepareReport:
         columns: Columns of the prepared data.
         encoding: The settled encoding.
         prepare_version: Version of the fixed preparation code.
-        encoding_retried: Read as UTF-8 first, then again as CP932 (FD-Q5).
+        encoding_retried: Read as UTF-8 first, then again as CP932.
         excluded_reasons: Counts per reason and up to five example lines.
-        parquet_sha256: U6: SHA-256 of the prepared Parquet, counted right
-            after it was written and before any AI-written code ran
-            (security-design.md NFR3.35). Kept by the run only, never stored
-            on the generation.
+        parquet_sha256: SHA-256 of the prepared Parquet, counted right
+            after it was written and before any AI-written code ran.
+            Kept by the run only, never stored on the generation.
     """
 
     source_id: str
@@ -289,7 +288,7 @@ class PrepareReport:
         )
 
     def without_hash(self) -> "PrepareReport":
-        """The report as it is stored (the hash stays with the run, NFR3.35)."""
+        """The report as it is stored (the hash stays with the run)."""
         return replace(self, parquet_sha256=None)
 
     @classmethod
@@ -311,7 +310,7 @@ class PrepareReport:
 
 @dataclass(frozen=True)
 class DocumentReport:
-    """Result of the preparation of one document in the sandbox (U4 BR24, C8).
+    """Result of the preparation of one document in the sandbox.
 
     Attributes:
         source_id: The source file.
@@ -373,7 +372,7 @@ class DocumentReport:
 
 @dataclass(frozen=True)
 class AnalysisPlan:
-    """The plan an agent makes before the analysis (FR9.1, BR5.1).
+    """The plan an agent makes before the analysis.
 
     Attributes:
         interpreted_purpose: How the agent read the user's instruction.
@@ -381,11 +380,11 @@ class AnalysisPlan:
         method: One of :class:`AnalysisMethod`.
         rationale: Why the method was chosen.
         budget: Upper bounds the plan works within (tool calls, time).
-        split_axis: Column to split a filtered group by (FD-Q6).
+        split_axis: Column to split a filtered group by.
         deviation_reason: Required when the method departs from the guide.
-        steps: U6 addendum: the steps in order (up to four). ``method`` stays
-            the method of the step that makes the segments. ``None`` (records
-            before the addendum) reads as one step of ``method``.
+        steps: The steps in order (up to four). ``method`` stays
+            the method of the step that makes the segments. ``None`` (older
+            records) reads as one step of ``method``.
     """
 
     interpreted_purpose: str
@@ -448,18 +447,18 @@ class AnalysisPlan:
 
 @dataclass(frozen=True)
 class Segment:
-    """A group of rows a persona stands for (contract C8).
+    """A group of rows a persona stands for.
 
     Attributes:
         id: Segment ID.
         label: Display name.
         definition: ``{kind: filter | cluster | derived, spec}``.
-        size: Rows in the group, a value seen in a tool output (BR8.1).
-        share: ``size`` divided by the population (0〜1).
+        size: Rows in the group, a value seen in a tool output.
+        share: ``size`` divided by the population (0 to 1).
         features: ``[{name, value, baseline}]``.
         evidence_ids: Evidence the segment rests on (at least one).
         overlaps: Whether it may overlap other segments; only non-overlapping
-            segments are summed against the population (BR8.2).
+            segments are summed against the population.
     """
 
     id: str
@@ -487,7 +486,7 @@ class Segment:
 
     @property
     def source(self) -> str | None:
-        """U6: the table (``source_n``) or joined table it rests on (BR37.2)."""
+        """The table (``source_n``) or joined table it rests on."""
         value = self.definition.get("source")
         return str(value) if value else None
 
@@ -503,17 +502,17 @@ class Segment:
 
     @property
     def segment_key(self) -> str | None:
-        """U6: the key of an ``emit_result`` segment (BR36.3)."""
+        """The key of an ``emit_result`` segment."""
         return self._spec_value("segment_key")
 
     @property
     def profile_tool_call_id(self) -> str | None:
-        """U6 addendum: the ``profile_segments`` call that counted the features."""
+        """The ``profile_segments`` call that counted the features."""
         return self._spec_value("profile_tool_call_id")
 
     @property
     def profile_key(self) -> str | None:
-        """U6 addendum: the key of the segment's layer in that call."""
+        """The key of the segment's layer in that call."""
         return self._spec_value("profile_key")
 
     def to_dict(self) -> dict[str, Any]:
@@ -544,20 +543,20 @@ class Segment:
 
 @dataclass(frozen=True)
 class Evidence:
-    """A piece of evidence (contract C8): a table aggregate or a document quote.
+    """A piece of evidence: a table aggregate or a document quote.
 
     Attributes:
-        id: Evidence ID (the Manager renumbers document evidence, U4 NFR4.4).
+        id: Evidence ID (the Manager renumbers document evidence).
         source_id: The source file.
         location: For a table, the ``tool_call_id`` of the aggregate; for a
             document, the page and the heading path (``p.12 / 第3章``).
         kind: One of :class:`EvidenceKind`.
         claim: What it shows.
         statistic: The aggregate's values (value, population) for display.
-        quote: The quoted text of a document (required there, BR27.1).
-        speaker_attributes: What the document says of the speaker (BR28.1).
-        segment_id: The table segment the quote was assigned to (BR28.1);
-            none means it stands for the whole (BR28.2).
+        quote: The quoted text of a document (required there).
+        speaker_attributes: What the document says of the speaker.
+        segment_id: The table segment the quote was assigned to;
+            none means it stands for the whole.
         assignment_reason: Why it was assigned to that segment.
     """
 
@@ -589,7 +588,7 @@ class Evidence:
         segment_id: str | None = None,
         assignment_reason: str | None = None,
     ) -> "Evidence":
-        """Evidence quoted from a document; the quote is required (BR27.1).
+        """Evidence quoted from a document; the quote is required.
 
         Raises:
             ValueError: The quote is empty.
@@ -660,7 +659,7 @@ class Evidence:
 
 @dataclass(frozen=True)
 class AnalysisRun:
-    """Summary of what ran, for the analysis record (contract C8).
+    """Summary of what ran, for the analysis record.
 
     Attributes:
         method: The method that ran.
@@ -671,7 +670,7 @@ class AnalysisRun:
         prepare_version: Version of the preparation code.
         tool_call_ids: Tool calls of the analysis.
         seed: Random seed (42 unless stated).
-        artifacts_s3_keys: Keys of artifacts (U6; empty in U1).
+        artifacts_s3_keys: Keys of artifacts (empty for fixed tools).
     """
 
     method: str
@@ -728,15 +727,15 @@ class AnalysisRun:
 
 @dataclass(frozen=True)
 class AnalysisToolPolicy:
-    """Tools and limits the Manager grants an analysis (contract C8, ADR-012).
+    """Tools and limits the Manager grants an analysis.
 
     Attributes:
-        tools: Allowed tools (a subset of :data:`U1_ANALYSIS_TOOLS` in U1;
-            U6 may add ``run_code`` and ``load_playbook``, BR35.3).
-        limits: Call count, total time and output characters (NFR5.8〜NFR5.10);
-            U6 adds the failures and the time of one ``run_code`` (BR36.2).
-        sources: U6: the table aliases the tools may choose (BR37.2). Empty
-            means the one table of U1.
+        tools: Allowed tools (a subset of :data:`U1_ANALYSIS_TOOLS` for fixed
+            tools; ``run_code`` and ``load_playbook`` may be added).
+        limits: Call count, total time and output characters;
+            plus the failures and the time of one ``run_code``.
+        sources: The table aliases the tools may choose. Empty
+            means the single table case.
     """
 
     tools: tuple[AnalysisTool, ...]
@@ -769,7 +768,7 @@ class AnalysisToolPolicy:
 
 @dataclass(frozen=True)
 class JoinPlan:
-    """The join key found between the axis table and one other (BR37.3, BR37.6).
+    """The join key found between the axis table and one other.
 
     Attributes:
         axis: The alias of the axis table (one row per person).
@@ -810,15 +809,14 @@ class JoinPlan:
 
 @dataclass(frozen=True)
 class EmittedResult:
-    """What ``emit_result`` leaves, partly recounted by the library (BR36.3, C9).
+    """What ``emit_result`` leaves, partly recounted by the library.
 
     ``finalize_ai_result`` counts ``population`` and each segment's ``size``
     again from the data; those (and the shares made of them,
     :meth:`recounted`) are the only numbers that may back a segment or an
     evidence. ``statistics`` and each segment's ``features`` are what the
     AI-written code passed to ``emit_result``: they are shown back to the
-    analysis agent but are NOT recounted, so they never validate anything
-    (review-01 R-02, NFR3.39).
+    analysis agent but are NOT recounted, so they never validate anything.
 
     Attributes:
         population: People of ``population_source`` (the axis table's people
@@ -915,20 +913,20 @@ def processes_left(value: Mapping[str, Any]) -> Optional[bool]:
 
 @dataclass(frozen=True)
 class RunCodeOutcome:
-    """How one ``run_code`` call ended, as the Service tells the gate (NFR5.55).
+    """How one ``run_code`` call ended, as the Service tells the gate.
 
     Attributes:
         ok: The code ran and ``emit_result`` was recounted.
         error_code: Fixed code of a failure (never the error text).
         timed_out: The run passed its time and was cancelled.
         cancel_failed: The cancel raised or the stop could not be read.
-        tampered: The library or a prepared Parquet changed (BR36.6), or a
+        tampered: The library or a prepared Parquet changed, or a
             hash to compare was missing (fail closed).
         changed: What changed: ``library``, ``parquet`` and / or ``process``
-            (processes the code left, security review).
+            (processes the code left).
         verify_failed: The isolated check itself failed or its answer could
             not be read. The tools halt (fail closed) but it is no tamper.
-        no_result: U6 addendum: the code ended normally without calling
+        no_result: The code ended normally without calling
             ``emit_result`` (a look around). It is a call but no failure.
     """
 
@@ -947,7 +945,7 @@ class RunCodeGate(Protocol):
     """What ``AnalysisToolService`` asks before and tells after ``run_code``.
 
     The Manager's budget implements it, so the Service never imports the
-    Manager (reliability-design.md NFR5.55).
+    Manager.
     """
 
     def allows_run_code(self) -> bool:
@@ -965,9 +963,9 @@ class RunCodeGate(Protocol):
 
 @dataclass(frozen=True)
 class AnalysisRecord:
-    """The full analysis record kept in S3 (entities.md AnalysisRecord, contract C7).
+    """The full analysis record kept in S3.
 
-    It never holds a presigned URL or row data (BR9.1).
+    It never holds a presigned URL or row data.
 
     Attributes:
         record_id: The generation ID while pending; a saved persona's copy
@@ -982,10 +980,10 @@ class AnalysisRecord:
         created_at: When the record was written.
         tool_calls: ``[{tool_call_id, tool, ok, error_code, playbook}]`` (no
             output; ``playbook`` is the fixed name ``load_playbook`` read).
-        source_file_ids: The files used, in ``source_checksums`` order (U2,
-            BR14.3). Empty in U1 records.
+        source_file_ids: The files used, in ``source_checksums`` order.
+            Empty in older records.
         source_display_names: Their display names, kept so the record can
-            name a deleted file (U2, BR14.3). Empty in U1 records.
+            name a deleted file. Empty in older records.
     """
 
     record_id: str
@@ -1028,7 +1026,7 @@ class AnalysisRecord:
         source_file_ids: Sequence[str] = (),
         source_display_names: Sequence[str] = (),
     ) -> "AnalysisRecord":
-        """A new record written at the end of a generation (BR9.1, BR14.3)."""
+        """A new record written at the end of a generation."""
         return cls(
             record_id=record_id,
             owner_sub=owner_sub,

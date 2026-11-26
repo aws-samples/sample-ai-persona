@@ -1,8 +1,9 @@
-"""SurveyTemplateStore（アンケートテンプレートの本体の読み書き）の結合テスト。moto を使う。
+"""Integration tests for SurveyTemplateStore (reading and writing the template body), using moto.
 
-U7 BR1.1（新規は「まだない ID」の条件付きで、共有は書かない。OwnerIndex に載る）、
-BR1.5（編集は名前・設問・画像・updated_at だけ）、NFR2.21（まとめ読みは強い整合性で、
-未処理のキーは読み直す）、NFR2.25（本体の大きさの見積もり）。
+A new item is written conditioned on the ID not existing yet and does not write
+sharing; it appears in OwnerIndex. Edits touch only name, questions, images and
+updated_at. Batch reads are strongly consistent and re-read unprocessed keys. The body
+size is estimated.
 """
 
 from typing import Any
@@ -112,7 +113,7 @@ class TestPutAndGet:
         assert read.created_at == template.created_at
 
     def test_new_template_has_no_shares_and_lands_in_owner_index(self, store, client):
-        """BR1.1: 共有は ResourceSharing だけが書く（作成は共有なしで始まる）。"""
+        """Only ResourceSharing writes sharing (creation starts without sharing)."""
         template = SurveyTemplate.from_dict(
             {**_template().to_dict(), "shared_group_ids": ["sales"]}
         )
@@ -143,7 +144,7 @@ class TestPutAndGet:
 
 class TestUpdateContent:
     def test_keeps_owner_shares_and_created_at(self, store, client):
-        """BR1.5: 編集は所有者・共有・created_at を書かない（put もしない）。"""
+        """An edit does not write owner, sharing or created_at (and does not put)."""
         template = _template()
         store.put_new(template)
         _share(client, template.id)
@@ -205,7 +206,7 @@ class TestGetMany:
 
 class TestItemSize:
     def test_grows_with_the_body(self):
-        """NFR2.25: 本体の大きさは属性名と値の合計で見積もる。"""
+        """The body size is estimated as the sum of attribute names and values."""
         small = SurveyTemplateStore.item_size({"id": "a"})
         large = SurveyTemplateStore.item_size({"id": "a", "text": "あ" * 1000})
 

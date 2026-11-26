@@ -1,20 +1,19 @@
-"""Tools, limits and plan rules of one advanced generation analysis (BR5.1, BR5.2).
+"""Tools, limits and plan rules of one advanced generation analysis.
 
 Only ``AdvancedPersonaGenerationManager`` uses this, so it is a module of that
-Manager's package (components.md, "採らなかった分け方").
+Manager's package.
 
-- Tools (BR5.2): the three fixed tools ``profile_dataset``,
-  ``analyze_dataset`` and ``cluster_segments``. U6 (BR35.3, replacing
-  BR5.2's "never ``run_code``"): ``run_code`` and ``load_playbook`` with the
-  detailed analysis outside this process.
-- Limits (NFR5.8〜NFR5.10): call count, total time and characters of one
+- Tools: the three fixed tools ``profile_dataset``,
+  ``analyze_dataset`` and ``cluster_segments``; plus ``run_code`` and
+  ``load_playbook`` with the detailed analysis outside this process.
+- Limits: call count, total time and characters of one
   output, from ``config``; the Service uses only what it is given.
-- Guide (BR5.1): a named target is ``filter``, a comparison ``compare``, an
+- Guide: a named target is ``filter``, a comparison ``compare``, an
   empty instruction with one row per person ``cluster``; otherwise
   ``cluster`` with two numeric columns or more, else ``filter``.
 - A plan whose method departs from the guide needs ``deviation_reason``;
   without one it is asked once more, then the guide's method is used.
-- U6 addendum: the plan is a sequence of steps. ``guide_candidates`` suggests
+- The plan is a sequence of steps. ``guide_candidates`` suggests
   them from the words and the column shapes (the guide's method stays the
   last), and ``settle_plan`` drops the steps that cannot run.
 """
@@ -47,9 +46,9 @@ from ...models.analysis import (
     AnalysisToolPolicy,
 )
 
-#: Words that ask for a comparison (BR5.1).
+#: Words that ask for a comparison.
 _COMPARE_WORDS = ("比較", "比べ", "違い", "差", "対比", "vs", "VS", "compare")
-#: Column names that look like a person's ID (BR5.1): "id" as a word of its own
+#: Column names that look like a person's ID: "id" as a word of its own
 #: (``id``, ``customer_id``, ``customerId``, ``顧客ID``), ``ＩＤ`` and ``番号``.
 #: A name that merely holds the letters (``residence``, ``paid``, ``video``) is not.
 _ID_NAME = re.compile(
@@ -82,7 +81,7 @@ _NUMERIC_TYPE = re.compile(
     r"UBIGINT|FLOAT|REAL|DOUBLE|DECIMAL.*|NUMERIC.*)$",
     re.IGNORECASE,
 )
-#: Words that point at a purchase history scored by RFM (U6 addendum).
+#: Words that point at a purchase history scored by RFM.
 _RFM_WORDS = ("購買", "頻度", "最近", "新しさ", "RFM", "rfm", "優良", "離反", "離れ")
 _DATE_TYPE = re.compile(r"^(DATE|TIMESTAMP.*|TIME.*)$", re.IGNORECASE)
 #: Distinct values of a column that splits the rows into a few groups.
@@ -90,7 +89,7 @@ _FEW_VALUES = range(2, 6)
 #: Reasons of the steps the policy adds (shown on the plan card).
 _LAST_STEP_REASON = "最後に層を作る"
 _JOIN_STEP_REASON = "複数の表を、同じ人でつなげる"
-#: The fixed-tool step a detailed-only kind falls back to (U6 addendum).
+#: The fixed-tool step a detailed-only kind falls back to.
 _FIXED_STEP = {
     AnalysisStepKind.RFM: AnalysisStepKind.FILTER,
     AnalysisStepKind.COMPARE_GROUPS: AnalysisStepKind.COMPARE,
@@ -130,17 +129,16 @@ class AnalysisPolicy:
         in_process: bool = False,
         sources: Sequence[str] = (),
     ) -> AnalysisToolPolicy:
-        """The tools and limits handed to ``AnalysisToolService`` (ADR-012).
+        """The tools and limits handed to ``AnalysisToolService``.
 
-        U6 BR35.3 (replaces BR5.2): ``run_code`` and ``load_playbook`` are
-        added only when the generation uses the detailed analysis, has a
-        table and does not run in this process (NFR3.33), with the failures
-        and the time of one run (BR36.2).
+        ``run_code`` and ``load_playbook`` are added only when the generation
+        uses the detailed analysis, has a table and does not run in this
+        process, with the failures and the time of one run.
 
         Args:
             detailed: ``AdvancedGeneration.use_detailed_analysis``.
             in_process: The sandbox runs in this process.
-            sources: The table aliases the tools may choose (BR37.2).
+            sources: The table aliases the tools may choose.
         """
         limits = {
             LIMIT_MAX_CALLS: int(config.ADVANCED_TOOL_MAX_CALLS),
@@ -167,7 +165,7 @@ class AnalysisPolicy:
     def read_tables(
         tables: Sequence[tuple[str, str, Mapping[str, Any]]],
     ) -> tuple[TableReading, ...]:
-        """How each table reads, proposed from its column profile (U6 addendum).
+        """How each table reads, proposed from its column profile.
 
         ``tables`` are ``(alias, file name, profile)``. The user may correct
         the proposal on the plan card; what they confirmed is used as it is.
@@ -178,7 +176,7 @@ class AnalysisPolicy:
 
     @staticmethod
     def guide_alias(readings: Sequence[TableReading]) -> str:
-        """The table the guide reads: one row per person, else the first (BR37.2)."""
+        """The table the guide reads: one row per person, else the first."""
         for reading in readings:
             if reading.kind == "people" and reading.person_id is not None:
                 return reading.alias
@@ -186,12 +184,12 @@ class AnalysisPolicy:
 
     @staticmethod
     def readings_count_rows(readings: Sequence[TableReading]) -> bool:
-        """Whether every table is a history, so what is counted is rows (U6)."""
+        """Whether every table is a history, so what is counted is rows."""
         return bool(readings) and all(r.kind == "history" for r in readings)
 
     @staticmethod
     def guide_table(tables: Sequence[tuple[str, Mapping[str, Any]]]) -> str:
-        """The table the guide reads, from the profiles alone (BR37.2)."""
+        """The table the guide reads, from the profiles alone."""
         return AnalysisPolicy.guide_alias(
             AnalysisPolicy.read_tables([(a, a, p) for a, p in tables])
         )
@@ -200,7 +198,7 @@ class AnalysisPolicy:
     def rows_are_not_people(
         tables: Sequence[tuple[str, Mapping[str, Any]]],
     ) -> bool:
-        """Whether every table is a history, from the profiles alone (U6).
+        """Whether every table is a history, from the profiles alone.
 
         The counts and shares of such a result are of rows (orders, events),
         not of people.
@@ -223,7 +221,7 @@ class AnalysisPolicy:
         profile: Mapping[str, Any],
         reading: Optional[TableReading] = None,
     ) -> AnalysisMethod:
-        """The method the guide expects for this instruction and table (BR5.1).
+        """The method the guide expects for this instruction and table.
 
         ``reading`` is how the table reads (what the user confirmed on the plan
         card, else the proposal); without it the profile alone is read.
@@ -255,17 +253,17 @@ class AnalysisPolicy:
     ) -> list[StepCandidate]:
         """The steps the guide suggests, from the words and the column shapes.
 
-        U6 addendum: a join plan puts ``join`` first; a history with a date
+        A join plan puts ``join`` first; a history with a date
         and a number (or purchase words) suggests ``rfm``; comparison words,
         or a column of two to five values beside a number, suggest
         ``compare`` and then ``compare_groups``. The last candidate always
-        stands for :meth:`guide_method` (matching and BR5.1 use it). The
+        stands for :meth:`guide_method`. The
         detailed-only kinds come only when the detailed analysis is used.
 
         Args:
             purpose: The user's instruction.
             tables: ``(alias, profile)`` of every table, in order.
-            joins: The join plans found (BR37.3).
+            joins: The join plans found.
             detailed: The generation uses the AI detailed analysis.
             readings: How each table reads (what the user confirmed, else the
                 proposal). A table that has one decides by it, not by its
@@ -343,19 +341,19 @@ class AnalysisPolicy:
         tables: Optional[Mapping[str, Sequence[str]]] = None,
         joined: bool = False,
     ) -> Optional[AnalysisPlan]:
-        """The plan to run, or ``None`` to ask the planning agent again (BR5.1).
+        """The plan to run, or ``None`` to ask the planning agent again.
 
         Args:
             raw: The planning agent's fields (no budget).
             guide: :meth:`guide_method`'s answer.
             attempt: 1 for the first answer, 2 for the second.
             columns: Profiled column names; ``split_axis`` must be one.
-            detailed: U6 addendum: the generation uses the detailed analysis;
+            detailed: The generation uses the detailed analysis;
                 without it the detailed-only steps are replaced or dropped.
-            tables: U6 addendum: profiled column names per table alias; a
+            tables: Profiled column names per table alias; a
                 step naming another table or column is dropped. Defaults to
                 ``columns`` as ``source_1``.
-            joined: U6 addendum: the tables have a join plan; a plan without a
+            joined: The tables have a join plan; a plan without a
                 join step gets one first (it is the only way they meet).
         """
         method = AnalysisMethod(str(raw.get("method")))
@@ -389,7 +387,7 @@ class AnalysisPolicy:
 def _settle_steps(
     raw_steps: Any, *, detailed: bool, tables: Mapping[str, Sequence[str]]
 ) -> tuple[AnalysisStep, ...]:
-    """The steps that can run, in order, at most four (U6 addendum)."""
+    """The steps that can run, in order, at most four."""
     every_column = {str(c) for names in tables.values() for c in names}
     out: list[AnalysisStep] = []
     for item in raw_steps if isinstance(raw_steps, list) else []:
@@ -433,8 +431,8 @@ def _end_with_method(
 ) -> tuple[AnalysisStep, ...]:
     """Steps whose last one makes the segments of ``method``, at most four.
 
-    The plan's ``method`` is the method of the step that makes the segments
-    (U6 addendum). When the agent's steps end elsewhere (a join, or another
+    The plan's ``method`` is the method of the step that makes the segments.
+    When the agent's steps end elsewhere (a join, or another
     method because ``method`` was forced to the guide), the step of ``method``
     the agent already wrote moves to the end, or one is added.
     """
@@ -523,7 +521,7 @@ def _read_table(alias: str, name: str, profile: Mapping[str, Any]) -> TableReadi
 def _is_history(
     profile: Mapping[str, Any], joined: bool, history: Optional[bool] = None
 ) -> bool:
-    """A table with several rows per person, a date and a number (U6 addendum).
+    """A table with several rows per person, a date and a number.
 
     ``history`` is what the table's reading says; without it the profile's
     columns decide.
@@ -542,7 +540,7 @@ def _is_history(
 
 
 def _has_groups(profile: Mapping[str, Any]) -> bool:
-    """A column of two to five values and another numeric column (U6 addendum)."""
+    """A column of two to five values and another numeric column."""
     columns = list(profile.get("columns") or [])
     groups = [c for c in columns if c.get("distinct") in _FEW_VALUES]
     return any(
@@ -560,12 +558,12 @@ def is_numeric_type(type_name: str) -> bool:
 
 
 def is_person_id(column: Mapping[str, Any]) -> bool:
-    """A column that looks like a person's ID (BR5.1, U6 BR37.6)."""
+    """A column that looks like a person's ID."""
     return _is_person_id(column)
 
 
 def _is_person_id(column: Mapping[str, Any]) -> bool:
-    """A column whose values all differ and whose name or type says ID (BR5.1)."""
+    """A column whose values all differ and whose name or type says ID."""
     if not column.get("all_distinct"):
         return False
     name = str(column.get("name", ""))

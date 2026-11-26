@@ -1,4 +1,4 @@
-"""Synthesis prompts of the advanced generation: persona quality (U1).
+"""Synthesis prompts of the advanced generation: persona quality.
 
 The synthesis agent writes the personas from aggregates only, so it gets the
 same persona writing guide as the ordinary generation (one source in
@@ -60,7 +60,7 @@ class TestPersonaSchema:
 
 
 class TestDocumentPrompts:
-    """U4: BR25.3, BR26.1, BR26.4, BR27.2, BR28.1 (the wording the agents get)."""
+    """The wording the agents get for documents."""
 
     def test_full_text_asks_for_quoted_evidence(self) -> None:
         prompt = prompts.synthesis_prompt(
@@ -69,7 +69,7 @@ class TestDocumentPrompts:
 
         assert "document_evidence" in prompt
         assert "segment_id は空" in prompt
-        # BR27.2: value, pain and goal for every persona of documents alone
+        # value, pain and goal for every persona of documents alone
         assert "value" in prompt and "pain" in prompt and "goal" in prompt
 
     def test_full_text_with_a_table_asks_for_the_segment(self) -> None:
@@ -120,7 +120,7 @@ class TestDocumentPrompts:
 
 
 class TestAnalysisInstructionsU6:
-    """BR36.5, BR37.2, BR37.4: the notes appear only when they apply."""
+    """The notes appear only when they apply."""
 
     def test_one_table_without_detailed_is_the_u1_text(self) -> None:
         assert prompts.analysis_instructions() == prompts.ANALYSIS_INSTRUCTIONS
@@ -185,7 +185,7 @@ class TestAnalysisInstructionsU6:
             JoinPlan,
         )
 
-        # U6 addendum: the join playbook is named only with a join step
+        # the join playbook is named only with a join step
         plan = AnalysisPlan(
             interpreted_purpose="",
             questions=("q",),

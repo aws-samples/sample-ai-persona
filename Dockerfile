@@ -1,41 +1,41 @@
-# 参考：https://docs.astral.sh/uv/guides/integration/docker/#available-images
+# Reference: https://docs.astral.sh/uv/guides/integration/docker/#available-images
 FROM python:3.13-slim-bookworm
 
-# uv はビルド用にのみ使用する（uvx は実行時MCP起動に使っていたが廃止したため入れない）
+# uv is used at build time only; it is not needed at runtime.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
 
-# 実行用の非ルートユーザー（UID/GID 10001。数値で指定し、オーケストレーター側の runAsNonRoot 検査にも通す）
+# Non-root runtime user. UID/GID are numeric so orchestrator runAsNonRoot checks pass.
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /home/app --create-home --shell /usr/sbin/nologin app
 
-# アプリ本体をコピー（所有者は root のまま。実行ユーザーからは読み取り専用）
+# Copy the app; owned by root, so read-only for the runtime user.
 ADD . /app
 
-# 作業ディレクトリ
+# Working directory
 WORKDIR /app
 
-# 依存パッケージをインストールする。実行時に書き込むのはローカル保存用の uploads/ だけなので、
-# そこだけ実行ユーザーの所有にする（S3 を使う構成では空のまま）
+# Install dependencies. The only path written at runtime is uploads/ (local storage),
+# so only that is owned by the runtime user (stays empty when S3 is used).
 RUN uv sync --frozen \
     && install -d -o app -g app /app/uploads
 
-# ここから実行ユーザーに切り替える
+# Switch to the runtime user from here on.
 USER 10001:10001
 ENV HOME=/home/app
 
-# DuckDB の httpfs 拡張をビルド時に組み込む（実行時の INSTALL httpfs によるインターネット
-# ダウンロードを排除する）。拡張は $HOME/.duckdb に入るため、実行ユーザーで入れる
+# Bake the DuckDB httpfs extension in at build time so no internet download happens at
+# runtime (INSTALL httpfs). It lands in $HOME/.duckdb, so install it as the runtime user.
 RUN /app/.venv/bin/python -c "import duckdb; c=duckdb.connect(); c.execute('INSTALL httpfs'); c.execute('LOAD httpfs'); c.close()"
 
-# 公開ポート（非ルートは 1024 未満を bind できないため 8080。ALB のリスナーは 80 のまま）
+# Listen on 8080 because a non-root user cannot bind below 1024 (the ALB listener stays on 80).
 EXPOSE 8080
 
-# FastAPI + uvicornを起動（uv run を介さず venv 直起動）
-# --no-access-log: uvicorn のアクセスログは URL のクエリ（/auth/callback の code・state）を
-#   そのまま出すため止め、アプリの http.access（クエリを除いたパス）に置き換える（NFR3.3）
-# --timeout-keep-alive 310: 内部 ALB の無操作タイムアウト（300 秒）より長くし、ALB より先に
-#   アプリが接続を閉じて 502 になるのを防ぐ
-# --timeout-graceful-shutdown 60: SIGTERM のあと接続の終わりを待つのは 60 秒まで。そのあとの
-#   lifespan の終了でアンケートの進行役の回を最長 30 秒待つので、合わせて ECS の stopTimeout
-#   （120 秒）に収まる（NFR4.11）
+# Start FastAPI with uvicorn directly from the venv (without uv run).
+# --no-access-log: uvicorn access logs include the URL query (code/state on /auth/callback);
+#   the app logs http.access (path without query) instead.
+# --timeout-keep-alive 310: longer than the internal ALB idle timeout (300 s), so the app
+#   never closes a connection first and causes a 502.
+# --timeout-graceful-shutdown 60: after SIGTERM, wait up to 60 s for connections. The lifespan
+#   shutdown then waits up to 30 s for the survey coordinator, so the total fits within the
+#   ECS stopTimeout (120 s).
 CMD ["/app/.venv/bin/uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--timeout-keep-alive", "310", "--timeout-graceful-shutdown", "60"]

@@ -1,8 +1,8 @@
-"""DiscussionStore（議論の本体・発言・レポートの読み書き）の結合テスト。moto を使う。
+"""Integration tests for DiscussionStore (reads and writes of the discussion body, messages and reports), using moto.
 
-BR1.2〜BR1.6、BR2.7、BR3.8、BR4.4、NFR1.57、NFR1.58、NFR1.62、NFR2.15、NFR2.16、
-NFR2.19、NFR9.34。条件・トランザクションの失敗は自前の例外に分ける。moto で起こせない
-TransactionConflict は CancellationReasons を組み立てたスタブの client で確かめる。
+Condition and transaction failures map to the store's own exceptions. A
+TransactionConflict, which moto cannot produce, is verified with a stub client
+built with CancellationReasons.
 """
 
 from datetime import datetime, timezone
@@ -155,7 +155,7 @@ class _Failing:
 
 
 # =============================================================================
-# 本体の大きさ（BR2.7、NFR2.19）
+# Body size
 # =============================================================================
 
 
@@ -184,7 +184,7 @@ class TestBodySize:
 
 
 # =============================================================================
-# 本体の書き込みと読み出し（BR1.2、BR1.3）
+# Writing and reading the body
 # =============================================================================
 
 
@@ -225,7 +225,7 @@ class TestPutNew:
         assert Discussion.from_dict(body) == d
 
     def test_nested_agent_config_round_trips(self, store):
-        """Issue #107: ペルソナごとのモデル（入れ子の dict）が往復する。"""
+        """Issue #107: the per-persona model (a nested dict) round-trips."""
         config = {
             "rounds": 3,
             "persona_models": {"p1": "openai.gpt", "p2": "google.gemma"},
@@ -289,7 +289,7 @@ class TestGetMany:
 
 
 # =============================================================================
-# 発言（BR1.2 (2)、BR1.3、NFR9.34）
+# Messages
 # =============================================================================
 
 
@@ -304,7 +304,7 @@ class TestMessages:
         assert [m.seq for m in store.query_messages("d1", up_to=3)] == [1, 2, 3]
 
     def test_a_thousand_messages_page_through(self, store):
-        """NFR9.34: 長い議論も保存して開ける（Query のページを送る）。"""
+        """A long discussion can also be saved and opened (Query pages are followed)."""
         long_text = "長い発言" * 100
         messages = [
             DiscussionMessage.from_message(
@@ -352,7 +352,7 @@ class TestMessages:
 
 
 # =============================================================================
-# 部分更新（BR1.4、BR3.8、NFR1.62）
+# Partial updates
 # =============================================================================
 
 
@@ -399,7 +399,7 @@ class TestPartialUpdates:
 
 
 # =============================================================================
-# レポート（BR4.4、NFR1.62）
+# Reports
 # =============================================================================
 
 
@@ -424,7 +424,7 @@ class TestReports:
         assert store.query_reports(d.id) == []
 
     def test_two_saves_on_two_reports_let_one_through(self, store):
-        """NFR1.62: 同時の保存でも 3 件を超えない（条件は本体の件数）。"""
+        """Concurrent saves never exceed 3 items (the condition is on the body count)."""
         d = _discussion(report_count=2)
         store.put_new(d.to_dict())
         store.put_report(_report(d.id, "a"), max_reports=3, updated_at="u")
@@ -473,7 +473,7 @@ class TestReports:
 
 
 # =============================================================================
-# 失敗の分類
+# Failure classification
 # =============================================================================
 
 
@@ -505,13 +505,13 @@ class TestFailureClassification:
 
 
 # =============================================================================
-# 運用のスクリプト向けの読み（BR1.6）
+# Reads for operational scripts
 # =============================================================================
 
 
 class TestOrphanScans:
     def test_partitions_carry_the_newest_write_time(self, client):
-        """発言は書いた時刻（written_at）を持ち、後始末は 1 時間以内のものを飛ばす。"""
+        """A message carries the time it was written (written_at), and cleanup skips those within the last hour."""
         store = make_store(client, clock=lambda: 1_800_000_000.0)
         store.write_messages(_messages("d1", 2))
         (summary,) = store.message_partitions().values()

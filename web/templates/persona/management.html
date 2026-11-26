@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_users, icon_plus %}
 {% from "components/list_tabs.html" import list_tabs, list_tabpanel %}
-{# GENDER_LABELS / country_choices は persona ルーターで templates.env.globals に登録済み #}
+{# GENDER_LABELS / country_choices are registered in templates.env.globals by the persona router. #}
 {#
-  引数（U4）:
-    listing    ... TabbedList（最初のページと各タブの件数）。取れなければ None
-    list_error ... 一覧を取れなかったときの文言
+  Arguments:
+    listing    ... TabbedList (first page and the count of each tab); None when unavailable
+    list_error ... message when the list could not be fetched
 #}
 
 {% block content %}
@@ -21,7 +21,7 @@
         </a>
     </div>
     
-    <!-- 検索・フィルター -->
+    <!-- Search and filters -->
     <div class="bg-white rounded-lg shadow-md p-4 mb-6">
         <div class="flex gap-4">
             <div class="flex-1">
@@ -42,7 +42,7 @@
                 クリア
             </button>
         </div>
-        <!-- 属性フィルタ（クライアントサイド） -->
+        <!-- Attribute filters (client side) -->
         <div class="flex flex-wrap gap-4 mt-4">
             <div>
                 <label for="filter-gender" class="block text-xs text-gray-500 mb-1">性別</label>
@@ -73,7 +73,7 @@
         </div>
     </div>
 
-    <!-- ペルソナ一覧（タブ別、M6）。タブと読み直しは /persona/management?tab=... -->
+    <!-- Persona list (per tab). Tabs and reloads use /persona/management?tab=... -->
     {%- set active = listing.tab.value if listing else (tab or "mine") %}
     {{ list_tabs(active, listing.counts if listing else {}, listing.show_all if listing else False, "/persona/management", "persona-list") }}
     {% call list_tabpanel("persona-list", active, "/persona/management") %}

@@ -4,8 +4,8 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { acknowledgeAll, acknowledgeCfnValidate, NAG_REASONS } from '../nag-reasons';
 
 /**
- * Windows のライセンス認証（KMS）の宛先。EC2 の Windows は 169.254.169.250・251 の TCP 1688 で
- * 認証する（閉域でもリンクローカルのため届く。NFR3.5）。
+ * Destination for Windows activation (KMS). Windows on EC2 activates over TCP 1688 to
+ * 169.254.169.250 and .251 (reachable even in the closed network because it is link-local).
  */
 const WINDOWS_KMS_ADDRESSES = ['169.254.169.250/32', '169.254.169.251/32'];
 const WINDOWS_KMS_PORT = 1688;
@@ -13,25 +13,25 @@ const WINDOWS_KMS_PORT = 1688;
 export interface ValidationEnvironmentProps {
   vpc: ec2.IVpc;
   /**
-   * インスタンスを置くサブネット（閉域対応 U2 BR2.4）。省略時は PRIVATE_ISOLATED。閉域で AZ の数 1 の
-   * ときは、エンドポイントと同じ AZ を渡す。
+   * Subnet for the instance (default PRIVATE_ISOLATED). With one AZ in the closed
+   * configuration, pass the same AZ as the endpoints.
    */
   subnets?: ec2.SubnetSelection;
 }
 
 /**
- * 閉域の検証用 Windows EC2（U1 閉域、BR6.1・BR6.2、NFR1.4・NFR3.5）。
+ * Windows EC2 for validating the closed network.
  *
- * closedCreateTestEnvironment=true のときだけ App スタックが作る。利用者は Fleet Manager
- * （SSM のエンドポイント経由）の RDP で入り、中のブラウザで https://<FQDN> を開く。
+ * The App stack creates it only when closedCreateTestEnvironment=true. Users connect over RDP via
+ * Fleet Manager (through the SSM endpoints) and open https://<FQDN> in the browser inside.
  *
- * - Windows Server 2022（日本語）、t3.medium、PRIVATE_ISOLATED、パブリック IP なし、IMDSv2
- * - キーペアは ec2.KeyPair（秘密鍵は SSM パラメータ /ec2/keypair/<ID> に置かれ、Fleet Manager の
- *   RDP の認証に使う）
- * - ロールは AmazonSSMManagedInstanceCore だけ（インラインの権限は足さない）
- * - SG は受け入れなし。外向きはここで KMS の 1688 だけを足し、ALB とエンドポイントへの 443 は
- *   App スタックが結線で足す（AppStack.wireClosedSecurityGroups）
- * - ルートボリュームは暗号化する
+ * - Windows Server 2022 (Japanese), t3.medium, PRIVATE_ISOLATED, no public IP, IMDSv2
+ * - Key pair is ec2.KeyPair (the private key is stored in the SSM parameter /ec2/keypair/<ID> and used
+ *   for Fleet Manager RDP authentication)
+ * - Role is AmazonSSMManagedInstanceCore only (no inline permissions)
+ * - SG has no ingress. Only KMS 1688 egress is added here; 443 to the ALB and endpoints is added by
+ *   the App stack wiring (AppStack.wireClosedSecurityGroups)
+ * - Root volume is encrypted
  */
 export class ValidationEnvironment extends Construct {
   public readonly instance: ec2.Instance;
@@ -63,7 +63,7 @@ export class ValidationEnvironment extends Construct {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')],
     });
 
-    // Windows の管理者のパスワードの復号に使う（Fleet Manager の RDP の認証）
+    // Used to decrypt the Windows administrator password (Fleet Manager RDP authentication)
     this.keyPair = new ec2.KeyPair(this, 'KeyPair', { type: ec2.KeyPairType.RSA });
 
     this.instance = new ec2.Instance(this, 'Instance', {
@@ -89,9 +89,9 @@ export class ValidationEnvironment extends Construct {
       ],
     });
 
-    // cdk-nag の抑止（U1 閉域、security-design.md §7）。理由は nag-reasons.ts
+    // cdk-nag suppressions; reasons are in nag-reasons.ts
     acknowledgeAll(this.instance, ['EC28', 'EC29'], NAG_REASONS.validationInstance);
-    // サブネットの AZ を固定しているため、インスタンスにも AZ が出る（closed-network.ts）
+    // The subnet AZ is pinned, so the instance also reports an AZ (closed-network.ts)
     acknowledgeCfnValidate(this.instance, ['W3010'], NAG_REASONS.pinnedAvailabilityZones);
     acknowledgeAll(
       this.role,

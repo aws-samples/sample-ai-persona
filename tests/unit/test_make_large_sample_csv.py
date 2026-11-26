@@ -1,4 +1,4 @@
-"""scripts/make_large_sample_csv.py: a made-up Shift_JIS CSV for the 1GB E2E (BR20.2)."""
+"""scripts/make_large_sample_csv.py: a made-up Shift_JIS CSV for the 1GB E2E."""
 
 import csv
 import io

@@ -1,4 +1,4 @@
-"""scripts/make_large_sample_document.py: a made-up interview record (NFR1.15).
+"""scripts/make_large_sample_document.py: a made-up interview record.
 
 The manual E2E of 800,000 characters uses it; here it is checked small. The
 text is made up (a fixed vocabulary), each part has a heading and speakers

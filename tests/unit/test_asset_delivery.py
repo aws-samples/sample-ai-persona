@@ -1,4 +1,4 @@
-"""U4 の配信の部品 AssetDelivery（BR2.1〜BR2.7）。S3Service はモック。"""
+"""AssetDelivery, the delivery component. S3Service is mocked."""
 
 from unittest.mock import Mock
 

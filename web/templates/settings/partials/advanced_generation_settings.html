@@ -1,10 +1,10 @@
 {% from "components/department_picker.html" import department_picker %}
 {#
-  設定画面の高度な生成（ベータ）の区画（U6、S12、契約 C11、BR34、BR35.1）。
-  引数:
-    view  ... SettingSectionView（今の値・版・部署の一覧・見つからない部署・最終更新者）
-    error ... 入力の誤り（400）か版の衝突（409）の文言。区画の中に出す
-    form  ... 入力の誤りのときに送られた値（入力を残す）。f['key'] の形で読む
+  Advanced-generation (beta) section of the settings screen.
+  Arguments:
+    view  ... SettingSectionView (current values, version, department list, missing departments, last updater)
+    error ... message for an input error (400) or a version conflict (409); shown inside the section
+    form  ... values submitted on an input error (keeps the input); read as f['key']
 #}
 {%- set s = view.setting -%}
 {%- set f = form or none -%}

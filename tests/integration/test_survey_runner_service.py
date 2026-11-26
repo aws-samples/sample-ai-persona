@@ -1,12 +1,12 @@
-"""SurveyRunnerService（Step Functions の実行と survey-runs/ の S3）の結合テスト。
+"""Integration tests for SurveyRunnerService (Step Functions executions and the survey-runs/ S3 prefix).
 
-S3 は moto、Step Functions は ``unittest.mock`` のクライアントを渡す（FR10.2、NFR8.4）。
+S3 uses moto; Step Functions gets a ``unittest.mock`` client.
 
-- NFR5.2: 実行の名前は Survey の id、入力は S3 の場所だけ
-- BR3.1: ``ExecutionAlreadyExists`` は既存の実行を返す（名前から ARN を組み立てる）
-- reliability-requirements.md 3.1: SDK のエラーを 4 種類に分ける
-- NFR3.14・NFR1.7: 画像ありの Body は 1 人 1 ファイル、結果のファイルは 1 つずつ読む
-- BR10.1: 実行の場所を片付ける
+- The execution name is the Survey id, and the input is only the S3 location
+- ``ExecutionAlreadyExists`` returns the existing execution (the ARN is built from the name)
+- SDK errors are split into four kinds
+- A Body with images is one file per person, and result files are read one at a time
+- The execution location is cleaned up
 """
 
 import io
@@ -104,7 +104,7 @@ def _keys(s3: Any, prefix: str = "") -> list[str]:
 
 class TestStartExecution:
     def test_name_is_the_survey_id_and_input_is_the_run_location(self, service, sfn):
-        """NFR5.2: 利用者の入力は名前にも入力にも入らない。"""
+        """User input appears in neither the name nor the input."""
         info = service.start_execution(SURVEY_ID)
 
         kwargs = sfn.start_execution.call_args.kwargs
@@ -120,7 +120,7 @@ class TestStartExecution:
         assert not info.reused
 
     def test_already_exists_takes_over_the_existing_execution(self, service, sfn):
-        """BR3.1: 名前から ARN を組み立てて、その実行の状態と開始時刻を返す。"""
+        """Build the ARN from the name and return that execution's status and start time."""
         sfn.start_execution.side_effect = _client_error("ExecutionAlreadyExists")
         sfn.describe_execution.return_value = {
             "executionArn": EXEC_ARN,
@@ -159,7 +159,7 @@ class TestExecutionArns:
         ],
     )
     def test_other_state_machine_is_not_own(self, service, arn):
-        """基盤設計 2.2: ステートマシンが作り直されたら古い ARN は自分のものではない。"""
+        """If the state machine is recreated, an old ARN is no longer ours."""
         assert not service.is_own_execution(arn)
 
 
@@ -188,7 +188,7 @@ class TestDescribeAndStop:
         assert service.describe_execution(EXEC_ARN).manifest_key == key
 
     def test_finished_execution_has_its_stop_date(self, service, sfn):
-        """R-12: 完了のまとめの権限の失敗は、実行が終わった時刻から数える。"""
+        """A permission failure on the completion summary is counted from the time the execution ended."""
         stopped = datetime(2026, 10, 30, 1, 5, tzinfo=timezone.utc)
         sfn.describe_execution.return_value = {
             "executionArn": EXEC_ARN,
@@ -212,7 +212,7 @@ class TestDescribeAndStop:
 
 
 class TestFailureClassification:
-    """reliability-requirements.md 3.1 の表（分類できないものは一時的）。"""
+    """The SDK error classification table (anything unclassified is transient)."""
 
     @pytest.mark.parametrize(
         ("code", "failure"),
@@ -284,7 +284,7 @@ class TestFailureClassification:
 
 
 class TestPersonasFile:
-    """BR1.5: 抽出した人は 1 度だけ書き、以後は読む。"""
+    """Extracted people are written once and read afterwards."""
 
     def test_write_then_read_keeps_rows_and_order(self, service, s3):
         df = pl.DataFrame({"uuid": ["b", "a"], "sex": ["女", "男"], "age": [30, 40]})
@@ -322,7 +322,7 @@ class TestInputAndBodies:
         assert lines[0]["body"] == {"x": "あ"}
 
     def test_input_is_streamed_not_built_in_memory(self, s3, sfn):
-        """NFR1.6: 1 万人分の JSONL を 1 つの文字列にせず、ファイルとして送る。"""
+        """Send 10,000 people's JSONL as a file, not as one string."""
         sent: dict[str, Any] = {}
         client = Mock(wraps=s3)
 
@@ -344,7 +344,7 @@ class TestInputAndBodies:
         assert sent["body_type"] not in (bytes, str)
 
     def test_bodies_are_one_file_per_persona(self, service, s3):
-        """NFR3.14: 画像ありの Body は S3 に置き、URI だけを項目に持たせる。"""
+        """A Body with images is placed in S3 and the item holds only the URI."""
         stored = list(
             service.write_bodies(
                 SURVEY_ID,
@@ -363,7 +363,7 @@ class TestInputAndBodies:
         }
 
     def test_bodies_kept_inline_are_returned_in_order(self, service, s3):
-        """S3 に置かない Body はそのまま返し、全体はもとの順に並ぶ。"""
+        """A Body not placed in S3 is returned as is, and the whole keeps the original order."""
         stored = list(
             service.write_bodies(
                 SURVEY_ID,
@@ -381,7 +381,7 @@ class TestInputAndBodies:
         ]
 
     def test_an_inline_body_does_not_wait_for_a_stored_one(self, sfn):
-        """先頭の S3 に置かない Body は、あとの送信を待たずに返る。"""
+        """The leading Bodies not placed in S3 return without waiting for later uploads."""
         release = threading.Event()
         client = Mock()
         client.put_object.side_effect = lambda **kwargs: release.wait(2)
@@ -399,7 +399,7 @@ class TestInputAndBodies:
         assert next(stored).record_id == "p2"
 
     def test_bodies_are_written_in_parallel(self, sfn):
-        """画像ありの 1,000 人を 1 件ずつ順に送らない（デプロイの停止待ちを超えない）。"""
+        """1,000 people with images are not sent one by one in order (so a deploy stop does not wait too long)."""
         lock = threading.Lock()
         state = {"now": 0, "most": 0}
 
@@ -425,7 +425,7 @@ class TestInputAndBodies:
         assert state["most"] > 1
 
     def test_one_slow_body_does_not_hold_the_others(self, sfn):
-        """遅い PUT が 1 件あっても、ほかの Body は送り続ける（まとまりごとに待たない）。"""
+        """One slow PUT does not stop the other Bodies from being sent (no waiting per batch)."""
         lock = threading.Lock()
         done = {"others": 0, "before_slow": -1}
 
@@ -457,7 +457,7 @@ class TestInputAndBodies:
         assert [b.record_id for b in stored] == [f"p{i}" for i in range(40)]
 
     def test_a_failure_behind_a_slow_body_stops_the_sending(self, sfn):
-        """先頭の PUT が止まっていても、後ろの失敗に気づいたら次の Body を送らない。"""
+        """Even if the first PUT is stalled, the next Body is not sent once a later failure is noticed."""
         p1_failed = threading.Event()
         pulled: list[int] = []
 
@@ -489,7 +489,7 @@ class TestInputAndBodies:
         assert 39 not in pulled
 
     def test_a_full_disk_while_writing_the_input_is_a_service_error(self, sfn):
-        """一時ファイルの書き込みの失敗（ディスクがいっぱい）は、生の OSError にしない。"""
+        """A temp-file write failure (disk full) does not surface as a raw OSError."""
         service = _service_with(sfn, Mock())
 
         class FullSpool(io.BytesIO):
@@ -506,7 +506,7 @@ class TestInputAndBodies:
         assert info.value.failure is FailureClass.TRANSIENT
 
     def test_an_error_from_the_lines_passes_through(self, service):
-        """行を作る側の例外（担当の喪失など）は、そのまま通す。"""
+        """Exceptions from the row-building side (such as a lost assignment) pass through unchanged."""
 
         class LeaseLost(Exception):
             pass
@@ -532,7 +532,7 @@ class TestInputAndBodies:
         assert info.value.failure is FailureClass.ACCESS
 
     def test_connection_pool_fits_the_parallel_writes(self):
-        """botocore の既定の接続の上限（10）で並列の書き込みが待たされないこと。"""
+        """Parallel writes are not made to wait by botocore's default connection limit (10)."""
         assert _BOTO_CONFIG.max_pool_connections >= BODY_UPLOAD_CONCURRENCY
 
 
@@ -560,7 +560,7 @@ def _place_results(s3: Any) -> str:
 
 
 class TestResults:
-    """functional-spec.md 6 章の ResultWriter の出力を読む（NFR1.7、NFR8.4）。"""
+    """Read the ResultWriter output."""
 
     def test_reads_succeeded_and_failed_items(self, service, s3):
         manifest_key = _place_results(s3)
@@ -578,7 +578,7 @@ class TestResults:
         assert results["p-4"].text is None
 
     def test_reads_one_result_file_at_a_time(self, service, s3):
-        """NFR1.7: 全ファイルを一度に読まず、1 ファイルずつ順に読む。"""
+        """Read files one at a time, not all at once."""
         manifest_key = _place_results(s3)
         reads: list[str] = []
         original = s3.get_object
@@ -616,7 +616,7 @@ class TestResults:
 
 class TestCleanup:
     def test_removes_everything_under_the_run_location(self, service, s3):
-        """BR10.1: 抽出した人・入力・Body・結果を消す。ほかのアンケートには触れない。"""
+        """Delete extracted people, inputs, Bodies and results without touching other surveys."""
         service.write_personas(SURVEY_ID, pl.DataFrame({"uuid": ["p1"]}))
         service.write_input(SURVEY_ID, ['{"record_id": "p1", "model_id": "m"}'])
         list(service.write_bodies(SURVEY_ID, "m", [("p1", "{}", True)]))
@@ -637,7 +637,7 @@ class TestCleanup:
 
 
 class TestFindExecution:
-    """再起動の前に始めた実行を、開始の前に見つける。"""
+    """An execution started before a restart is found before starting a new one."""
 
     def test_existing_execution_is_returned_as_reused(self, service, sfn):
         info = service.find_execution(SURVEY_ID)
@@ -661,7 +661,7 @@ class TestFindExecution:
 
 
 class TestFitsInline:
-    """子の実行の入力の上限（256 KiB）に余裕を残して、Body を項目に入れるか決める。"""
+    """Decide whether to put the Body in the item, leaving headroom under the child execution input limit (256 KiB)."""
 
     @staticmethod
     def _encoded(size: int) -> str:
@@ -685,7 +685,7 @@ class TestFitsInline:
 
 
 def test_encode_body_escapes_the_unicode_line_separators():
-    """U+2028・U+2029 は JSON の文字列にそのまま入りうるが、行の区切りと読む読み手がある。"""
+    """U+2028 and U+2029 can appear raw in a JSON string, but some readers treat them as line separators."""
     body = {"system": "段落\u2028改行\u2029終わり"}
 
     encoded = SurveyRunnerService.encode_body(body)
@@ -696,7 +696,7 @@ def test_encode_body_escapes_the_unicode_line_separators():
 
 
 def test_a_failure_reading_the_input_file_is_a_service_error(sfn):
-    """PUT が一時ファイルを読むときの OSError も、生のまま外へ出さない。"""
+    """An OSError raised while PUT reads the temp file is not exposed raw either."""
     client = Mock()
     client.put_object.side_effect = OSError(5, "Input/output error")
     service = _service_with(sfn, client)
@@ -715,7 +715,7 @@ def test_encode_body_keeps_non_ascii_and_is_one_line():
 
 
 def test_request_body_is_the_anthropic_messages_format():
-    """BR6.2: anthropic_version、max_tokens 2048、system、messages、output_config。"""
+    """anthropic_version, max_tokens 2048, system, messages, output_config."""
     schema = {"type": "object"}
     content = [{"type": "text", "text": "設問"}]
 

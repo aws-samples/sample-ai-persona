@@ -1,7 +1,7 @@
-"""SandboxQueryBackend: run ``analyze_dataset`` SQL in the analysis session (C9).
+"""SandboxQueryBackend: run ``analyze_dataset`` SQL in the analysis session.
 
 The SQL is built in the app by ``sql_builder.build_analyze_query`` (column
-allowlist, parameters; ADR-005) and sent to the session's ``run_query``, which
+allowlist, parameters) and sent to the session's ``run_query``, which
 runs it on the view ``dataset`` over the prepared Parquet. The sandbox is
 injected through a small Protocol, so this package does not import
 ``sandbox_service`` (no Service-to-Service imports).
@@ -18,7 +18,7 @@ DEFAULT_MAX_ROWS = 200
 
 
 class SandboxCaller(Protocol):
-    """The part of ``SandboxService`` this backend uses (contract C10)."""
+    """The part of ``SandboxService`` this backend uses."""
 
     def call(
         self, session: Any, function: str, args: Mapping[str, Any]

@@ -1,10 +1,10 @@
-"""Uploaded source files of advanced generation (beta) U1 (entities.md, contract C4).
+"""Uploaded source files of the advanced generation (beta).
 
 A :class:`SourceFile` is one table (CSV / TSV) the user uploaded straight to S3
 with presigned part URLs. Its bytes live under ``sources/<owner_sub>/<id>``
-and never pass through the application (BR2.6). The application keeps the
+and never pass through the application. The application keeps the
 record (``SourceFiles`` table) and, once the head of the file has been
-inspected, the :class:`SourceMetadata` it found (BR3.3).
+inspected, the :class:`SourceMetadata` it found.
 
 The types here are plain data. Conditional writes live in
 ``SourceFileStore`` (Service layer), the rules in ``SourceUploadManager`` and
@@ -22,28 +22,28 @@ from typing import Any, Mapping, Sequence
 
 from ._advanced_common import drop_none, iso, parse_dt, parse_optional_dt
 
-#: Version of the stored item (contract C4).
+#: Version of the stored item.
 SCHEMA_VERSION = 1
 #: Key prefix of uploaded sources (lifecycle rules filter on it).
 SOURCE_KEY_PREFIX = "sources"
-#: Longest file name kept for display (security-design.md §6).
+#: Longest file name kept for display.
 FILENAME_MAX_CHARS = 255
 #: Display sample limits; the sample may contain personal data and must fit
-#: in one DynamoDB item (BR3.3).
+#: in one DynamoDB item.
 SAMPLE_ROWS_MAX = 5
 SAMPLE_COLUMNS_MAX = 50
 SAMPLE_CELL_MAX_CHARS = 200
 
 
 class SourceKind(StrEnum):
-    """What a source file holds: a table (U1) or a document (U4)."""
+    """What a source file holds: a table or a document."""
 
     TABLE = "table"
     DOCUMENT = "document"
 
 
 class SourceFileStatus(StrEnum):
-    """Lifecycle of a source file (functional-spec.md §3). ``deleting`` is U2."""
+    """Lifecycle of a source file."""
 
     UPLOADING = "uploading"
     INSPECTING = "inspecting"
@@ -53,7 +53,7 @@ class SourceFileStatus(StrEnum):
 
 
 class SourceFormat(StrEnum):
-    """Accepted formats: tables (U1, BR2.1) and documents (U4, BR21.1)."""
+    """Accepted formats: tables and documents."""
 
     CSV = "csv"
     TSV = "tsv"
@@ -80,7 +80,7 @@ class SourceFormat(StrEnum):
 
 
 def format_of_filename(filename: str) -> SourceFormat | None:
-    """The format named by the extension of ``filename``, or ``None`` (BR21.1)."""
+    """The format named by the extension of ``filename``, or ``None``."""
     name = filename.strip().lower()
     dot = name.rfind(".")
     if dot < 0:
@@ -92,10 +92,10 @@ def format_of_filename(filename: str) -> SourceFormat | None:
 
 
 class SourceEncoding(StrEnum):
-    """Encodings the inspection may report (BR3.2).
+    """Encodings the inspection may report.
 
     ``undetermined`` means the inspected head was ASCII only; the preparation
-    in the sandbox settles it (BR4.3).
+    in the sandbox settles it.
     """
 
     UTF8 = "utf-8"
@@ -106,12 +106,12 @@ class SourceEncoding(StrEnum):
 
 
 def source_key(owner_sub: str, source_file_id: str) -> str:
-    """The S3 key of a source file (``sources/<owner_sub>/<id>``, contract C2)."""
+    """The S3 key of a source file (``sources/<owner_sub>/<id>``)."""
     return f"{SOURCE_KEY_PREFIX}/{owner_sub}/{source_file_id}"
 
 
 def part_count_for(size_bytes: int, part_size_bytes: int) -> int:
-    """Number of multipart parts for ``size_bytes`` (BR2.3: ceil(size / part)).
+    """Number of multipart parts for ``size_bytes`` (ceil(size / part)).
 
     Raises:
         ValueError: Either value is not positive.
@@ -159,7 +159,7 @@ class SourceColumn:
 
 @dataclass(frozen=True)
 class SourceMetadata:
-    """What the inspection of the head of a file found (FR4.4, contract C4).
+    """What the inspection of the head of a file found.
 
     Use :meth:`create` to build one: it cuts the display sample to
     :data:`SAMPLE_ROWS_MAX` rows, :data:`SAMPLE_COLUMNS_MAX` columns and
@@ -208,7 +208,7 @@ class SourceMetadata:
         inspected_bytes: int,
         inspected_at: datetime,
     ) -> "SourceMetadata":
-        """Build metadata with the display sample cut to the limits (BR3.3)."""
+        """Build metadata with the display sample cut to the limits."""
         rows = tuple(
             tuple(
                 str(cell)[:SAMPLE_CELL_MAX_CHARS] for cell in row[:SAMPLE_COLUMNS_MAX]
@@ -256,7 +256,7 @@ class SourceMetadata:
 
 @dataclass(frozen=True)
 class DocumentMetadata:
-    """What the inspection of a document found (U4 BR22.3, contract C4).
+    """What the inspection of a document found.
 
     Pages and the exact character count are known only after the
     preparation in the sandbox (the screen says so).
@@ -317,14 +317,14 @@ def _metadata_from_dict(
 
 @dataclass(frozen=True)
 class SourceFile:
-    """One uploaded source file (entities.md SourceFile, contract C4).
+    """One uploaded source file.
 
     Attributes:
         source_file_id: UUID.
         owner_sub: The uploader; every read checks it.
         filename: Display name (control characters removed, 255 characters).
-        kind: ``table`` in U1.
-        size_bytes: Declared size (checked against S3 at completion, BR2.7).
+        kind: ``table`` or ``document``.
+        size_bytes: Declared size (checked against S3 at completion).
         s3_key: ``sources/<owner_sub>/<source_file_id>``.
         part_count: Number of multipart parts.
         status: One of :class:`SourceFileStatus`.
@@ -337,12 +337,12 @@ class SourceFile:
         in_use_until: The mark is free once this time has passed.
         last_used_at: Last time a generation used the file.
         updated_at: Last state change (the 15-minute retry of a stuck
-            inspection compares against it, reliability-design.md §4).
-        url_refresh_count: Part URL refreshes so far (24 at most, BR2.4).
+            inspection compares against it).
+        url_refresh_count: Part URL refreshes so far (24 at most).
         display_seq: Number that tells files of the same name apart, fixed
-            at the start (U2 BR11.3). U1 records have none and read as 1.
-        expires_at: When the file stops being usable (U2 BR13.2). The store
-            writes it as epoch seconds (the TTL attribute). U1 records have
+            at the start. Older records have none and read as 1.
+        expires_at: When the file stops being usable. The store
+            writes it as epoch seconds (the TTL attribute). Older records have
             none; :meth:`effective_expires_at` then counts from the last use
             or the creation.
     """
@@ -395,9 +395,9 @@ class SourceFile:
         expires_at: datetime | None = None,
         kind: SourceKind | str = SourceKind.TABLE,
     ) -> "SourceFile":
-        """A new upload in ``uploading`` under the owner's key (BR2.3, BR11.3).
+        """A new upload in ``uploading`` under the owner's key.
 
-        ``kind`` is decided from the extension at the start (U4 BR21.1).
+        ``kind`` is decided from the extension at the start.
         """
         new_id = source_file_id or str(uuid.uuid4())
         return cls(
@@ -422,14 +422,14 @@ class SourceFile:
 
     @property
     def display_name(self) -> str:
-        """``filename`` for the first of a name, ``"filename (n)"`` after (BR11.3)."""
+        """``filename`` for the first of a name, ``"filename (n)"`` after."""
         if self.display_seq <= 1:
             return self.filename
         return f"{self.filename} ({self.display_seq})"
 
     @property
     def source_format(self) -> SourceFormat | None:
-        """The format named by the file name's extension (BR2.1, BR21.1)."""
+        """The format named by the file name's extension."""
         return format_of_filename(self.filename)
 
     @property
@@ -443,9 +443,9 @@ class SourceFile:
         return self.metadata if isinstance(self.metadata, DocumentMetadata) else None
 
     def effective_expires_at(self, retention_days: int) -> datetime:
-        """The stored expiry, or (last use or creation) + retention (BR13.2).
+        """The stored expiry, or (last use or creation) + retention.
 
-        The fallback covers U1 records written before ``expires_at`` existed.
+        The fallback covers older records written before ``expires_at`` existed.
         """
         if self.expires_at is not None:
             return self.expires_at
@@ -453,14 +453,14 @@ class SourceFile:
         return base + timedelta(days=int(retention_days))
 
     def is_live(self, now: datetime, retention_days: int) -> bool:
-        """Not being deleted and not past its expiry (BR13.5)."""
+        """Not being deleted and not past its expiry."""
         return (
             self.status is not SourceFileStatus.DELETING
             and self.effective_expires_at(retention_days) > now
         )
 
     def is_in_use(self, now: datetime) -> bool:
-        """A generation holds a mark that has not lapsed (BR14.2)."""
+        """A generation holds a mark that has not lapsed."""
         return bool(
             self.in_use_by and self.in_use_until is not None and self.in_use_until > now
         )
@@ -538,7 +538,7 @@ def _read_expiry(value: Any) -> datetime | None:
 
 
 class SourceAvailabilityState(StrEnum):
-    """Whether the file an analysis record used is still there (BR14.3)."""
+    """Whether the file an analysis record used is still there."""
 
     AVAILABLE = "available"
     DELETED = "deleted"
@@ -549,12 +549,12 @@ class SourceAvailabilityState(StrEnum):
 class SourceAvailability:
     """The source file of an analysis record, judged when the record opens.
 
-    Never stored (entities.md SourceAvailability).
+    Never stored.
 
     Attributes:
-        source_file_id: The file ID kept in the record (empty for U1 records).
+        source_file_id: The file ID kept in the record (empty for older records).
         display_name: The name kept in the record (shown even after deletion).
-        state: ``available``, ``deleted`` or ``unknown`` (U1 record, no ID).
+        state: ``available``, ``deleted`` or ``unknown`` (older record, no ID).
     """
 
     source_file_id: str
@@ -564,7 +564,7 @@ class SourceAvailability:
 
 @dataclass(frozen=True)
 class SourceFileListItem:
-    """One row of the uploaded-file list (entities.md SourceFileListItem).
+    """One row of the uploaded-file list.
 
     A read-only value built from a :class:`SourceFile`; never stored.
 
@@ -628,10 +628,10 @@ class PartUrl:
 
 @dataclass(frozen=True)
 class UploadSession:
-    """Part URLs handed to the browser at start or refresh (contract C1).
+    """Part URLs handed to the browser at start or refresh.
 
     It is a response value only: URLs are never written to the table, logs or
-    events (security-design.md §3).
+    events.
 
     Attributes:
         source_file_id: The upload.

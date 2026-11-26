@@ -1,12 +1,14 @@
-"""ペルソナ議論・インタビューで選択可能なAIモデルのレジストリ。
+"""Registry of AI models selectable for persona discussions and interviews.
 
-モデルによってStrandsのプロバイダクラス自体が異なる（BedrockModel経由のConverse呼び出しと、
-OpenAIResponsesModel経由のBedrock Mantle呼び出し）ため、model_idだけでなく呼び出し経路の情報を
-ここで一元管理する。標準ライブラリのみを使い他層に依存しない（architecture.md Models層規約）。
+The Strands provider class itself differs per model (a Converse call through
+BedrockModel, or a Bedrock Mantle call through OpenAIResponsesModel), so the
+call-path information is managed here in one place together with model_id.
+Uses the standard library only and depends on no other layer (Models layer rule
+in architecture.md).
 
-閉域対応 U5（BR4.1〜BR4.6）: 推論の範囲（global / jp）ごとに選べるモデルの表と既定のモデル ID を
-持つ。範囲と既定のモデル ID は config を読まず、呼ぶ側（Manager・Service・Router）が
-config.INFERENCE_SCOPE と config.AGENT_MODEL_ID を渡す。
+For each inference scope (global / jp) it holds the table of selectable models
+and the default model IDs. It does not read config: callers (Manager, Service,
+Router) pass config.INFERENCE_SCOPE and config.AGENT_MODEL_ID.
 """
 
 from dataclasses import dataclass
@@ -14,7 +16,7 @@ from enum import Enum
 
 
 class ModelProvider(str, Enum):
-    """モデルの呼び出し経路。"""
+    """How a model is called."""
 
     BEDROCK = "bedrock"  # BedrockModel / Converse / SigV4
     OPENAI_RESPONSES = (
@@ -23,7 +25,7 @@ class ModelProvider(str, Enum):
 
 
 class InferenceScope(str, Enum):
-    """推論を送ってよい範囲（CDK の inferenceScope、環境変数 INFERENCE_SCOPE）。"""
+    """Scope inference may be sent to (CDK inferenceScope, env var INFERENCE_SCOPE)."""
 
     GLOBAL = "global"
     JP = "jp"
@@ -31,35 +33,34 @@ class InferenceScope(str, Enum):
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """選択可能な1モデルの仕様。"""
+    """Spec of one selectable model."""
 
     model_id: str
     display_name: str
     provider: ModelProvider
     requires_mantle: bool = False
-    # 能力メタデータ。Manager層の入力サイズ検証で実際に使う（保持のみではない）。
+    # Capability metadata. Actually used by the Manager layer's input size validation (not just stored).
     max_image_bytes: int | None = None
     max_request_bytes: int | None = None
     supports_pdf: bool = True
-    # 属する範囲（1 つの ID は 1 つの範囲だけに属する）と、範囲をまたいで同じモデルを結ぶキー
+    # The scope it belongs to (one ID belongs to exactly one scope) and the key that links the same model across scopes
     scope: InferenceScope = InferenceScope.GLOBAL
     base_model: str = ""
-    # 範囲ごとにちょうど 1 つ（SCOPE_DEFAULTS の agent_model_id と同じ）
+    # Exactly one per scope (same as agent_model_id in SCOPE_DEFAULTS)
     is_default: bool = False
 
 
 @dataclass(frozen=True)
 class ScopeDefaults:
-    """範囲ごとの既定のモデル ID 3 つ（cdk/lib/deployment-profile.ts の SCOPE_DEFAULTS と同じ値）。"""
+    """The three default model IDs per scope (same values as SCOPE_DEFAULTS in cdk/lib/deployment-profile.ts)."""
 
-    bedrock_model_id: str  # ペルソナの生成・インサイト・レポート（BEDROCK_MODEL_ID）
-    agent_model_id: str  # 議論・インタビューの既定（AGENT_MODEL_ID）
-    survey_model_id: str  # アンケートの回答の生成（SURVEY_MODEL_ID）
+    bedrock_model_id: str  # Persona generation, insights, reports (BEDROCK_MODEL_ID)
+    agent_model_id: str  # Default for discussions and interviews (AGENT_MODEL_ID)
+    survey_model_id: str  # Survey answer generation (SURVEY_MODEL_ID)
 
 
-# BR1.6 と計画の「設計からの変更」（2026-10-27）。アンケートは Step Functions の
-# オンデマンド推論で Haiku 5.5 を使う（FR2.1）。値の一致は pytest と jest の両方で固定する
-# （FR2.3、BR4.6）
+# Surveys use Haiku 5.5 through Step Functions on-demand inference. The values
+# are pinned by both pytest and jest so they stay identical.
 SCOPE_DEFAULTS: dict[InferenceScope, ScopeDefaults] = {
     InferenceScope.GLOBAL: ScopeDefaults(
         bedrock_model_id="global.anthropic.claude-sonnet-5-5",
@@ -73,8 +74,8 @@ SCOPE_DEFAULTS: dict[InferenceScope, ScopeDefaults] = {
     ),
 }
 
-# Bedrock Mantle対応リージョン（GPT-5.6 Terra/Luna・Gemma 4 31B共通）。
-# デプロイ先（config.AWS_REGION）がこれに含まれない場合はMANTLE_FALLBACK_REGIONへ丸める。
+# Regions supported by Bedrock Mantle (shared by GPT-5.6 Terra/Luna and Gemma 4 31B).
+# If the deployment region (config.AWS_REGION) is not in this set, it is rounded to MANTLE_FALLBACK_REGION.
 MANTLE_SUPPORTED_REGIONS: frozenset[str] = frozenset(
     {"us-east-1", "us-east-2", "us-west-2"}
 )
@@ -83,7 +84,7 @@ MANTLE_FALLBACK_REGION = "us-east-1"
 _GLOBAL = InferenceScope.GLOBAL
 _JP = InferenceScope.JP
 
-# 表の並び順がそのまま設定画面の並び順になる（範囲ごとに既定が先頭）
+# The table order is the settings screen order (the default comes first in each scope)
 _MODELS: tuple[ModelSpec, ...] = (
     ModelSpec(
         model_id="global.anthropic.claude-haiku-5-5",
@@ -107,7 +108,7 @@ _MODELS: tuple[ModelSpec, ...] = (
         scope=_GLOBAL,
         base_model="claude-sonnet-5-5",
     ),
-    # 保存済みの議論・インタビューが選んだ Sonnet 5 を同じモデルで呼び続けるため残す
+    # Kept so saved discussions and interviews that chose Sonnet 5 keep calling the same model
     ModelSpec(
         model_id="global.anthropic.claude-sonnet-5",
         display_name="Claude Sonnet 5",
@@ -136,13 +137,14 @@ _MODELS: tuple[ModelSpec, ...] = (
         display_name="Google Gemma 4 31B",
         provider=ModelProvider.OPENAI_RESPONSES,
         requires_mantle=True,
-        # AWS公式モデルカード実測: リクエストボディ合計（画像・動画含む）3.5MBが上限。
-        # 現行アプリの画像5MB/枚・合計32MB運用より厳しいため、Manager層の合計サイズ検証で使う。
+        # Measured from the AWS official model card: the total request body (images and video
+        # included) is capped at 3.5MB. Stricter than the app's 5MB per image / 32MB total,
+        # so the Manager layer's total size validation uses it.
         max_request_bytes=int(3.5 * 1024 * 1024),
         scope=_GLOBAL,
         base_model="gemma-4-31b",
     ),
-    # jp（国内の推論プロファイル。Mantle 系は置かない）
+    # jp (domestic inference profiles; no Mantle models)
     ModelSpec(
         model_id="jp.anthropic.claude-haiku-5-5",
         display_name="Claude Haiku 5.5",
@@ -164,7 +166,7 @@ SUPPORTED_MODELS: dict[str, ModelSpec] = {spec.model_id: spec for spec in _MODEL
 
 
 def models_in_scope(scope: InferenceScope | str) -> list[ModelSpec]:
-    """The models of one scope in display order (BR4.1).
+    """The models of one scope in display order.
 
     Raises:
         ValueError: ``scope`` is not ``global`` or ``jp``.
@@ -176,10 +178,10 @@ def models_in_scope(scope: InferenceScope | str) -> list[ModelSpec]:
 def list_selectable_models(
     enable_additional_models: bool, scope: InferenceScope | str
 ) -> list[ModelSpec]:
-    """UI用。範囲に属するモデルだけを返し、無効時はrequires_mantleのモデルを除外する（BR4.2）。
+    """For the UI: return only the models of the scope, excluding requires_mantle models when disabled.
 
-    configをimportしないため、呼び出し側（Router）がconfig.ENABLE_ADDITIONAL_PERSONA_MODELSと
-    config.INFERENCE_SCOPEを渡す。
+    Does not import config, so the caller (Router) passes
+    config.ENABLE_ADDITIONAL_PERSONA_MODELS and config.INFERENCE_SCOPE.
     """
     return [
         spec
@@ -191,7 +193,7 @@ def list_selectable_models(
 def default_selectable_model_id(
     models: list[ModelSpec], preferred_model_id: str
 ) -> str:
-    """The model the setup screen selects first (BR5.1).
+    """The model the setup screen selects first.
 
     ``preferred_model_id`` (``config.AGENT_MODEL_ID``) when it is in ``models``, otherwise the
     list's default (or its first model).
@@ -205,7 +207,7 @@ def default_selectable_model_id(
 def resolve_model_spec(
     model_id: str | None, scope: InferenceScope | str, default_model_id: str
 ) -> ModelSpec:
-    """The spec of the model that is actually called for ``model_id`` (BR4.4, BR4.5).
+    """The spec of the model that is actually called for ``model_id``.
 
     1. ``None`` or empty means ``default_model_id``.
     2. A model of the current scope is itself.
@@ -238,7 +240,7 @@ def _same_model_in_scope(base_model: str, scope: InferenceScope) -> ModelSpec | 
 
 
 def _default_spec(default_model_id: str, scope: InferenceScope) -> ModelSpec:
-    """The environment's default model: its table spec, or a plain Bedrock spec (BR4.5)."""
+    """The environment's default model: its table spec, or a plain Bedrock spec."""
     spec = SUPPORTED_MODELS.get(default_model_id)
     if spec is not None:
         return spec
@@ -252,7 +254,7 @@ def _default_spec(default_model_id: str, scope: InferenceScope) -> ModelSpec:
 
 
 def display_name_for(model_id: str | None) -> str:
-    """表示用。未知/Noneでも例外を投げず生の値へフォールバックする（BR5.2）。"""
+    """For display. Never raises for unknown/None; falls back to the raw value."""
     if model_id is None:
         model_id = SCOPE_DEFAULTS[InferenceScope.GLOBAL].agent_model_id
     spec = SUPPORTED_MODELS.get(model_id)
@@ -260,11 +262,12 @@ def display_name_for(model_id: str | None) -> str:
 
 
 def resolve_call_region(spec: ModelSpec, deploy_region: str) -> str:
-    """モデル呼び出しに使うリージョンを決定する。
+    """Decide the region used for model calls.
 
-    BEDROCKモデル（Claude系）はクロスリージョン推論プロファイル経由なのでデプロイ先に
-    そのまま追従する。Mantle系（requires_mantle=True）はMantle対応リージョンが限られるため、
-    デプロイ先が非対応（例: 東京）ならMANTLE_FALLBACK_REGIONへ丸める。
+    BEDROCK models (Claude family) go through cross-region inference profiles,
+    so they simply follow the deployment region. Mantle models
+    (requires_mantle=True) are available in few regions, so if the deployment
+    region is unsupported (e.g. Tokyo) it is rounded to MANTLE_FALLBACK_REGION.
     """
     if not spec.requires_mantle:
         return deploy_region

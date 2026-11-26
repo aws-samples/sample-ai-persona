@@ -1,4 +1,4 @@
-"""The plan as a sequence of steps (U6 addendum: multi-step plan).
+"""The plan as a sequence of steps (multi-step plan).
 
 - ``AnalysisPlan.steps``: up to four steps; ``method`` stays the method of the
   step that makes the segments. A plan without steps (old records) reads as

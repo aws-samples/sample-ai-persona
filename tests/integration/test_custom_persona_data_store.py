@@ -1,7 +1,7 @@
-"""CustomPersonaDataStore（カスタムペルソナデータの登録情報）の結合テスト。moto を使う。
+"""Integration tests for CustomPersonaDataStore (registration info of custom persona data), using moto.
 
-BR4.3〜BR4.6（ID・名前の押さえ・登録情報・削除）、BR5.2（利用範囲の ADD / DELETE）、
-NFR1.74（名前の押さえの項目を出さない）、NFR1.85、NFR1.87（本体があることを条件に）。
+Covers IDs, name reservation, registration info and deletion, scope ADD / DELETE,
+not exposing name-reservation items, and conditioning on the main item existing.
 """
 
 from datetime import datetime
@@ -152,7 +152,7 @@ class TestReads:
         assert len(limits) > 1
 
     def test_250_records_are_all_listed_with_their_scopes(self, store, client):
-        """NFR9.37: hundreds of assets are read page by page, nothing is lost."""
+        """Hundreds of assets are read page by page, nothing is lost."""
         from tests.unit.survey_world import bulk_put_custom_data
 
         scopes = [{"sales"}, {"plan"}, {"sales", "plan"}, set()]
@@ -161,7 +161,7 @@ class TestReads:
             for i in range(250)
         ]
         bulk_put_custom_data(client, TABLE, made)
-        # 名前の押さえ（予約中の項目）も同じテーブルにある
+        # The name reservation (a reserved item) is in the same table
         assert all(_raw(client, reservation_id(d.name)) for d in made[:3])
         real_scan = client.scan
         pages: list[int] = []
@@ -290,7 +290,7 @@ class TestDelete:
         assert store.delete(data.id, data.name) is True
         assert store.get(data.id) is None
         assert _raw(client, reservation_id(data.name)) is None
-        # 同じ名前で登録し直せる
+        # The same name can be registered again
         store.put_new(_data())
 
     def test_missing_record_is_false(self, store):

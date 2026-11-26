@@ -37,7 +37,7 @@ class TestInterviewChatIntegration:
         )
 
     def test_interview_session_creation_and_messaging(self, monkeypatch):
-        """Test complete interview session creation and messaging flow (U6, moto)."""
+        """Test complete interview session creation and messaging flow (moto)."""
         moto = pytest.importorskip("moto")
         import boto3
 

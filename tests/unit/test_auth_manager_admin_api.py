@@ -1,11 +1,8 @@
-"""AuthManager の AUTH_MODE=admin_api（閉域構成のログイン、U8）の単体テスト。
+"""Unit tests for AuthManager with AUTH_MODE=admin_api (login for the closed-network setup).
 
-CognitoAuthService は Mock、ストアは本物の MemorySessionStore（呼び出しの記録のため
-Mock(wraps=...)）。時刻は clock で与える。パスワードには目印の文字列を使い、ログ・
-例外・保存した項目に現れないことを確かめる（NFR3.15、AC1.2.5）。
-
-BR1.2〜BR1.6、BR2.1〜BR2.7、BR3.1〜BR3.3、BR4.1、BR4.5、NFR4.19、NFR4.22、
-NFR4.23、NFR5.7、NFR8.28、NFR8.29、NFR9.40〜NFR9.42、NFR9.45、NFR9.46。
+CognitoAuthService is a Mock; the store is a real MemorySessionStore (wrapped in
+Mock(wraps=...) to record calls). Time comes from a clock. Passwords use a marker
+string, and the tests check it never appears in logs, exceptions, or stored items.
 """
 
 import base64
@@ -201,7 +198,7 @@ def _stored_items(store: Mock) -> list[Any]:
 
 
 # =============================================================================
-# 起動時の検査（BR4.1）
+# Startup checks
 # =============================================================================
 
 
@@ -259,7 +256,7 @@ class TestStartupCheck:
 
 
 # =============================================================================
-# ログイン（BR1.2〜BR1.6、BR3.1）
+# Login
 # =============================================================================
 
 
@@ -280,7 +277,9 @@ class TestLogin:
         assert (
             session.refresh_token_enc and "refresh-1" not in session.refresh_token_enc
         )
-        assert store.delete.call_args_list[0].args[0] != "old-session"  # ハッシュで消す
+        assert (
+            store.delete.call_args_list[0].args[0] != "old-session"
+        )  # deleted by hash
 
     def test_next_is_validated_again(self, manager):
         result = _login(manager, next_url="https://evil.example.com/")
@@ -443,12 +442,12 @@ class TestIdToken:
             _login(manager)
 
     def test_signature_is_not_checked(self, manager, cognito):
-        """BR3.1 / Q2 A: TLS と IAM 署名の応答なので署名は確かめない（JWKS を取らない）。"""
+        """The response comes over TLS with an IAM signature, so the signature is not verified (no JWKS fetch)."""
         assert isinstance(_login(manager), LoginResult)
 
 
 # =============================================================================
-# 初回パスワード変更（BR2.4〜BR2.7）
+# First password change
 # =============================================================================
 
 
@@ -469,7 +468,7 @@ class TestNewPassword:
     ):
         challenge_id = _start_challenge(manager, cognito)
         clock.advance(minutes=3)
-        manager.check_challenge(challenge_id)  # ちょうど 3 分は有効
+        manager.check_challenge(challenge_id)  # exactly 3 minutes is still valid
         clock.advance(seconds=1)
         with raises_code(AdminLoginError, ErrorCode.LOGIN_CHALLENGE_EXPIRED):
             _complete(manager, challenge_id)
@@ -538,7 +537,9 @@ class TestNewPassword:
         self, manager, cognito, store
     ):
         challenge_id = _start_challenge(manager, cognito)
-        store.claim_challenge.side_effect = lambda key: None  # 別の送信が先に取り出した
+        store.claim_challenge.side_effect = (
+            lambda key: None
+        )  # another submission took it first
         with raises_code(AdminLoginError, ErrorCode.LOGIN_CHALLENGE_EXPIRED):
             _complete(manager, challenge_id)
         cognito.respond_new_password.assert_not_called()
@@ -563,7 +564,7 @@ class TestNewPassword:
             _complete(manager, challenge_id)
 
         restored = store.get_challenge(challenge_key(challenge_id))
-        assert restored == original  # 元の created_at のまま
+        assert restored == original  # original created_at is kept
         store.put.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -578,7 +579,7 @@ class TestNewPassword:
         with raises_code(AdminLoginError, ErrorCode.LOGIN_CHALLENGE_EXPIRED):
             _complete(manager, challenge_id)
         assert store.get_challenge(challenge_key(challenge_id)) is None
-        # 時間切れはログインの失敗として数えない（NFR8.28）
+        # A timeout is not counted as a login failure
         assert LogCapture(capsys).events("auth.login_failed") == []
 
     def test_another_challenge_after_the_new_password_restarts_the_login(
@@ -613,7 +614,7 @@ class TestNewPassword:
             _complete(manager, challenge_id)
 
     def test_another_task_can_finish_the_change(self, store, cognito, cipher, clock):
-        """NFR9.42: 台をまたいでも同じ challenge で続けられる。"""
+        """The same challenge can continue across instances."""
         challenge_id = _start_challenge(
             _manager(store, cognito, cipher, clock), cognito
         )
@@ -637,7 +638,7 @@ class TestNewPassword:
 
 
 # =============================================================================
-# 更新・ログアウト（BR3.2、BR3.3、NFR5.7、NFR9.40、NFR9.46）
+# Refresh and logout
 # =============================================================================
 
 
@@ -741,7 +742,7 @@ class TestRefreshAndLogout:
 
 
 # =============================================================================
-# パスワードを出さない（NFR3.15、BR4.5、AC1.2.5）
+# Passwords are never emitted
 # =============================================================================
 
 
@@ -762,7 +763,9 @@ class TestPasswordNeverLeaks:
         assert_not_leaked(
             SENTINEL_PASSWORD, info.value, out, caplog, _stored_items(store)
         )
-        assert EMAIL not in out  # ログイン失敗のログはメールアドレスも書かない
+        assert (
+            EMAIL not in out
+        )  # login-failure logs do not write the email address either
 
     def test_success_and_challenge(self, manager, cognito, store, capsys, caplog):
         _login(manager)

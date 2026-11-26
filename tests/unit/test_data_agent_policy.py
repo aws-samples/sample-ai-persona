@@ -1,6 +1,6 @@
-"""DataAgentPolicy のユニットテスト（閉域対応 U3 BR3.1、BR3.2）。
+"""Unit tests for DataAgentPolicy (closed-network support).
 
-部品は config だけを読むので、値は monkeypatch で差し替える。
+The policy reads only config, so values are swapped via monkeypatch.
 """
 
 import pytest

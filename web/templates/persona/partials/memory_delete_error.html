@@ -1,10 +1,8 @@
 {% from "components/error_body.html" import error_body %}
 {#
-  記憶削除エラー表示パーシャル（htmx swap用）。
+  Memory deletion error partial (htmx swap).
 
-  外側の `id="memory-item-{{ memory_id }}"` は htmx のスワップ契約。削除に
-  失敗した記憶アイテムをこの表示で置き換えるため、共通テンプレートに
-  寄せずここで持つ（Issue #117 ステップ5）。見た目は error_body に統一。
+  The outer `id="memory-item-{{ memory_id }}"` is the htmx swap contract. It replaces the memory item that failed to delete, so it is kept here rather than moved into a shared template (Issue #117). The look matches error_body.
 #}
 <div id="memory-item-{{ memory_id }}" class="bg-red-50 rounded-lg p-4 border border-red-200" role="alert">
     {{ error_body(error, title="削除エラー", dismiss_target="[id^=memory-item-]") }}

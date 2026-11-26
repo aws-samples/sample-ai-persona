@@ -1,23 +1,22 @@
-"""The AI detailed analysis of one generation: its budget and its evidence (U6).
+"""The AI detailed analysis of one generation: its budget and its evidence.
 
 Only ``AdvancedPersonaGenerationManager`` uses this, so it is a module of that
-Manager's package (logical-components.md).
+Manager's package.
 
 - :class:`RunCodeBudget` implements the Models' ``RunCodeGate``: the Service
   tells it each ``run_code`` outcome and asks it before the next one. Five
   failures (``ADVANCED_RUN_CODE_MAX_FAILURES``) or a cancel that failed take
-  ``run_code`` off and the generation goes on with the fixed functions
-  (BR36.2, NFR1.27); a changed library or Parquet halts every tool, and the
-  Manager then fails the generation (BR36.6, NFR5.55). A check that itself
-  failed halts the same way (fail closed) but is not told as a tamper
-  (review-01 R-03). A run that ended without ``emit_result`` (a look around,
-  U6 addendum) is a call but no failure.
+  ``run_code`` off and the generation goes on with the fixed functions;
+  a changed library or Parquet halts every tool, and the
+  Manager then fails the generation. A check that itself
+  failed halts the same way (fail closed) but is not told as a tamper.
+  A run that ended without ``emit_result`` (a look around)
+  is a call but no failure.
 - :func:`filter_evidence` keeps, of what rests on ``run_code``, only what a
   successful call recounted: its ``tool_call_id``, a known ``segment_key`` and
   numbers the library recounted (population, sizes and their shares). The
   statistics and features the code passed never back an evidence, and a
-  failed call's text never reaches the synthesis through a claim (BR36.4,
-  NFR3.39, review-01 R-02).
+  failed call's text never reaches the synthesis through a claim.
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ class RunCodeBudget:
         self._on_verify_failed = on_verify_failed
         self.failures = 0
         self.successes = 0
-        #: U6 addendum: runs that ended without emit_result (no failure)
+        # Runs that ended without emit_result (no failure)
         self.no_results = 0
         self.disabled_reason: Optional[str] = None
         self.changed: tuple[str, ...] = ()
@@ -103,7 +102,7 @@ class RunCodeBudget:
             self.successes += 1
             return
         if outcome.no_result:
-            # U6 addendum: a look around is a call, never a failure
+            # A look around is a call, never a failure
             self.no_results += 1
             return
         self.failures += 1
@@ -180,7 +179,7 @@ def filter_evidence(
     evidence: Sequence[Evidence],
     runs: Mapping[str, Optional[EmittedResult]],
 ) -> tuple[list[Segment], list[Evidence]]:
-    """Leave only what a successful ``run_code`` recounted (BR36.4, NFR3.39).
+    """Leave only what a successful ``run_code`` recounted.
 
     Args:
         segments: Segments from the analysis agent.

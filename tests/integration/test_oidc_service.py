@@ -1,8 +1,7 @@
-"""OidcService（Cognito との通信）と回路遮断器の結合テスト。
+"""Integration tests for OidcService (Cognito communication) and the circuit breaker.
 
-httpx2 の MockTransport を注入し、Cognito の token・revoke・JWKS を模す。ID トークンは
-テストで作った RSA 鍵で署名する（unit-test-instructions.md のモックの方針）。
-BR1.4、BR1.11、BR1.13、NFR4.5、NFR5.4、reliability-design.md の回路遮断器。
+An httpx2 MockTransport is injected to simulate Cognito's token, revoke and JWKS.
+ID tokens are signed with an RSA key made in the test.
 """
 
 import base64
@@ -63,7 +62,7 @@ def _token_response(id_token: str | None = None, **extra: Any) -> httpx2.Respons
 
 
 class FakeCognito:
-    """MockTransport の振る舞いを差し替えられる Cognito の代役。"""
+    """A stand-in for Cognito whose MockTransport behavior can be swapped."""
 
     def __init__(self) -> None:
         self.token: Callable[[httpx2.Request], httpx2.Response] = (
@@ -206,7 +205,7 @@ class TestRefresh:
         tokens = service.refresh("refresh-token-1")
 
         assert tokens.access_token == "access-token-2"
-        # Cognito が更新トークンを回さなければ、前の更新トークンのまま
+        # If Cognito does not rotate the refresh token, the previous one stays
         assert tokens.refresh_token == "refresh-token-1"
         assert tokens.claims["cognito:groups"] == ["role:member", "group:sales"]
         sent = [r for r in cognito.requests if r.url.path == "/oauth2/token"][-1]
@@ -306,7 +305,7 @@ class TestCircuitBreaker:
         clock.now += 1
         cognito.token = lambda request: _token_response(_id_token(nonce=None))
         assert service.refresh("refresh-token-1").access_token == "access-token-1"
-        # 閉に戻ったので、続く呼び出しも Cognito に届く
+        # Back to closed, so later calls also reach Cognito
         service.refresh("refresh-token-1")
         assert cognito.calls_to("/oauth2/token") == 7
 
@@ -318,9 +317,9 @@ class TestCircuitBreaker:
             breaker.record_failure()
         clock.now += 60
 
-        breaker.before_call()  # 半開の 1 回
+        breaker.before_call()  # One half-open probe
         with pytest.raises(CircuitOpenError):
-            breaker.before_call()  # 結果が出るまで他は呼ばない
+            breaker.before_call()  # No other calls until the result is known
         breaker.record_failure()
         with pytest.raises(CircuitOpenError):
             breaker.before_call()
@@ -388,7 +387,7 @@ class TestSharedTransport:
         service.revoke("refresh-token-1")
 
         assert transport.closed is False
-        service.refresh("refresh-token-1")  # まだ使える
+        service.refresh("refresh-token-1")  # Still usable
 
     def test_a_call_finishing_mid_flight_does_not_break_another(self, cognito):
         transport = ClosableTransport(cognito)
@@ -397,7 +396,7 @@ class TestSharedTransport:
         def token_while_another_user_finishes(
             request: httpx2.Request,
         ) -> httpx2.Response:
-            # 別の利用者の処理がこの要求の途中で終わる（そのクライアントが閉じられる）
+            # Another user's processing finishes mid-request (that client is closed)
             service.create_authorization_request()
             service.revoke("other-refresh-token")
             if transport.closed:

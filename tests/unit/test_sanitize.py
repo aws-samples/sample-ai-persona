@@ -1,4 +1,4 @@
-"""render_markdown (sanitize.py) の単体テスト"""
+"""Unit tests for render_markdown (sanitize.py)."""
 
 import time
 

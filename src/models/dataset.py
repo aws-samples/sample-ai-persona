@@ -10,7 +10,7 @@ import uuid
 
 @dataclass
 class DatasetColumn:
-    """データセットのカラム情報"""
+    """Column information of a dataset."""
 
     name: str
     data_type: str  # string, integer, float, date, datetime, boolean
@@ -19,7 +19,7 @@ class DatasetColumn:
 
 @dataclass
 class Dataset:
-    """外部データセット（CSVファイル）の情報"""
+    """Information about an external dataset (CSV file)."""
 
     id: str
     name: str
@@ -30,15 +30,15 @@ class Dataset:
     created_at: datetime
     updated_at: datetime
     notes: str = ""
-    # U5（Q3 A）: ペルソナ専用のデータセットなら持ち主のペルソナ ID。組織資産は None。
-    # 作成後は変えない
+    # For a persona-dedicated dataset, the owning persona's ID; None for an
+    # organization asset. Not changed after creation
     owner_persona_id: Optional[str] = None
-    # U7: 組織資産の利用範囲（BR5.1）。空なら admin だけが使える。ペルソナ専用には書かない
+    # Usage scope of an organization asset. When empty, only admins can use it. Not written for persona-dedicated datasets
     shared_group_ids: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def is_org_asset(self) -> bool:
-        """Whether this is an organization asset (not persona-dedicated, BR5.6)."""
+        """Whether this is an organization asset (not persona-dedicated)."""
         return not self.owner_persona_id
 
     @classmethod
@@ -68,7 +68,7 @@ class Dataset:
         )
 
     def is_dedicated_to(self, persona_id: str) -> bool:
-        """Whether this dataset belongs to ``persona_id`` (BR2.4, BR6.1)."""
+        """Whether this dataset belongs to ``persona_id``."""
         return bool(self.owner_persona_id) and self.owner_persona_id == persona_id
 
     def to_dict(self) -> Dict[str, Any]:
@@ -114,5 +114,5 @@ class Dataset:
         )
 
 
-# ペルソナとデータセットの紐付けは U5 から src/models/persona_binding.py の
-# PersonaBinding（PersonaBindings テーブル）が持つ。
+# The persona-to-dataset binding is held by PersonaBinding (PersonaBindings
+# table) in src/models/persona_binding.py.

@@ -1,9 +1,9 @@
-"""判定表テスト（functional-spec.md WF7、AC4.4.5、約束 C2 の提供側のテスト）。
+"""Decision-table tests for access control (the provider side of the AccessPolicy contract).
 
-行は「ロール（admin / member / ロールなし）× 対象（自分のもの / 共有された / 無関係 /
-所有者なし / 削除済み / 組織資産で利用範囲内 / 範囲外）」、列は「読む / 管理する /
-資産を使う / 操作の権限」。NFR1.7 の「判定の入力が欠けている・おかしい」行も持つ。
-外部のモックを使わない（NFR9.13）。
+Rows are role (admin / member / no role) x target (own / shared / unrelated /
+no owner / deleted / org asset in scope / out of scope); columns are read /
+manage / use asset / operation permission. Also covers rows where the decision
+input is missing or malformed. No external mocks.
 """
 
 from typing import Literal
@@ -64,8 +64,8 @@ def _target(actor: Principal, kind: str) -> AccessTarget:
     raise AssertionError(kind)
 
 
-# (actor, target, read, manage, use_asset)。"-" は表の「—」（その列を見ない）。
-# admin の「共有された」は admin が部署を持たないため read_all で読める。
+# (actor, target, read, manage, use_asset). "-" means the column is not checked.
+# An admin has no department, so a "shared" target is readable via read_all.
 MATRIX: list[tuple[str, str, Outcome, Outcome, Outcome]] = [
     ("member", "own", "ok", "ok", "-"),
     ("member", "shared", "ok", "403", "-"),
@@ -169,7 +169,7 @@ def test_operation_permission(actor, permission, allowed):
             AccessPolicy.require(principal, permission)
 
 
-# NFR1.7: 判定の入力が欠けている・おかしいときは、読む・管理する・資産を使うのすべてが不可。
+# Missing or malformed decision input denies read, manage and use_asset alike.
 _EMPTY_SUB_MEMBER = Principal(
     sub="", roles=frozenset({Role.MEMBER}), group_ids=frozenset({"x"})
 )
@@ -233,7 +233,8 @@ def test_malformed_inputs_allow_nothing(name, principal, target):
     assert _ensure_outcome(AccessPolicy.ensure_readable, principal, target) == "404"
 
 
-# 境界の補助（hypothesis）: どんな入力でも、管理できるなら読める。権限のない人は何も許されない。
+# Boundary helper (hypothesis): for any input, whoever can manage can read;
+# a caller without permission is allowed nothing.
 _subs = st.sampled_from(["", "member-1", "someone"])
 _groups = st.frozensets(st.sampled_from(["sales", "dev", "hr"]))
 _principals = st.builds(
@@ -275,10 +276,10 @@ def test_deleted_targets_are_never_allowed(principal, target):
 
 
 # =============================================================================
-# 共有先の変更（U4、ResourceSharing 経由。ロール × 関係 × 1 件・一括）
-# 「sales を足す」を、上の表と同じ 5 つの関係のペルソナに当てる。
-# 結果: ok / 404 / 403 / owner（所有者なしは共有できない、BR1.10）/
-#       no_dept（選べる部署がない、BR1.4。どの対象も読まない）
+# Share-target changes (via ResourceSharing; role x relation x single / bulk)
+# Apply "add sales" to personas in the same five relations as the table above.
+# Result: ok / 404 / 403 / owner (an ownerless item cannot be shared) /
+#       no_dept (no selectable department; no target is read)
 # =============================================================================
 
 SHARE_ROWS: list[tuple[str, str, str]] = [
@@ -308,7 +309,7 @@ _SHARE_CODES: dict[ErrorCode, str] = {
 
 
 class _Departments:
-    """The department list (no Cognito, NFR9.13)."""
+    """The department list (no Cognito)."""
 
     def list_all(self) -> list[Department]:
         return [Department("sales", "営業部"), Department("hr", "人事部")]
@@ -358,7 +359,7 @@ def test_share_bulk(actor, kind, expected):
         result = sharing.bulk_update_shares(
             principal, [AccessTarget(ResourceType.PERSONA, rid)], _ADD_SALES
         )
-    except CodedError as e:  # 全体の確認（BR2.2）で断られた
+    except CodedError as e:  # refused by the overall check
         assert _SHARE_CODES[e.code] == expected
         return
     if expected == "ok":
@@ -366,13 +367,12 @@ def test_share_bulk(actor, kind, expected):
         return
     (failure,) = result.failed
     assert _SHARE_CODES[failure.code] == expected
-    # 読めない対象の名前は出さない（BR2.4）
+    # the name of an unreadable target is not shown
     assert (failure.display_name is None) is (expected == "404")
 
 
 # =============================================================================
-# U5: ペルソナに付随するもの（記憶・紐付け・プレビュー・アバター・エクスポート・ファイル）
-# security-design.md §1、BR2〜BR5、BR7、NFR1.31
+# Things attached to a persona (memory, bindings, preview, avatar, export, files)
 # =============================================================================
 
 
@@ -404,7 +404,7 @@ def _memory_manager(world):
     return PersonaMemoryManager(memory_service=memory, resource_lookup=world.lookup)
 
 
-#: Actors of the U5 rows: the member is in ``sales``; the ``shared`` persona
+#: Actors of these rows: the member is in ``sales``; the ``shared`` persona
 #: belongs to someone else and is shared with ``sales``.
 U5_ACTORS = {
     "member": ACTORS["member"],
@@ -416,7 +416,7 @@ U5_ACTORS = {
 #: (operation, actor, target, outcome)
 U5_MATRIX: list[tuple[str, str, str, Outcome]] = []
 for _op, _rows in {
-    # 記憶は管理できる人だけ。共有されただけの人も 404（BR4.1）
+    # memory is manageable only by managers; a mere share recipient also gets 404
     "memory": {"own": "ok", "shared": "404", "admin": "ok"},
     "bindings": {"own": "ok", "shared": "ok", "admin": "ok"},
     "bind": {"own": "ok", "shared": "403", "admin": "ok"},
@@ -442,7 +442,7 @@ def _u5_call(op: str, world, principal: Principal, persona_id: str, dataset_id: 
         return manager.get_dataset_bindings(principal, persona_id)
     from dataclasses import replace
 
-    # the dataset is dedicated to the persona under test (always usable, BR2.4)
+    # the dataset is dedicated to the persona under test (always usable)
     world.datasets[dataset_id] = replace(
         world.datasets[dataset_id], owner_persona_id=persona_id
     )
@@ -480,7 +480,7 @@ def test_u5_persona_attachments(op, actor, kind, expected):
     assert expected == "ok"
 
 
-#: Upload before attaching: only the uploader, only before expiry (BR5.4).
+#: Upload before attaching: only the uploader, only before expiry.
 U5_FILE_ROWS: list[tuple[str, Outcome]] = [
     ("member", "ok"),
     ("admin", "404"),
@@ -517,9 +517,9 @@ def test_u5_unattached_file(actor, expected):
     ("actor", "expected"), [("member", "ok"), ("admin", "ok"), ("stranger", "404")]
 )
 def test_u5_attached_file_before_parent_registration(actor, expected):
-    """U7 がテンプレートの判定を登録するまでは、アップロードした本人と admin だけ（BR5.7）。
+    """Until template decisions are registered, only the uploader and admin may use uploads.
 
-    U6 で議論の判定は登録した（下の ``test_u6_discussion_documents``）。
+    Discussion decisions are registered (see ``test_u6_discussion_documents`` below).
     """
     from datetime import datetime, timezone
     from unittest.mock import Mock
@@ -544,8 +544,7 @@ def test_u5_attached_file_before_parent_registration(actor, expected):
 
 
 # =============================================================================
-# U6: 議論（読む・管理する・実行する）・レポート・資料・インタビューのセッション
-# security-design.md §1・§2、BR1〜BR5、BR8.1、NFR1.55、AC4.4.5
+# Discussions (read / manage / execute), reports, documents, interview sessions
 # =============================================================================
 
 #: The member (``a``, ``sales``) sees: ``own`` (a's), ``shared`` (b's, shared
@@ -555,17 +554,17 @@ U6_KINDS = ("own", "shared", "unrelated", "deleted")
 #: (operation, actor, kind, outcome)
 U6_MATRIX: list[tuple[str, str, str, Outcome]] = []
 for _op, _member, _admin, _no_role in [
-    # 読む: 共有された人も読める。無関係・削除済みは同じ 404
+    # read: shared recipients can read; unrelated and deleted give the same 404
     ("read", ("ok", "ok", "404", "404"), ("ok", "ok", "404"), "404"),
-    # 管理する（削除）: 共有された人は 403
+    # manage (delete): a shared recipient gets 403
     ("manage", ("ok", "403", "404", "404"), ("ok", "ok", "404"), "404"),
-    # 実行する（インサイトの再生成）: ai:execute のあとに管理できる人
+    # execute (regenerate insights): ai:execute, then a manager
     ("run", ("ok", "403", "404", "404"), ("ok", "ok", "404"), "403"),
-    # レポートの生成: ai:execute のあとに読める人（共有された人も生成できる）
+    # report generation: ai:execute, then a reader (shared recipients can generate)
     ("report_generate", ("ok", "ok", "404", "404"), ("ok", "ok", "404"), "403"),
-    # レポートの保存: 管理できる人
+    # report save: managers
     ("report_save", ("ok", "403", "404", "404"), ("ok", "ok", "404"), "404"),
-    # 資料: 親の議論を読める人に配信（BR5.1）
+    # documents: served to those who can read the parent discussion
     ("document", ("ok", "ok", "404", "404"), ("ok", "ok", "404"), "404"),
 ]:
     U6_MATRIX += [(_op, "member", k, o) for k, o in zip(U6_KINDS, _member)]
@@ -704,7 +703,7 @@ def test_u6_discussions(op, actor, kind, expected):
     assert expected == "ok"
 
 
-#: Interview sessions belong to the one who started them; admin included (BR3.2).
+#: Interview sessions belong to the one who started them; admin included.
 U6_INTERVIEW_ROWS: list[tuple[str, str, Outcome]] = [
     ("owner", "live", "ok"),
     ("same_department", "live", "404"),
@@ -765,14 +764,14 @@ def test_u6_interview_sessions(actor, state, expected):
 
 
 # =============================================================================
-# U7: アンケートテンプレートと結果（読む・管理する・共有する）、カスタムペルソナ
-# データ（使う）。security-design.md §1・§2、BR1.2〜BR1.6、BR4.2、BR6.2、AC4.4.5
+# Survey templates and results (read / manage / share), custom persona
+# data (use)
 # =============================================================================
 
 #: member A (``a``, ``sales``) sees: ``own`` (a's), ``shared`` (b's, shared with
 #: ``sales``), ``unrelated`` (c's), ``ownerless`` (before v1.0.0), ``deleted``.
 U7_KINDS = ("own", "shared", "unrelated", "ownerless", "deleted")
-#: ``invalid`` = refused as VALIDATION (an ownerless row cannot be shared, BR1.6).
+#: ``invalid`` = refused as VALIDATION (an ownerless row cannot be shared).
 U7Outcome = Literal["ok", "404", "403", "invalid"]
 
 U7_MATRIX: list[tuple[str, str, str, str]] = []
@@ -900,7 +899,7 @@ def test_u7_templates_and_surveys(survey_world, op, actor, kind, expected):
 
 
 #: Custom persona data: use = the scope meets the user's departments, or
-#: ``settings:manage`` (BR4.2, BR5.1).
+#: ``settings:manage``.
 U7_ASSET_ROWS: list[tuple[str, str, str]] = [
     ("member", "in_scope", "ok"),
     ("member", "out_of_scope", "404"),

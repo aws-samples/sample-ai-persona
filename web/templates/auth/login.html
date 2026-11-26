@@ -1,7 +1,9 @@
 {% extends "auth/layout.html" %}
-{# M2. 閉域構成のログイン画面（U8、mockups.md M2、interaction-spec.md C8）。
-   フルページのフォーム送信（htmx を使わない）。失敗の文言は理由で変えない（BR1.4）。
-   パスワード欄は常に空で描く（BR4.5）。 #}
+{#
+  Login screen for the closed-network setup.
+     A full-page form submit (htmx is not used). The failure message does not vary by reason.
+     The password field is always rendered empty.
+#}
 {% block content %}
 <h1 class="text-lg font-bold text-gray-900 mb-4">ログイン</h1>
 {% if notice == "expired" %}

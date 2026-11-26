@@ -1,4 +1,4 @@
-"""sql_builder（純粋関数）単体テスト。"""
+"""Unit tests for sql_builder (pure functions)."""
 
 import pytest
 
@@ -91,13 +91,13 @@ class TestFilters:
         sql, params, _ = _build(
             filters=[{"column": "region", "operator": "contains", "value": "as"}]
         )
-        # 大文字小文字を無視するため ILIKE を使う（case-sensitive な LIKE ではない）。
+        # Use ILIKE to ignore case (not the case-sensitive LIKE).
         assert "ILIKE $1" in sql
         assert "LIKE $1" not in sql.replace("ILIKE", "")
         assert params == ["%as%"]
 
     def test_contains_escapes_like_metacharacters(self):
-        # % _ \ をエスケープし ESCAPE 句を付ける（ワイルドカード誤マッチ防止）。
+        # Escape % _ \ and add an ESCAPE clause (prevents accidental wildcard matches).
         sql, params, _ = _build(
             filters=[{"column": "region", "operator": "contains", "value": "50%_x\\"}]
         )
@@ -109,7 +109,7 @@ class TestFilters:
         sql, params, _ = _build(
             filters=[{"column": "region", "operator": "eq", "value": malicious}]
         )
-        assert malicious not in sql  # 値は SQL 本文に現れない
+        assert malicious not in sql  # The value does not appear in the SQL text
         assert params == [malicious]
 
 
@@ -120,7 +120,7 @@ class TestForcedFilter:
         assert params == ["U123"]
 
     def test_forced_filter_cannot_be_removed_by_llm_filter(self):
-        # LLM が同じ列に別条件を出しても forced filter は別枠で AND 付与される。
+        # Even if the LLM emits another condition on the same column, the forced filter is ANDed separately.
         sql, params, _ = _build(
             filters=[{"column": "user_id", "operator": "eq", "value": "OTHER"}],
             forced_filter={"user_id": "U123"},
@@ -248,7 +248,7 @@ class TestDateTruncGroupBy:
             )
 
     def test_non_string_date_trunc_normalized_to_sqlbuilderror(self):
-        # 非文字列（非ハッシュ値）でも TypeError ではなく SqlBuildError に落ちる。
+        # A non-string (non-hashable) value falls into SqlBuildError, not TypeError.
         with pytest.raises(SqlBuildError):
             _build(
                 metrics=[{"func": "count"}],
@@ -263,8 +263,8 @@ class TestDateTruncGroupBy:
             )
 
     def test_date_trunc_unit_is_not_parameterized(self):
-        # 単位は allowlist 済み定数を inline する（$N ではない）。誤って
-        # パラメータ化されていないこと＝値パラメータに混ざらないことを確認。
+        # The unit is an allowlisted constant inlined (not $N). Checks it is not
+        # parameterized, i.e. does not get mixed into the value parameters.
         _, params, _ = _build(
             metrics=[{"func": "count"}],
             group_by=[{"column": "region", "date_trunc": "month"}],
@@ -300,12 +300,12 @@ class TestOrderBy:
             )
 
     def test_real_column_named_metric_1_does_not_collide(self):
-        # 実カラム "metric_1" があっても内部別名は m0 なので衝突しない（回帰）。
+        # Even with a real column "metric_1", the internal alias is m0, so there is no collision (regression).
         sql, _, labels = _build(
             select_columns=["metric_1"],
         )
         assert '"metric_1"' in sql
-        # 集計モードで metric_1 という列名を group_by に使っても内部別名 m0 と別物。
+        # Using a column named metric_1 in group_by in aggregate mode is distinct from the internal alias m0.
         sql2, _, _ = _build(
             metrics=[{"func": "count", "column": "metric_1"}],
             group_by=["region"],

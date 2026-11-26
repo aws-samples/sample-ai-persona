@@ -1,4 +1,4 @@
-"""PersonaManager with candidates of the advanced generation (US10.2, US10.3, BR9.4).
+"""PersonaManager with candidates of the advanced generation.
 
 Saving an advanced candidate copies its analysis record to the new persona's
 ID first, then saves the persona with ``generation_context`` pointing at that
@@ -194,7 +194,7 @@ class TestDeleteAndRead:
         )
         archive.read_committed.assert_not_called()
 
-    # --- U2 BR14.3: 元のファイルが残っているか（SourceAvailability） ---
+    # --- Whether the original file still exists (SourceAvailability) ---
 
     def _sources(self, world, archive, record, files) -> tuple:
         """Open the record with a real catalog over a fake store of ``files``."""

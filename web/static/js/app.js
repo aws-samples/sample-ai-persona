@@ -1,38 +1,38 @@
-// AIペルソナシステム - htmx版 JavaScript
+// AI Persona System - htmx JavaScript
 
-// htmx の履歴キャッシュ（localStorage の htmx-history-cache）は使わない（U4 レビュー P1）。
-// 画面の写しが利用者の区別なくブラウザに残り、別の利用者に替わったあとも「戻る」で
-// 前の利用者の一覧が出てしまうため。保存は base.html の hx-history="false" で止め、
-// 以前の版が残した写しはここで消す。戻るときはサーバーから読み直す。
+// Do not use htmx's history cache (htmx-history-cache in localStorage).
+// A copy of the screen would stay in the browser without distinguishing users, so after switching users
+// "Back" would show the previous user's list. Saving is stopped by hx-history="false" in base.html,
+// and copies left by earlier versions are removed here. Going back re-reads from the server.
 try {
     localStorage.removeItem('htmx-history-cache');
 } catch (e) {
-    // localStorage が使えないブラウザでは写しもない
+    // Browsers without localStorage have no copy either
 }
 
-// htmxイベントハンドラ
+// htmx event handlers
 document.body.addEventListener('htmx:afterSwap', function(evt) {
-    // 新しいコンテンツにフェードインアニメーションを適用
+    // Apply the fade-in animation to new content
     if (evt.detail.target) {
         evt.detail.target.classList.add('fade-in');
     }
 });
 
 document.body.addEventListener('htmx:beforeRequest', function(evt) {
-    // リクエスト開始時の処理
+    // Handling at request start
     console.log('htmx request started:', evt.detail.pathInfo.requestPath);
 });
 
 document.body.addEventListener('htmx:afterRequest', function(evt) {
-    // リクエスト完了時の処理
+    // Handling at request completion
     console.log('htmx request completed:', evt.detail.pathInfo.requestPath);
 });
 
-// サーバーからのトースト指示（HX-Trigger: {"showToast": {...}}）。
-// 再試行で解決しうるエラー（ErrorKind.TRANSIENT）は、画面を書き換えず
-// トーストで通知する。入力内容を保持するため（Issue #117）。
-// htmx は HX-Trigger をスワップ判定より前に処理するので 4xx でも発火する。
-// 種類は約束 C6 の level と、今の toast_response() の type のどちらでも受ける。
+// Toast instruction from the server (HX-Trigger: {"showToast": {...}}).
+// Errors that a retry may resolve (ErrorKind.TRANSIENT) are shown as a toast
+// without rewriting the screen, so the user's input is kept (Issue #117).
+// htmx processes HX-Trigger before the swap decision, so this fires on 4xx too.
+// The type accepts either the level of the toast contract or the type of the current toast_response().
 document.body.addEventListener('showToast', function(evt) {
     const detail = evt.detail || {};
     showFlashMessage(
@@ -41,13 +41,13 @@ document.body.addEventListener('showToast', function(evt) {
     );
 });
 
-// 非2xx応答のDOM反映（Issue #117）。
-// htmx 1.9.10 は 2xx 以外の本文をスワップしないため、4xx/5xx でエラー文言を
-// 返しても画面に届かない。サーバーが X-Render-Response: true を明示した応答
-// だけをスワップ対象にする。
-// ステータスコードで一律に許可しないのは、汎用エラーパーシャルが hx-target
-// （本体コンテンツや一覧）に流れ込んでフォームごと消える経路があるため。
-// 「表示してよい」判断はサーバー側が持つ。
+// Reflect non-2xx responses in the DOM (Issue #117).
+// htmx 1.9.10 does not swap bodies of non-2xx responses, so an error message returned with 4xx/5xx
+// never reaches the screen. Only responses where the server explicitly sets X-Render-Response: true
+// are swapped.
+// Status codes are not allowed wholesale because a generic error partial could flow into hx-target
+// (main content or a list) and wipe out the whole form.
+// The decision on what may be shown stays on the server side.
 document.body.addEventListener('htmx:beforeSwap', function(evt) {
     const xhr = evt.detail.xhr;
     if (xhr && xhr.getResponseHeader('X-Render-Response') === 'true') {
@@ -57,17 +57,17 @@ document.body.addEventListener('htmx:beforeSwap', function(evt) {
 });
 
 document.body.addEventListener('htmx:responseError', function(evt) {
-    // エラー時の処理
+    // Error handling
     console.error('htmx request error:', evt.detail);
-    // サーバーがトースト表示または本文の反映を指示している場合は、それぞれの
-    // 経路で文言が出るため、ここで汎用文言を重ねて出さない
+    // When the server asks for a toast or for the body to be applied, the message appears through
+    // that path, so a generic message is not stacked on top here
     const xhr = evt.detail.xhr;
     if (xhr && (xhr.getResponseHeader('HX-Trigger') ||
                 xhr.getResponseHeader('X-Render-Response') === 'true')) {
         return;
     }
-    // ダイアログの中身の読み込みの失敗は、ダイアログの中に「内容を読み込めませんでした」と
-    // 「再読み込み」を出して知らせる（Dialog）。汎用のトーストを重ねない
+    // A failed dialog content load is reported inside the dialog with "内容を読み込めませんでした" and
+    // "再読み込み" (Dialog). Do not stack a generic toast on top
     const elt = evt.detail.elt;
     if (elt && elt.matches && elt.matches('[data-dialog-content]')) {
         return;
@@ -76,17 +76,17 @@ document.body.addEventListener('htmx:responseError', function(evt) {
 });
 
 // =============================================================
-// Toast（U3 WF4、B19〜B22）
-// 成功・情報は #toast-status（role="status"）に入れて 5 秒で消す。ポインタが
-// 重なっている間とフォーカスが中にある間は数えるのを止め、離れたら残りの
-// 時間から数え直す。エラー・警告は #toast-alert（role="alert"）に入れ、
-// 閉じるボタンを押すまで残す。表示してもフォーカスは動かさない。
-// 文字はすべて textContent で入れる（応答やメッセージを HTML として解釈しない）。
+// Toast
+// Success and info go into #toast-status (role="status") and disappear after 5 seconds. Counting stops while
+// the pointer is over the toast or focus is inside it, and restarts from the remaining
+// time when it leaves. Errors and warnings go into #toast-alert (role="alert") and stay until the
+// close button is pressed. Showing a toast does not move focus.
+// All text is inserted with textContent (responses and messages are never interpreted as HTML).
 // =============================================================
 const TOAST_DURATION_MS = 5000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-// components/icons.html と同じ Heroicons（outline）のパス。成功・エラー表示パーシャルと見た目を揃える
+// Heroicons (outline) paths, same as components/icons.html, to match the success and error partials
 const TOAST_STYLES = {
     success: {
         box: 'bg-green-50 border-green-200 text-green-800',
@@ -130,9 +130,9 @@ function buildToast(message, style) {
     const toast = document.createElement('div');
     toast.dataset.toast = '';
     toast.dataset.testid = 'toast';
-    // コンテナは pointer-events-none（下の要素を操作できるように）なので、
-    // 閉じるボタンを押せるようトースト自身だけクリックを受け付ける。
-    // shadow-lg は本文コンテンツの上に重なるため境界を分かりやすくする。
+    // The container is pointer-events-none (so elements beneath stay usable),
+    // so only the toast itself accepts clicks, which lets the close button be pressed.
+    // shadow-lg overlaps the body content, so make the boundary easy to see.
     toast.className =
         `${style.box} border rounded-lg p-4 mb-2 fade-in shadow-lg pointer-events-auto`;
 
@@ -160,7 +160,7 @@ function buildToast(message, style) {
     return toast;
 }
 
-// 要素ごとに 1 つのタイマーで数える。止めるときは残りの時間だけを持つ。
+// One timer per element. When stopped, only the remaining time is kept.
 function startToastCountdown(toast, duration) {
     let remaining = duration;
     let startedAt = 0;
@@ -190,7 +190,7 @@ function startToastCountdown(toast, duration) {
     run();
 }
 
-// フラッシュメッセージ表示（呼び方は従来どおり）
+// Flash message display (called the same way as before)
 function showFlashMessage(message, type = 'info') {
     const kind = TOAST_STYLES[type] ? type : 'info';
     const persistent = kind === 'error' || kind === 'warning';
@@ -201,7 +201,7 @@ function showFlashMessage(message, type = 'info') {
     if (!persistent) startToastCountdown(toast, TOAST_DURATION_MS);
 }
 
-// ファイル名更新
+// File name update
 function updateFileName(input, targetId) {
     const fileName = input.files[0]?.name || '';
     const display = document.getElementById(targetId || 'selected-file');
@@ -210,7 +210,7 @@ function updateFileName(input, targetId) {
     }
 }
 
-// ドラッグ＆ドロップ設定
+// Drag-and-drop setup
 function setupDragAndDrop(dropZoneSelector, fileInputSelector, targetId) {
     const dropZone = document.querySelector(dropZoneSelector);
     const fileInput = document.querySelector(fileInputSelector);
@@ -247,12 +247,12 @@ function setupDragAndDrop(dropZoneSelector, fileInputSelector, targetId) {
     });
 }
 
-// 確認ダイアログ
+// Confirmation dialog
 function confirmAction(message) {
     return confirm(message);
 }
 
-// ローカルストレージ操作
+// Local storage operations
 const storage = {
     set: (key, value) => {
         try {
@@ -279,7 +279,7 @@ const storage = {
     }
 };
 
-// ローカルタイムゾーン変換
+// Local timezone conversion
 function formatLocalTime(el) {
     const iso = el.getAttribute('datetime');
     if (!iso) return;
@@ -299,16 +299,16 @@ function convertAllTimes(root) {
 }
 
 // =============================================================
-// ペルソナアバター（DiceBear notionists）
-// DiceBear バンドルを読み込んだページでのみ動作。未読込時は頭文字フォールバック。
+// Persona avatar (DiceBear notionists)
+// Works only on pages that loaded the DiceBear bundle. Falls back to the initial when not loaded.
 // =============================================================
 
-// seed+size をキーにした生成済みSVGのキャッシュ（同一画面内の再生成を防ぐ）
+// Cache of generated SVGs keyed by seed+size (avoids regenerating within the same screen)
 const _personaAvatarCache = {};
 
 /**
- * ペルソナID(seed)から DiceBear アバターSVGを生成して返す。
- * DiceBear/DOMPurify 未読込・生成失敗時は null（呼び出し側で頭文字にフォールバック）。
+ * Generate and return a DiceBear avatar SVG from the persona ID (seed).
+ * Returns null when DiceBear/DOMPurify is not loaded or generation fails (the caller falls back to the initial).
  */
 function personaAvatarSvg(seed, size) {
     try {
@@ -330,14 +330,14 @@ function personaAvatarSvg(seed, size) {
 }
 window.personaAvatarSvg = personaAvatarSvg;
 
-// アップロード済みアイコン画像の URL（ペルソナID → URL）。
-// サーバーが data-avatar-url を出力した要素から集める。メッセージ行など
-// ペルソナ情報を持たない要素も、同じページで登録された URL を引ける。
+// URLs of uploaded icon images (persona ID -> URL).
+// Collected from elements where the server outputs data-avatar-url. Elements without
+// persona info, such as message rows, can look up URLs registered on the same page.
 const _personaAvatarUrls = {};
 
 /**
- * ペルソナのアイコン画像 URL を登録する。空文字は「画像なし（自動アバター）」として登録を消す。
- * 同一オリジンの相対パスのみ受け付ける（サーバー生成の /persona/{id}/avatar を想定）。
+ * Register the icon image URL of a persona. An empty string means "no image (auto avatar)" and removes the registration.
+ * Only same-origin relative paths are accepted (a server-generated /persona/{id}/avatar is expected).
  */
 function registerPersonaAvatarUrl(seed, url) {
     const key = String(seed || '');
@@ -356,9 +356,9 @@ function _escapeAttr(value) {
 }
 
 /**
- * アバター枠の中身（HTML文字列）を返す。
- * アイコン画像が登録されていれば <img>、無ければ DiceBear SVG、どちらも無ければ null。
- * <img> の読み込み失敗時は下の error リスナーが DiceBear に差し戻す。
+ * Return the content of an avatar frame (HTML string).
+ * An <img> if an icon image is registered, otherwise a DiceBear SVG, otherwise null.
+ * If the <img> fails to load, the error listener below falls back to DiceBear.
  */
 function personaAvatarInner(seed, size) {
     const url = _personaAvatarUrls[String(seed || '')];
@@ -371,8 +371,8 @@ function personaAvatarInner(seed, size) {
 }
 window.personaAvatarInner = personaAvatarInner;
 
-// アイコン画像の読み込み失敗（削除済み・期限切れ等）は DiceBear に差し戻す。
-// error はバブリングしないためキャプチャで受ける。
+// When an icon image fails to load (deleted, expired, and so on), fall back to DiceBear.
+// error does not bubble, so it is received in the capture phase.
 document.addEventListener('error', function(evt) {
     const img = evt.target;
     if (!(img instanceof HTMLImageElement) || !img.classList.contains('persona-avatar-photo')) return;
@@ -381,29 +381,29 @@ document.addEventListener('error', function(evt) {
     registerPersonaAvatarUrl(seed, '');
     const svg = personaAvatarSvg(seed, size);
     if (svg) {
-        img.outerHTML = svg; // personaAvatarSvg 内で DOMPurify 済み
+        img.outerHTML = svg; // Already sanitized by DOMPurify inside personaAvatarSvg
     } else {
         img.remove();
     }
 }, true);
 
 /**
- * 単一アバター枠を描画する。アイコン画像があれば画像、無ければ DiceBear SVG、
- * どちらも使えなければ頭文字+カラー円。
- * el: data-avatar-seed / data-avatar-name / data-avatar-color（任意で data-avatar-url）を持つ要素。
+ * Render a single avatar frame. Image if there is an icon image, otherwise a DiceBear SVG,
+ * and if neither is usable, an initial on a colored circle.
+ * el: element with data-avatar-seed / data-avatar-name / data-avatar-color (and optionally data-avatar-url).
  */
 function fillPersonaAvatar(el) {
     if (!el || el.dataset.avatarFilled) return;
     const seed = el.dataset.avatarSeed || '';
     const size = parseInt(el.dataset.avatarSize || '48', 10);
-    // 装飾画像。名前は隣のテキストで読み上げられるため、スクリーンリーダーからは隠す
+    // Decorative image. The name is read from the adjacent text, so hide it from screen readers
     el.setAttribute('aria-hidden', 'true');
     const inner = personaAvatarInner(seed, size);
     if (inner) {
-        el.innerHTML = inner; // <img> は属性をエスケープ済み、SVG は DOMPurify 済み
+        el.innerHTML = inner; // <img> attributes are escaped and the SVG is sanitized by DOMPurify
         el.classList.add('persona-avatar-img');
     } else {
-        // フォールバック: 頭文字 + 既存カラークラス
+        // Fallback: initial + existing color classes
         const name = el.dataset.avatarName || '';
         const color = el.dataset.avatarColor || 'blue';
         const initial = name ? name.charAt(0) : '';
@@ -413,7 +413,7 @@ function fillPersonaAvatar(el) {
     el.dataset.avatarFilled = '1';
 }
 
-// 可視範囲に入ったアバター枠だけ生成する（一覧の大量生成によるブロックを防ぐ）
+// Generate only the avatar frames that enter the viewport (avoids blocking from generating many in a list)
 let _avatarObserver = null;
 function getAvatarObserver() {
     if (_avatarObserver || typeof IntersectionObserver === 'undefined') return _avatarObserver;
@@ -429,21 +429,20 @@ function getAvatarObserver() {
 }
 
 /**
- * root 配下の未処理アバター枠 [data-avatar-seed] を遅延生成にのせる。
- * IntersectionObserver 非対応環境では即時生成にフォールバック。
- * data-avatar-eager 属性を持つ要素は即時生成する（内部スクロールコンテナ内など、
- * viewport ベースの IntersectionObserver が可視判定できない場所向け）。
+ * Put unprocessed avatar frames [data-avatar-seed] under root on lazy generation.
+ * Falls back to immediate generation where IntersectionObserver is unsupported.
+ * Elements with data-avatar-eager are generated immediately (for places where a viewport-based IntersectionObserver cannot judge visibility, such as inside an inner scroll container).
  */
 function renderPersonaAvatars(root) {
     const scope = root || document;
-    // 描画より先に、スコープ内の画像 URL を登録する（同じペルソナのメッセージ行等で引けるように）
+    // Before drawing, register the image URLs in scope (so message rows of the same persona can look them up)
     const withUrl = scope.querySelectorAll ? scope.querySelectorAll('[data-avatar-seed][data-avatar-url]') : [];
     withUrl.forEach(el => registerPersonaAvatarUrl(el.dataset.avatarSeed, el.dataset.avatarUrl));
     const els = scope.querySelectorAll('[data-avatar-seed]:not([data-avatar-filled])');
     const obs = getAvatarObserver();
     els.forEach(el => {
         if (el.dataset.avatarEager !== undefined) {
-            fillPersonaAvatar(el);  // 即時生成（キャッシュが効くため低コスト）
+            fillPersonaAvatar(el);  // Immediate generation (cheap thanks to the cache)
         } else if (obs) {
             obs.observe(el);
         } else {
@@ -453,18 +452,18 @@ function renderPersonaAvatars(root) {
 }
 window.renderPersonaAvatars = renderPersonaAvatars;
 
-// htmxで動的に追加された要素にも対応
+// Also handle elements added dynamically by htmx
 document.body.addEventListener('htmx:afterSwap', function(evt) {
     convertAllTimes(evt.detail.target);
     renderPersonaAvatars(evt.detail.target);
 });
 
 // =============================================================
-// 画面の共通部品（U3）
-// まとまりごとに 1 回だけ document に登録し、イベントの委譲で受ける
-// （htmx で差し替わった要素にも効く）。まとまりどうしは関数を直接呼ばず、
-// イベント（dialogClose、listReload、showToast、dialog:closed）だけでつながる。
-// 1 つの登録の失敗でほかが止まらないよう、登録はそれぞれ try で包む。
+// Shared screen components
+// Each group registers once on document and receives events by delegation
+// (so it also works on elements swapped by htmx). Groups do not call each other's functions
+// directly; they are connected only by events (dialogClose, listReload, showToast, dialog:closed).
+// Each registration is wrapped in try so one failure does not stop the others.
 // =============================================================
 function registerBlock(name, register) {
     try {
@@ -479,9 +478,9 @@ function isShown(el) {
 }
 
 // -------------------------------------------------------------
-// NavMenu（C1、WF1、B1・B2）
-// 開閉の状態は base.html の Alpine（openMenu）のまま。ここはキー操作と
-// 「外へ出たら閉じる」だけを足す。nav は data-nav-menu の要素。
+// NavMenu
+// The open state stays with Alpine (openMenu) in base.html. This adds only key handling
+// and "close when focus leaves". nav is the data-nav-menu element.
 // -------------------------------------------------------------
 registerBlock('NavMenu', function() {
     const BREAKPOINT = window.matchMedia('(min-width: 640px)');
@@ -504,7 +503,7 @@ registerBlock('NavMenu', function() {
     };
 
     function focusFirstItem(toggle, attempt = 0) {
-        // 待っている間に閉じられていたら何もしない
+        // Do nothing if it was closed while waiting
         if (openToggleOf(toggle.closest('[data-nav-menu]')) !== toggle) return;
         const first = itemsOf(toggle)[0];
         if (first) {
@@ -534,7 +533,7 @@ registerBlock('NavMenu', function() {
             evt.preventDefault();
             open(toggle);
         } else if (evt.key === 'Enter' || evt.key === ' ') {
-            // クリックへの変換を止め、開くときは最初の項目へ移す（マウスのクリックは Alpine のまま）
+            // Stop the conversion to a click and, when opening, move to the first item (mouse clicks stay with Alpine)
             evt.preventDefault();
             if (openToggleOf(nav) === toggle) {
                 close(nav, false);
@@ -575,13 +574,13 @@ registerBlock('NavMenu', function() {
         if (item) onItemKey(evt, item);
     });
 
-    // Space はキーを離したときにクリックになるため、こちらでも止める
+    // Space becomes a click on key release, so stop it here as well
     document.addEventListener('keyup', function(evt) {
         if (evt.key !== ' ' || !(evt.target instanceof Element)) return;
         if (evt.target.closest('[data-nav-menu] [data-nav-toggle]')) evt.preventDefault();
     });
 
-    // Tab などでボタンと項目の外へフォーカスが出たら閉じる（フォーカスは動かさない）
+    // Close when focus leaves the button and items (Tab and so on). Focus is not moved
     document.addEventListener('focusin', function(evt) {
         document.querySelectorAll('[data-nav-menu]').forEach((nav) => {
             const toggle = openToggleOf(nav);
@@ -589,7 +588,7 @@ registerBlock('NavMenu', function() {
         });
     });
 
-    // 外側のクリックで閉じる。開くボタンのクリックは Alpine が先に処理している
+    // Close on an outside click. Alpine handles the open button's click first
     document.addEventListener('click', function(evt) {
         document.querySelectorAll('[data-nav-menu]').forEach((nav) => {
             const toggle = openToggleOf(nav);
@@ -597,26 +596,26 @@ registerBlock('NavMenu', function() {
         });
     });
 
-    // 開いたまま幅が 640px を跨いだら閉じる
+    // Close if the width crosses 640px while open
     BREAKPOINT.addEventListener('change', function() {
         document.querySelectorAll('[data-nav-menu]').forEach((nav) => close(nav, false));
     });
 });
 
 // -------------------------------------------------------------
-// Dialog（C3、WF2、B4〜B6・B16・B18・B22）
-// components/dialog.html の dialog() が描いた [data-dialog] を開閉する。
-// 開閉の状態はここだけが持ち、hidden 属性で表す。開いている間は、ダイアログから
-// <body> までの祖先の兄弟に inert を付ける（ダイアログ自身・祖先・トーストの
-// 入れ物には付けない。もともと inert の要素は覚えず、閉じても外さない）。
-// 重ねて開かない。開く要求が来たら先のダイアログを閉じてから開く。
+// Dialog
+// Opens and closes the [data-dialog] rendered by dialog() in components/dialog.html.
+// Only this code owns the open state, expressed with the hidden attribute. While open, inert is put on the
+// siblings of the ancestors from the dialog up to <body> (not on the dialog itself, its ancestors, or the toast
+// container; elements already inert are not remembered and are not restored on close).
+// Dialogs are not stacked. A request to open closes the earlier dialog first.
 // -------------------------------------------------------------
 registerBlock('Dialog', function() {
     const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex]';
     const FIELDS = 'input:not([type="hidden"]), select, textarea';
     const SUBMITS = 'button[type="submit"], input[type="submit"]';
 
-    // 開いているダイアログ: { el, opener, inerted, disabled, submitting, promise, resolve }
+    // Open dialog: { el, opener, inerted, disabled, submitting, promise, resolve }
     let current = null;
 
     const panelOf = (el) => el.querySelector('[data-dialog-panel]');
@@ -631,8 +630,8 @@ registerBlock('Dialog', function() {
             .filter((node) => node.tabIndex >= 0 && isUsable(node));
     }
 
-    // 既定のフォーカス: [data-dialog-initial-focus]（取り消せない操作の確認では
-    // ［キャンセル］、U5 M8）→ 最初の入力欄 → 見出し
+    // Default focus: [data-dialog-initial-focus] ([キャンセル] for confirmations of irreversible actions)
+    // -> first input -> heading
     function focusInitial(el) {
         const panel = panelOf(el);
         const preferred = Array.from(panel.querySelectorAll('[data-dialog-initial-focus]')).find(isUsable);
@@ -641,7 +640,7 @@ registerBlock('Dialog', function() {
         if (target) target.focus();
     }
 
-    // --- 背景の inert ---------------------------------------------
+    // --- Inert background ---
     function inertBackground(el) {
         const toasts = document.getElementById('flash-messages');
         const added = [];
@@ -667,8 +666,8 @@ registerBlock('Dialog', function() {
         state.inerted = [];
     }
 
-    // --- 保存中 -----------------------------------------------------
-    // 保存ボタン（送信ボタンと、要求を出したボタン自身）を無効にする
+    // --- Saving ---
+    // Disable the save buttons (the submit button and the button that issued the request)
     function startSubmitting(state, requester) {
         state.submitting = true;
         const buttons = Array.from(panelOf(state.el).querySelectorAll(SUBMITS));
@@ -686,7 +685,7 @@ registerBlock('Dialog', function() {
         state.disabled = [];
     }
 
-    // --- 中身の読み込み ---------------------------------------------
+    // --- Loading content ---
     function setBusy(el, busy) {
         const panel = panelOf(el);
         if (busy) {
@@ -716,7 +715,7 @@ registerBlock('Dialog', function() {
         if (current && current.el === el) focusInitial(el);
     }
 
-    // 失敗の文と「再読み込み」は固定文言。応答の本文・状態コード・URL は表示に使わない
+    // The failure text and "再読み込み" are fixed strings. The response body, status code, and URL are not used for display
     function buildLoadFailure() {
         const box = document.createElement('div');
         box.className = 'bg-red-50 border border-red-200 rounded-lg p-4';
@@ -743,7 +742,7 @@ registerBlock('Dialog', function() {
         if (current && current.el === el) content.querySelector('[data-dialog-reload]').focus();
     }
 
-    // --- 開く・閉じる -----------------------------------------------
+    // --- Open and close ---
     function open(el, opener) {
         if (!el || !el.hasAttribute('data-dialog')) return Promise.resolve(null);
         if (current && current.el === el) return current.promise;
@@ -776,7 +775,7 @@ registerBlock('Dialog', function() {
         const state = current;
         if (!state) return;
         current = null;
-        // inert が残ると画面全体が操作できなくなるため、最初に外す
+        // Remove inert first, because leftover inert makes the whole screen unusable
         releaseInert(state);
         endSubmitting(state);
         state.el.hidden = true;
@@ -789,13 +788,13 @@ registerBlock('Dialog', function() {
         state.resolve(value);
     }
 
-    // JavaScript から開く（インタビューの保存名など）。閉じたら押したボタンの
-    // data-dialog-close の値（Escape・× は null）で解決する
+    // Open from JavaScript (such as the interview save name). On close, it resolves with the pressed button's
+    // data-dialog-close value (null for Escape or x)
     window.openDialog = function(id) {
         return open(document.getElementById(id), document.activeElement);
     };
 
-    // --- イベント -----------------------------------------------------
+    // --- Events ---
     document.addEventListener('click', function(evt) {
         const target = evt.target instanceof Element ? evt.target : null;
         if (!target) return;
@@ -828,8 +827,8 @@ registerBlock('Dialog', function() {
             return;
         }
         if (evt.key !== 'Tab') return;
-        // 循環の順: パネルの中 → トーストの閉じるボタン（あれば）→ パネルの最初へ戻る。
-        // 閉じないエラー・警告のトーストに、キーボードだけでも届くようにする（B22）
+        // Cycle order: inside the panel -> the toast close button (if any) -> back to the start of the panel.
+        // Make error and warning toasts, which do not close on their own, reachable by keyboard alone
         const items = focusables(current.el).concat(toastCloseButtons());
         if (!items.length) {
             evt.preventDefault();
@@ -838,7 +837,7 @@ registerBlock('Dialog', function() {
         const active = document.activeElement;
         const index = items.indexOf(active);
         if (index === -1 && panelOf(current.el).contains(active) && !evt.shiftKey) {
-            return; // 見出しなど、循環に入らない要素からはブラウザの順のまま次へ
+            return; // From elements that are not in the cycle, such as headings, follow the browser's order to the next
         }
         evt.preventDefault();
         const step = evt.shiftKey ? -1 : 1;
@@ -852,13 +851,13 @@ registerBlock('Dialog', function() {
         return Array.from(toasts.querySelectorAll('[data-toast] button')).filter(isUsable);
     }
 
-    // パネルの中で最後にフォーカスがあった要素（トーストを閉じたあとに戻す先）
+    // Last focused element inside the panel (where to return after closing a toast)
     document.addEventListener('focusin', function(evt) {
         if (current && panelOf(current.el).contains(evt.target)) current.lastFocus = evt.target;
     });
 
-    // ダイアログを開いたままトーストを閉じたら、フォーカスをダイアログへ戻す。
-    // トーストは自分のクリックで要素ごと消えるため、消える前（捕捉の段階）に見分ける
+    // When a toast is closed while the dialog stays open, return focus to the dialog.
+    // The toast element disappears on its own click, so detect it before that (capture phase)
     document.addEventListener('click', function(evt) {
         if (!current || !(evt.target instanceof Element)) return;
         if (!evt.target.closest('#flash-messages [data-toast] button')) return;
@@ -874,7 +873,7 @@ registerBlock('Dialog', function() {
         }, 0);
     }, true);
 
-    // サーバーが保存の成功を知らせる（HX-Trigger: {"dialogClose": {"id": "<id>"}}）
+    // The server reports a successful save (HX-Trigger: {"dialogClose": {"id": "<id>"}})
     document.body.addEventListener('dialogClose', function(evt) {
         const detail = evt.detail || {};
         const id = detail.id || detail.value;
@@ -908,7 +907,7 @@ registerBlock('Dialog', function() {
             finishLoad(root);
             return;
         }
-        // htmx が差し込んだダイアログ（データセット編集など）は差し込まれたら開く
+        // Dialogs inserted by htmx (such as dataset editing) open when inserted
         const inserted = root.matches('[data-dialog-autoopen][hidden]')
             ? root
             : root.querySelector('[data-dialog-autoopen][hidden]');
@@ -917,7 +916,7 @@ registerBlock('Dialog', function() {
         open(inserted, (config && config.elt) || document.activeElement);
     });
 
-    // 開いているダイアログ（かその祖先）が htmx の差し替えで消えるときも inert を外す
+    // Also remove inert when the open dialog (or an ancestor) is removed by an htmx swap
     document.body.addEventListener('htmx:beforeCleanupElement', function(evt) {
         const removing = evt.target;
         if (!current || !(removing instanceof Element)) return;
@@ -926,17 +925,17 @@ registerBlock('Dialog', function() {
         }
     });
 
-    // ページを移るときは、inert を残したまま履歴に保存しない
+    // When navigating away, do not save to history with inert left on
     const dismiss = () => close(null, { restoreFocus: false });
     document.body.addEventListener('htmx:beforeHistorySave', dismiss);
     window.addEventListener('pagehide', dismiss);
 });
 
 // -------------------------------------------------------------
-// ListTabs（C4、WF5、B8〜B10）
-// 左右の矢印でフォーカスを移すだけ（通信しない）。Enter はリンクの既定の動作、
-// Space はここでクリックにして htmx で切り替える。切り替えの間は一覧部分に
-// aria-busy、切り替えたら選択状態を移して件数を読む。フォーカスはタブに残す。
+// ListTabs
+// Left/right arrows only move focus (no request). Enter is the link's default action,
+// and Space becomes a click here to switch via htmx. During the switch the list part gets
+// aria-busy, then the selected state moves and the count is announced. Focus stays on the tab.
 // -------------------------------------------------------------
 registerBlock('ListTabs', function() {
     const TAB = '[data-list-tabs] [role="tab"]';
@@ -979,10 +978,10 @@ registerBlock('ListTabs', function() {
         }
     });
 
-    // 一覧部分ごとに最後に出した要求を覚え、それより古い要求の応答は差し替えない。
-    // タブどうしは hx-sync で前の要求を打ち切るが、listReload の読み直し（htmx.ajax）は
-    // タブと別の要求なので、遅れて着いた読み直しが新しいタブを上書きしないようにここで捨てる。
-    // X-Render-Response の許可（上の htmx:beforeSwap）より後に登録しているため、こちらが勝つ。
+    // Remember the last request issued per list part and do not swap in responses older than that.
+    // Tabs abort the previous request with hx-sync, but a listReload re-read (htmx.ajax) is
+    // a separate request from tabs, so a late re-read is discarded here so it cannot overwrite the new tab.
+    // This is registered after the X-Render-Response allowance (htmx:beforeSwap above), so this one wins.
     const latest = new WeakMap();
     const PANEL = '[data-list-tabpanel]';
 
@@ -1005,16 +1004,16 @@ registerBlock('ListTabs', function() {
 });
 
 // -------------------------------------------------------------
-// BusyRegion（B18、NFR6.12）
-// htmx が一覧を差し替える・足す間、その一覧に aria-busy="true" を付ける。
-// 対象はタブの一覧部分（[data-list-tabpanel]）と、「もっと見る」の行を受ける
-// 一覧（[data-busy-target]）。
+// BusyRegion
+// While htmx swaps or appends a list, set aria-busy="true" on that list.
+// Targets are the tab list part ([data-list-tabpanel]) and the list that receives
+// the "show more" row ([data-busy-target]).
 // -------------------------------------------------------------
 registerBlock('BusyRegion', function() {
     const BUSY = '[data-list-tabpanel], [data-busy-target]';
     const isBusyRegion = (node) => node instanceof Element && node.matches(BUSY);
-    // 一覧ごとに、走っている要求を持つ。最後の 1 つが終わるまで aria-busy を外さない
-    // （タブを続けて押したとき、先に終わった要求で読み込み中が消えないように）
+    // Each list holds its in-flight requests. aria-busy is not removed until the last one finishes
+    // (so pressing tabs in succession does not clear "loading" when an earlier request finishes first)
     const pending = new WeakMap();
 
     function finish(evt) {
@@ -1037,7 +1036,7 @@ registerBlock('BusyRegion', function() {
         document.body.addEventListener(name, finish);
     });
 
-    // 読み込み中の印を残したまま履歴に保存しない（戻ったときに読み込み中に見えるため）
+    // Do not save to history with the loading mark left on (it would look like loading when going back)
     document.body.addEventListener('htmx:beforeHistorySave', function() {
         document.querySelectorAll(`[aria-busy]:is(${BUSY})`)
             .forEach((region) => region.removeAttribute('aria-busy'));
@@ -1045,12 +1044,12 @@ registerBlock('BusyRegion', function() {
 });
 
 // -------------------------------------------------------------
-// ListReload（約束 C6、NFR4.10）
-// HX-Trigger: {"listReload": {"target": "#<id>"}} を受けて、その要素自身の
-// data-reload-url（サーバーが描いた、今のタブを含む URL）を読み直す。
-// イベントの値からは target だけを読み、URL などほかの項目は使わない。
-// target はセレクターとして評価せず、id として使える文字だけを受ける。
-// 同じ応答に dialogClose があれば、閉じてから読み直すよう次のタスクに回す。
+// ListReload
+// On HX-Trigger: {"listReload": {"target": "#<id>"}}, re-read the data-reload-url of that element itself
+// (a URL rendered by the server that includes the current tab).
+// Only target is read from the event value; other fields such as a URL are not used.
+// target is not evaluated as a selector; only characters usable as an id are accepted.
+// If the same response has dialogClose, the re-read is deferred to the next task so it runs after closing.
 // -------------------------------------------------------------
 registerBlock('ListReload', function() {
     const TARGET = /^#[A-Za-z0-9_-]+$/;
@@ -1069,8 +1068,8 @@ registerBlock('ListReload', function() {
         htmx.ajax('GET', url, { target: panel, swap: 'innerHTML' });
     }
 
-    // {"target": "#id"} か {"targets": ["#a", "#b"]}。targets は画面ごとに違う領域
-    // （一覧と詳細など）をまとめて指すため、この画面にないものは黙って飛ばす。
+    // Either {"target": "#id"} or {"targets": ["#a", "#b"]}. targets points at regions that differ per screen
+    // (such as a list and a detail), so those not on this screen are skipped silently.
     function present(target) {
         return typeof target === 'string' && TARGET.test(target)
             && document.getElementById(target.slice(1)) !== null;
@@ -1088,13 +1087,13 @@ registerBlock('ListReload', function() {
 });
 
 // -------------------------------------------------------------
-// BulkSelect（C5、WF6、B10・B11）
-// 操作バー [data-bulk-select] と行の選択欄 [data-bulk-row] は同じ一覧の中に置く。
-// 「すべて選択」は 0 件で未選択、一部で中間、全件で選択。押すと、未選択・中間なら
-// 全件を選び、全件選択なら全件を外す。「もっと見る」で増えた行は未選択で加わる。
+// BulkSelect
+// The action bar [data-bulk-select] and row checkboxes [data-bulk-row] sit in the same list.
+// "Select all" is unchecked at 0 selected, indeterminate for some, and checked for all. Pressing it selects
+// all when unchecked or indeterminate, and clears all when all are selected. Rows added by "show more" join unselected.
 // -------------------------------------------------------------
 registerBlock('BulkSelect', function() {
-    // バーから祖先をたどり、行を含む最初の要素の行を対象にする
+    // Walk up from the bar and use the rows of the first ancestor that contains rows
     function rowsOf(bar) {
         for (let scope = bar.parentElement; scope; scope = scope.parentElement) {
             const rows = scope.querySelectorAll('[data-bulk-row]');
@@ -1139,19 +1138,19 @@ registerBlock('BulkSelect', function() {
         }
     });
 
-    // htmx で行が増えた・差し替わったら数え直す
+    // Recount when htmx adds or replaces rows
     document.body.addEventListener('htmx:afterSettle', function() {
         document.querySelectorAll('[data-bulk-select]').forEach(update);
     });
 });
 
 // -------------------------------------------------------------
-// DepartmentPicker（C6、WF7、B12・B24）
-// 始まりが選択・未選択の部署は押すたびに入れ替わる（ブラウザのまま）。始まりが
-// 中間の部署は 選択 → 未選択 → 中間（元のまま）と回り、中間の間は
-// {name}_unchanged の隠し入力で部署 id を送る（中間の選択欄はブラウザが送らない）。
-// 何も変えないうちは保存を無効にし、外れるグループは件数とともに読み上げる。
-// Dialog の存在は知らない（中で使われても、ここはフォームとだけやりとりする）。
+// DepartmentPicker
+// A department that starts selected or unselected toggles on each press (browser default). A department
+// that starts intermediate cycles selected -> unselected -> intermediate (original), and while intermediate
+// its department id is sent through the {name}_unchanged hidden input (the browser does not send an intermediate checkbox).
+// Saving is disabled until something changes, and groups that will be removed are announced with their count.
+// It does not know about Dialog (even when used inside one, this code only talks to the form).
 // -------------------------------------------------------------
 registerBlock('DepartmentPicker', function() {
     const PICKER = '[data-department-picker]';
@@ -1198,7 +1197,7 @@ registerBlock('DepartmentPicker', function() {
     }
 
     function saveButtonsOf(picker) {
-        // U6: a section that saves more than the departments keeps its button
+        // A section that saves more than the departments keeps its own button state
         if ('departmentFree' in picker.dataset) return [];
         const form = picker.form || picker.closest('form');
         return form ? Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]')) : [];
@@ -1214,7 +1213,7 @@ registerBlock('DepartmentPicker', function() {
     }
 
     function init(picker) {
-        // 初期化済みは属性の有無で見る（別の領域の htmx 更新のたびに状態を戻さないため）
+        // Initialized state is tracked by an attribute (so state is not reset on every htmx update of another region)
         if ('departmentReady' in picker.dataset) return;
         picker.dataset.departmentReady = 'true';
         optionsOf(picker).forEach((o) => {
@@ -1223,9 +1222,9 @@ registerBlock('DepartmentPicker', function() {
         refresh(picker);
     }
 
-    // 保存すると、選べるグループのどれにも共有しない対象が 1 件以上できるか。
-    // 選択の部署が 1 つでも残れば全対象に残る。中間だけが残るときは、残る件数の
-    // 合計が対象の件数に満たなければ、どれにも残らない対象が必ずある
+    // Whether saving leaves one or more targets shared with none of the selectable groups.
+    // If any selected department remains, it remains for every target. If only intermediate ones remain, then unless
+    // the total of remaining counts reaches the number of targets, some target is certain to remain in none
     function needsConfirm(picker) {
         if ('departmentFree' in picker.dataset) return false;
         const options = optionsOf(picker);
@@ -1265,7 +1264,7 @@ registerBlock('DepartmentPicker', function() {
         }
     });
 
-    // 送信の前に確認を挟む（htmx がフォームの submit を受けるより先に、捕捉の段階で止める）
+    // Insert the confirmation before submit (stop it in the capture phase, before htmx receives the form's submit)
     document.addEventListener('submit', function(evt) {
         const form = evt.target;
         if (!(form instanceof HTMLFormElement)) return;
@@ -1288,11 +1287,11 @@ registerBlock('DepartmentPicker', function() {
 });
 
 // -------------------------------------------------------------
-// AssetScope（U7、M10、BR5.2）
-// 組織資産の利用範囲のダイアログ [data-asset-scope-form]。開いたときに利用範囲に
-// 入っていた部署（data-initial が unchecked でない選択肢）を外すと、保存の前に
-// [data-scope-remove-warning]（role="alert"）を出す。戻すと消す。部署の選択の
-// 振る舞い（中間・確認・保存ボタン）は DepartmentPicker のまま。
+// AssetScope
+// Dialog [data-asset-scope-form] for the usage scope of an organization asset. If a department that was in the scope at open time
+// (an option whose data-initial is not unchecked) is removed, [data-scope-remove-warning]
+// (role="alert") is shown before saving, and hidden again when restored. Department selection
+// behavior (intermediate, confirmation, save button) stays with DepartmentPicker.
 // -------------------------------------------------------------
 registerBlock('AssetScope', function() {
     const FORM = '[data-asset-scope-form]';
@@ -1314,13 +1313,13 @@ registerBlock('AssetScope', function() {
 });
 
 // -------------------------------------------------------------
-// ShareDialog（U4、M7、WF1・WF2、BR7.3）
-// 画面に 1 つの共有ダイアログ #share-dialog の中身の読み込み先を、開くボタンごとに
-// 決める。1 件は data-share-url、一括は操作バー（data-bulk-select の種類）と選んだ
-// 行から /share/{種類}/dialog?ids=... を組み立てる。開く前（捕捉の段階）に差し替える。
-// 保存中はキャンセルも無効にする。一部失敗（[data-share-result]）か権限を失っていた
-// （HX-Trigger: shareReloadOnClose）ときは、閉じたら一覧を読み直し、一部失敗では
-// 失敗した対象だけを選び直す。読み直す URL は一覧部分の data-reload-url だけを使う。
+// ShareDialog
+// Decides, per open button, where the content of the single share dialog #share-dialog on the page is loaded from.
+// One item uses data-share-url; bulk builds /share/{type}/dialog?ids=... from the action bar
+// (the kind in data-bulk-select) and the selected rows. It is swapped before opening (capture phase).
+// Cancel is also disabled while saving. On partial failure ([data-share-result]) or lost permission
+// (HX-Trigger: shareReloadOnClose), the list is re-read on close, and on partial failure
+// only the failed targets are reselected. The re-read URL uses only data-reload-url of the list part.
 // -------------------------------------------------------------
 registerBlock('ShareDialog', function() {
     const DIALOG_ID = 'share-dialog';
@@ -1352,7 +1351,7 @@ registerBlock('ShareDialog', function() {
         return `/share/${encodeURIComponent(bar.dataset.bulkSelect)}/dialog?${ids.join('&')}`;
     }
 
-    // Dialog（バブリングの段階）が開いて中身を読む前に、読み込み先を決める
+    // Decide the load target before Dialog (bubble phase) opens and reads the content
     document.addEventListener('click', function(evt) {
         const target = evt.target instanceof Element ? evt.target : null;
         const opener = target && target.closest(`[data-dialog-open="${DIALOG_ID}"]`);
@@ -1368,8 +1367,8 @@ registerBlock('ShareDialog', function() {
         state.reload = false;
     }, true);
 
-    // 閉じた直後に一覧が読み直されると、フォーカスを戻した開くボタンが差し替わって
-    // 消える。読み直した一覧の同じボタンへ戻す（ボタンが残っていればそのまま）
+    // If the list is re-read right after closing, the open button that got the focus back is replaced
+    // and disappears. Return to the same button in the re-read list (as is if the button remains)
     function restoreFocus(panel) {
         const selector = state.refocus;
         state.refocus = null;
@@ -1395,14 +1394,14 @@ registerBlock('ShareDialog', function() {
         if (isShareForm(evt.detail.elt)) cancelButtons(evt.detail.elt).forEach((b) => { b.disabled = false; });
     });
 
-    // 一部失敗の結果が入ったら、失敗した対象を覚えておく
+    // When a partial-failure result is inserted, remember the failed targets
     document.body.addEventListener('htmx:afterSettle', function() {
         const result = document.querySelector(`#${DIALOG_ID} [data-share-result]`);
         if (!result) return;
         state.failed = new Set((result.dataset.failedIds || '').split(',').filter(Boolean));
     });
 
-    // 権限を失っていた（403）。閉じたら一覧を読み直す
+    // Permission was lost (403). Re-read the list on close
     document.body.addEventListener('shareReloadOnClose', function(evt) {
         const target = evt.detail ? evt.detail.target : undefined;
         if (typeof target === 'string' && TARGET.test(target)) {
@@ -1434,10 +1433,10 @@ registerBlock('ShareDialog', function() {
 });
 
 // -------------------------------------------------------------
-// ConversationStopped（M12、U6 BR7.5）
-// 会話を続けられなくなったとき（SSE の stopped、または conversation_stopped の
-// 失敗）に、画面の <template id="conversation-stopped-template"> の枠を差し込み、
-// 枠の見出しへフォーカスを移す（理由は出さない）。入力欄の文字は呼び出し側が残す。
+// ConversationStopped
+// When a conversation can no longer continue (SSE stopped, or a conversation_stopped failure),
+// insert the frame from the screen's <template id="conversation-stopped-template">
+// and move focus to its heading (no reason is shown). The caller keeps the text in the input.
 // -------------------------------------------------------------
 function showConversationStopped(container) {
     const template = document.getElementById('conversation-stopped-template');
@@ -1453,16 +1452,16 @@ function showConversationStopped(container) {
 }
 window.showConversationStopped = showConversationStopped;
 
-// ページ読み込み完了時の処理
+// Processing on page load complete
 document.addEventListener('DOMContentLoaded', function() {
-    // ドラッグ＆ドロップの設定
+    // Drag-and-drop setup
     setupDragAndDrop('#interview-drop-zone', '#file-input', 'selected-file');
     setupDragAndDrop('#report-drop-zone', '#report-file-input', 'selected-report-file');
     
-    // ローカルタイムゾーン変換
+    // Local timezone conversion
     convertAllTimes();
 
-    // ペルソナアバター描画（DiceBear 読込ページのみ動作）
+    // Persona avatar rendering (works only on pages that loaded DiceBear)
     renderPersonaAvatars();
 
     console.log('AIペルソナシステム (htmx版) initialized');

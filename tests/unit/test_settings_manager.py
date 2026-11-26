@@ -1,8 +1,7 @@
-"""SettingsManager のユニットテスト。
+"""Unit tests for SettingsManager.
 
-U7: BR3.1、BR3.3、BR5.1、BR5.2、NFR1.72、NFR8.23、NFR8.24、AC5.2.1、AC5.2.3、AC5.3.1、
-AC5.3.3。KB とデータ分析エージェントの設定は settings:manage（なければ 404）。
-DynamoDB は moto（tests/unit/survey_world.py）。
+KB and data analysis agent settings need settings:manage (404 otherwise).
+DynamoDB is moto (tests/unit/survey_world.py).
 """
 
 import json
@@ -76,7 +75,7 @@ class TestSettingsAreAdminOnly:
         assert [e["reason"] for e in denied] == ["hidden"]
 
     def test_availability_needs_no_permission(self):
-        # U3: the decision is DataAgentPolicy's (it reads the config itself)
+        # the decision is DataAgentPolicy's (it reads the config itself)
         with patch("src.managers.components.data_agent_policy.config") as config:
             config.DATA_AGENT_ALLOWED = True
             config.ENABLE_DATA_AGENT = True
@@ -143,7 +142,7 @@ class TestKnowledgeBases:
     def test_delete_keeps_dataset_bindings_with_the_same_id(
         self, manager, survey_world
     ):
-        """KB の削除に別の種類の ID が来ても、データセットの紐付けは消さない。"""
+        """A different kind of ID for a KB delete does not remove dataset bindings."""
         bindings = survey_world.binding_store
         bindings.put(PersonaBinding.for_dataset("p1", "x", now=NOW))
 
@@ -154,7 +153,7 @@ class TestKnowledgeBases:
     def test_delete_succeeds_when_the_bindings_cannot_be_removed(
         self, manager, survey_world, monkeypatch
     ):
-        """残った紐付けは、読むときに本体のない紐付けとして飛ばされる。"""
+        """A leftover binding is skipped on read as a binding without a body."""
         kb = survey_world.knowledge_base()
         monkeypatch.setattr(
             survey_world.binding_store,
@@ -215,7 +214,7 @@ class TestKnowledgeBaseScope:
 
 @pytest.mark.unit
 class TestSettingsManagerDataAgent:
-    """データ分析エージェント接続テストのテスト。"""
+    """Tests for the data analysis agent connection test."""
 
     def setup_method(self):
         self.manager = SettingsManager(
@@ -231,7 +230,7 @@ class TestSettingsManagerDataAgent:
 
     @patch("src.managers.settings_manager.config")
     def test_no_runtime_arn_raises_error(self, mock_config):
-        """Runtime ARN未設定時にエラーを返すこと"""
+        """Returns an error when the Runtime ARN is not set."""
         mock_config.DATA_AGENT_RUNTIME_ARN = None
 
         with raises_code(SettingsManagerError, ErrorCode.DATA_AGENT_NOT_CONFIGURED):
@@ -240,7 +239,7 @@ class TestSettingsManagerDataAgent:
     @patch("src.managers.settings_manager.service_factory")
     @patch("src.managers.settings_manager.config")
     def test_service_returns_none_raises_error(self, mock_config, mock_sf):
-        """サービスがNoneを返した場合エラーになること"""
+        """Errors when the service returns None."""
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/xxx"
         )
@@ -252,7 +251,7 @@ class TestSettingsManagerDataAgent:
     @patch("src.managers.settings_manager.service_factory")
     @patch("src.managers.settings_manager.config")
     def test_success(self, mock_config, mock_sf):
-        """正常系でクエリ結果テキストを返すこと"""
+        """Returns the query result text on success."""
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/xxx"
         )
@@ -272,7 +271,7 @@ class TestSettingsManagerDataAgent:
     @patch("src.managers.settings_manager.service_factory")
     @patch("src.managers.settings_manager.config")
     def test_exception_wrapping(self, mock_config, mock_sf):
-        """内部例外がSettingsManagerErrorにラップされること"""
+        """Internal exceptions are wrapped in SettingsManagerError."""
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/xxx"
         )
@@ -289,7 +288,7 @@ class TestSettingsManagerDataAgent:
 
 
 # =============================================================================
-# 閉域対応 U3: Data Agent を使ってよくない環境（BR3.2、BR3.4、BR3.6、BR3.8）
+# Closed network: environments where the Data Agent must not be used
 # =============================================================================
 
 
@@ -358,7 +357,7 @@ class TestDataAgentNotAllowed:
         }
 
 
-# --- U6: the advanced generation section (BR34.1, BR34.7, NFR3.31, NFR3.38) ---
+# --- The advanced generation section ---
 
 _STORED = {
     "setting_key": "advanced_generation",
@@ -467,7 +466,7 @@ class TestAdvancedGenerationSection:
         assert manager.is_advanced_generation_section_offered() is enabled
 
     def test_the_feature_off_hides_the_section_and_its_save(self, section, monkeypatch):
-        """The closed network Stage (BR1.3): the same 404 as a missing page."""
+        """The closed network Stage: the same 404 as a missing page."""
         manager, settings, departments = section
         monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
 

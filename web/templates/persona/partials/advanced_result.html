@@ -2,17 +2,16 @@
 {% from "components/datetime.html" import iso_datetime %}
 {% from "persona/partials/advanced_labels.html" import method_label, share_text %}
 {#
-  区画 D の結果（S8、BR8.4、契約 C3 の result）。構成比は数字を必ず書き、横棒は飾り（aria-hidden）。
-  検証で外したセグメント（unverified_segment_ids）は大きさと構成比を出さない。
-  候補の保存は既存の POST /persona/save-selected（契約 C1 の注記 CD-Q1）。
-  引数:
+  Result of section D. Composition ratios always carry numbers; the horizontal bars are decoration (aria-hidden). Segments excluded by verification (unverified_segment_ids) show neither size nor ratio.
+  Candidates are saved with the existing POST /persona/save-selected.
+  Arguments:
     result         ... AdvancedGenerationResult
-    readable_until ... 保存していない候補を見られる期限（任意）
-    record_url     ... 分析の記録のダイアログの中身の URL
+    readable_until ... deadline until unsaved candidates can be viewed (optional)
+    record_url     ... URL of the analysis record dialog content
 #}
 {#
-  U4: 文書の根拠 1 件（主張・引用・位置・発言者の属性・セグメントに対応づけた理由）。
-  引用・属性・理由は利用者の文書から来た値なので、自動エスケープのまま出す（NFR4.4。safe フィルタを使わない）。
+  One piece of document evidence (claim, quote, position, speaker attributes, and why it maps to the segment).
+  Quote, attributes, and reason come from the user's documents, so they stay auto-escaped (the safe filter is not used).
 #}
 {% macro document_evidence(item) -%}
 <span class="block text-gray-900">{{ item.claim }}</span>
@@ -60,7 +59,7 @@
     <h3 class="font-medium text-gray-900 mb-2">分析の要約</h3>
     <dl data-testid="advanced-result-summary" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         {% if result.prepare_reports | length > 1 %}
-        {# 複数のファイルのときは、ファイルごとの行数を並べる（先頭の表だけの行数にしない） #}
+        {# With multiple files, list the row count per file (not just the first table's count). #}
         <div class="bg-gray-50 border border-gray-200 rounded-md p-3 sm:col-span-2" data-testid="advanced-result-rows-by-file">
             <dt class="text-xs text-gray-600">使った行数（ファイルごと）</dt>
             <dd class="text-sm text-gray-900">
@@ -81,7 +80,7 @@
             <dd class="text-xl font-semibold text-gray-900 tabular-nums">{{ "{:,}".format(report.rows_excluded) }}</dd>
         </div>
         {% endif %}
-        {# 層の割合の母数（人数）。行数と違うとき（履歴を人ごとに集計したとき）だけ併記する #}
+        {# Population (number of people) behind the segment ratios. Shown alongside only when it differs from the row count (when history was aggregated per person). #}
         {% set counted = result.segments | rejectattr("id", "in", unverified) | selectattr("share") | list %}
         {% set people = (counted[0].size / counted[0].share) | round | int if counted else none %}
         {% if people and report and people != report.rows_read %}
@@ -98,7 +97,7 @@
     {% set mode = result.generation.document_mode %}
     {% set stats = result.generation.evidence_stats or {} %}
     {% if result.document_reports %}
-    {# U4: 使った文書の一覧（ファイル名・ページ数・文字数）。ファイル名は利用者のデータとして自動エスケープで出す #}
+    {# List of documents used (file name, page count, character count). File names are user data and are auto-escaped. #}
     <table class="w-full text-sm mb-2" data-testid="advanced-documents">
         <caption class="text-left font-medium text-gray-900 mb-1">使った文書</caption>
         <thead><tr class="text-left text-gray-600 border-b"><th scope="col" class="py-1 pr-2">ファイル</th><th scope="col" class="py-1 pr-2">ページ数</th><th scope="col" class="py-1">文字数</th></tr></thead>
@@ -117,7 +116,7 @@
     </p>
     {% endif %}
     {% if result.segments %}
-    {# 層の名前だけを出す。内部の ID は data 属性に残し、名前がないときは順番で「層 N」と呼ぶ #}
+    {# Show only segment names. Internal IDs stay in data attributes; when a name is missing, call it "層 N" by order. #}
     <section data-testid="advanced-segments" aria-labelledby="advanced-segments-title" class="mb-4">
         <h3 id="advanced-segments-title" class="font-medium text-gray-900 mb-2">セグメント（{{ result.segments | length }} つの層に分けました）</h3>
         {% set run_params = result.generation.analysis_run.params if result.generation.analysis_run else {} %}
@@ -147,8 +146,8 @@
             </li>
             {% endfor %}
         </ul>
-        {# どの層にも入らなかった人数（重なる層・検証で外した層があるときは数えない） #}
-        {# 表が 1 つのときだけ（結合した結果の母数は、最初の表の行数とは違う） #}
+        {# Number of people who fell into no segment (not counted when segments overlap or were excluded by verification). #}
+        {# Only when there is one table (the population of a joined result differs from the first table's row count). #}
         {% set rows = report.rows_read if report and result.prepare_reports | length == 1 else none %}
         {% set sources = result.segments | map(attribute="definition") | map(attribute="source", default="") | list | unique | list %}
         {% if rows and sources | length <= 1 and not (result.segments | selectattr("overlaps") | list) and not unverified %}
@@ -161,7 +160,7 @@
     {% endif %}
     {% set overall = result.evidence | selectattr("quote") | rejectattr("segment_id") | list %}
     {% if overall %}
-    {# U4 BR28.2: どのセグメントにも合わない文書の根拠 #}
+    {# Evidence from documents that match no segment. #}
     <section data-testid="advanced-overall-evidence" aria-labelledby="advanced-overall-title" class="mb-3">
         <h3 id="advanced-overall-title" class="font-medium text-gray-900 mb-1">全体に対する根拠</h3>
         <ul class="text-sm space-y-2">
@@ -199,7 +198,7 @@
                 {% endif %}
                 <p class="text-sm text-gray-600 mt-1" data-testid="advanced-candidate-profile">{{ p.get("age", "") }}歳 / {{ p.get("occupation", "") }}{% if p.get("gender") %} / {{ gender_label(p.get("gender")) }}{% endif %}{% if p.get("country") %} / {{ country_name(p.get("country")) }}{% if p.get("city") %}・{{ p.get("city") }}{% endif %}{% endif %}</p>
                 {% if p.get("background") %}<p class="text-sm text-gray-700 mt-2" data-testid="advanced-candidate-background">{{ p.get("background") }}</p>{% endif %}
-                {# Tailwind は組み立てたクラス名を拾えないので、色ごとに全体のクラスを書く #}
+                {# Tailwind cannot pick up assembled class names, so full class names are written per color. #}
                 {% for key, label, label_class, chip_class in [
                     ("values", "価値観", "text-blue-800", "bg-blue-50"),
                     ("pain_points", "課題", "text-orange-800", "bg-orange-50"),

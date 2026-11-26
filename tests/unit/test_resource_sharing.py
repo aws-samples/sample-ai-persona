@@ -1,8 +1,7 @@
-"""ResourceSharing（共有の判断、約束 C7、ADR-003）の単体テスト。
+"""Unit tests for ResourceSharing (sharing decisions).
 
-Store と DepartmentDirectory は差し替え（メモリ上の偽物とモック）、AccessPolicy は本物を使う
-（判定をモックにしない。unit-test-instructions.md）。対応: BR1〜BR4、NFR1.10〜NFR1.14、
-NFR1.17〜NFR1.19、NFR2.1〜NFR2.4、NFR8.10〜NFR8.12、NFR9.25。
+The Store and DepartmentDirectory are replaced (an in-memory fake and a mock); AccessPolicy
+is real so decisions are not mocked.
 """
 
 import io
@@ -250,7 +249,7 @@ def _events(capture: LogCapture, name: str) -> list[dict[str, Any]]:
 
 
 # =============================================================================
-# 登録
+# Registration
 # =============================================================================
 
 
@@ -279,7 +278,7 @@ class TestRegistration:
         assert persona.cleanup_attributes == ("avatar_path",)
 
     def test_discussion_table_registration(self):
-        """U6（logical-components.md「共有するもの」）。"""
+        """Registers what is shared."""
         discussion = default_sharing_tables()[1]
         assert discussion.table.endswith("Discussions")
         assert discussion.name_attribute == "topic"
@@ -292,7 +291,7 @@ class TestRegistration:
         )
 
     def test_survey_template_and_survey_registration(self):
-        """U7 BR6.3（security-design.md 1.5）。"""
+        """Registration for security-sensitive kinds."""
         tables = {t.resource_type: t for t in default_sharing_tables()}
         template = tables[ResourceType.SURVEY_TEMPLATE]
         assert template.table.endswith("SurveyTemplates")
@@ -305,7 +304,7 @@ class TestRegistration:
         assert survey.name_attribute == "name"
         assert survey.not_found is ErrorCode.SURVEY_NOT_FOUND
         assert survey.delete_failed is ErrorCode.SURVEY_OPERATION_FAILED
-        # status と execution_arn: 実行中の削除で実行を止める（BR7.1）
+        # status and execution_arn: deleting a running item stops the execution
         assert survey.cleanup_attributes == (
             "s3_result_path",
             "status",
@@ -315,7 +314,7 @@ class TestRegistration:
     def test_ownerless_survey_cannot_be_shared_alone_or_in_bulk(
         self, store, departments
     ):
-        """U7 BR1.6: 所有者のない古い結果は共有できない（一括では失敗に数える）。"""
+        """An old result without an owner cannot be shared (counts as a failure in bulk)."""
         rs = ResourceSharing(store, departments)
         for table in default_sharing_tables():
             rs.register(
@@ -342,7 +341,7 @@ class TestRegistration:
 
 
 # =============================================================================
-# 共有先の変更（BR1）
+# Changing share targets
 # =============================================================================
 
 
@@ -383,7 +382,7 @@ class TestUpdateAuthorization:
     def test_admin_manages_someone_elses(self, sharing, store):
         store.add("p1", "sub-a")
         assert sharing.update_shares(ADMIN, _target("p1"), _change({"hr"})) == {"hr"}
-        assert store.bodies["p1"]["owner_sub"] == "sub-a"  # BR6.6
+        assert store.bodies["p1"]["owner_sub"] == "sub-a"
 
     def test_no_role_cannot_share_own(self, sharing, store):
         store.add("p1", "sub-x")
@@ -483,7 +482,7 @@ class TestUpdateWrites:
     def test_changed_event_has_ids_but_no_names(self, sharing, store, logs):
         store.add("p1", "sub-a", {"sales"})
         sharing.update_shares(ADMIN, _target("p1"), _change({"hr"}, {"sales"}))
-        sharing.update_shares(ADMIN, _target("p1"), _change({"hr"}))  # 変わらない
+        sharing.update_shares(ADMIN, _target("p1"), _change({"hr"}))  # unchanged
         (event,) = _events(logs, "sharing.changed")
         assert event["actor_sub"] == "sub-admin"
         assert event["resource_type"] == "persona"
@@ -555,7 +554,7 @@ class TestUpdateRetries:
 
 
 # =============================================================================
-# 入力から ShareChange を作る（BR1.12、security-design.md §2）
+# Building a ShareChange from input
 # =============================================================================
 
 
@@ -608,7 +607,7 @@ class TestBuildChange:
 
 
 # =============================================================================
-# 一括共有（BR2）
+# Bulk sharing
 # =============================================================================
 
 
@@ -637,8 +636,8 @@ class TestBulk:
 
     def test_each_target_is_written_and_failures_reported(self, sharing, store, logs):
         store.add("p1", "sub-a")
-        store.add("p2", "sub-b", {"sales"})  # 共有されているだけ
-        store.add("p3", "sub-b")  # 読めない
+        store.add("p2", "sub-b", {"sales"})  # merely shared
+        store.add("p3", "sub-b")  # unreadable
         store.add("p4", "sub-a", {"plan"})
 
         result = sharing.bulk_update_shares(
@@ -663,7 +662,7 @@ class TestBulk:
         assert store.bodies["p4"]["shared_group_ids"] == {
             "plan",
             "sales",
-        }  # 中間は今のまま
+        }  # the middle one stays as is
         assert all(e["bulk"] for e in _events(logs, "sharing.changed"))
         assert len(_events(logs, "sharing.changed")) == 2
 
@@ -676,7 +675,7 @@ class TestBulk:
 
 
 # =============================================================================
-# 一覧と件数（BR3）
+# Listing and counts
 # =============================================================================
 
 
@@ -902,7 +901,7 @@ class TestCollectIds:
 
 
 # =============================================================================
-# 削除（BR4）
+# Delete
 # =============================================================================
 
 
@@ -944,7 +943,7 @@ class TestDelete:
 
 
 # =============================================================================
-# ダイアログの中身（BR7.1、BR1.4、BR7.5、BR6.5）
+# Dialog contents
 # =============================================================================
 
 
@@ -968,7 +967,7 @@ class TestDialogState:
     def test_bulk_dialog_counts_per_department(self, sharing, store):
         store.add("p1", "sub-b", {"sales"})
         store.add("p2", "sub-b", {"sales", "plan"})
-        store.add("p3", "sub-a")  # 読めない
+        store.add("p3", "sub-a")  # unreadable
         view = sharing.dialog_state(MEMBER_B, PERSONA, ["p1", "p2", "p3"], bulk=True)
         assert view.target_ids == ("p1", "p2")
         assert view.mixed == {"plan": (1, 2), "sales": (2, 2)}
@@ -981,7 +980,7 @@ class TestDialogState:
         assert view.vanished == ("old-dept",)
         assert "old-dept" in view.selected
         assert not view.show_scope_note
-        # 部署の一覧の順（DepartmentDirectory は表示名の順に返す）のまま
+        # keeps the department list order (DepartmentDirectory returns display-name order)
         assert [d.group_id for d in view.choices] == ["sales", "plan", "hr"]
 
     def test_member_without_department(self, sharing, store):
@@ -1009,7 +1008,7 @@ class TestDepartmentNames:
 
 
 def test_readable_targets_filter_uses_bodies(sharing, store):
-    """BR3.7: 索引から得た ID を本体で確かめ直す口（Manager が使う）。"""
+    """Re-checks an ID taken from the index against the body (used by the Manager)."""
     store.add("p1", "sub-a", {"sales"})
     store.add("p2", "sub-x")
     bodies: Mapping[str, Mapping[str, Any]] = {

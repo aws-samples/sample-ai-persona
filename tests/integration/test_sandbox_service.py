@@ -1,8 +1,8 @@
-"""SandboxService (contract C10): Code Interpreter version and in-process version.
+"""SandboxService: Code Interpreter version and in-process version.
 
 The Code Interpreter version is checked with ``botocore.stub.Stubber`` on a
 real ``bedrock-agentcore`` client, so the request shapes are validated against
-the service model without touching AWS (NFR9.3). The in-process version runs
+the service model without touching AWS. The in-process version runs
 ``sandbox/persona_analysis.py`` in this process and must behave the same.
 """
 
@@ -200,7 +200,7 @@ class TestCodeInterpreterSession:
     def test_stop_session_by_id(
         self, sandbox: CodeInterpreterSandbox, stub: Any
     ) -> None:
-        # U5 NFR5.48: a reader stops a session it only knows by its ID
+        # A reader stops a session it only knows by its ID
         stub.add_response(
             "stop_code_interpreter_session",
             {
@@ -310,7 +310,7 @@ class TestCodeInterpreterCall:
     def test_a_stray_unicode_line_separator_does_not_break_the_result(
         self, sandbox: CodeInterpreterSandbox, stub: Any
     ) -> None:
-        """dev の Code Interpreter が長い出力に U+0085 を混ぜた（splitlines が行を割る）。"""
+        """The dev Code Interpreter mixed U+0085 into a long output (splitlines splits lines there)."""
         stub.add_response(
             "invoke_code_interpreter",
             _stream(
@@ -422,7 +422,7 @@ class TestCodeInterpreterCommand:
 
 
 class TestPrepareBoundArgument:
-    """BR16.1: the bad-row limit travels as an argument of ``prepare``."""
+    """The bad-row limit travels as an argument of ``prepare``."""
 
     def test_code_interpreter_command_carries_the_limit(
         self, sandbox: CodeInterpreterSandbox, stub: Any
@@ -442,7 +442,7 @@ class TestPrepareBoundArgument:
 
 
 class TestDocumentArguments:
-    """U4 NFR5.39: document functions get integers, strings and string lists."""
+    """Document functions get integers, strings and string lists."""
 
     def test_prepare_document_carries_the_chunk_sizes(
         self, sandbox: CodeInterpreterSandbox, stub: Any
@@ -509,7 +509,7 @@ class TestDocumentArguments:
 
 
 class TestLimitOutput:
-    """BR17.3, NFR5.36: an output over the limit is cut and goes on."""
+    """An output over the limit is cut and processing goes on."""
 
     def test_a_long_string_alone_is_cut_and_marked(self) -> None:
         result = {"ok": True, "value": {"summary": "あ" * 5_000, "n": 3}}
@@ -800,7 +800,7 @@ class TestInProcessSandbox:
     def test_a_document_is_prepared_then_read_and_its_quotes_checked(
         self, tmp_path: Path
     ) -> None:
-        # U4: the same contract runs prepare_document, document_chunk, verify_quotes
+        # The same contract runs prepare_document, document_chunk, verify_quotes
         text = "# 第1章\n" + "受付で30分も待たされたのが不満です。\n" * 50
         sandbox = InProcessSandbox(
             library_path=str(_LIBRARY),
@@ -845,7 +845,7 @@ class TestInProcessSandbox:
 
 
 # ---------------------------------------------------------------------------
-# U6: the check with the app's own library (NFR3.35, security-design.md)
+# The check with the app's own library
 # ---------------------------------------------------------------------------
 
 
@@ -881,7 +881,7 @@ class TestCodeInterpreterCallVerified:
         assert "verify/" not in command and "writeFiles" not in command
         args = _decoded_args(command)
         assert args["source_ids"] == ["f1"]
-        # the library the fixed functions use, hashed by the check (BR36.6)
+        # the library the fixed functions use, hashed by the check
         assert args["session_library"] == "persona_analysis.py"
         assert got == result
 

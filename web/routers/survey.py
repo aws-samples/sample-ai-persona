@@ -1,9 +1,9 @@
 """
-マスアンケート機能のルーター
+Router for the mass survey feature
 
-U7: テンプレート・結果は所有者と部署への共有で読める人が決まり（BR1.2〜BR1.4）、
-ペルソナ元データの管理は admin だけ（BR4.1）。判定は Manager が行い、読めない・ないもの
-（404）と読めるが変えられないもの（403）は共通の例外ハンドラが答える。
+Who can read templates and results is decided by the owner and department sharing,
+and managing the persona source data is admin-only. The Manager decides; unreadable or nonexistent items
+(404) and readable-but-not-changeable items (403) are answered by the shared exception handler.
 """
 
 from dataclasses import replace
@@ -76,7 +76,7 @@ from web import asset_scope_views  # noqa: E402
 from ._asset_response import asset_response  # noqa: E402
 from ._survey_runner import SurveyRunnerLoop  # noqa: E402
 
-# マークダウンフィルターを追加
+# Add the markdown filter
 templates.env.filters["markdown"] = render_markdown
 
 executor = ThreadPoolExecutor(max_workers=8)
@@ -93,7 +93,7 @@ START_PANEL_ID = "start-template-panel"
 #: The custom persona data list (reloaded after an import, a delete or a scope save).
 CUSTOM_LIST_ID = "custom-dataset-list"
 
-# --- Manager遅延初期化 ---
+# --- Manager lazy initialization ---
 _template_manager: SurveyTemplateManager | None = None
 _dataset_manager: SurveyDatasetManager | None = None
 _execution_manager: SurveyExecutionManager | None = None
@@ -130,7 +130,7 @@ def get_analysis_manager() -> SurveyAnalysisManager:
 
 
 def get_file_manager() -> FileManager:
-    """FileManager（テンプレートの画像のアップロードと配信、U5）"""
+    """FileManager (upload and delivery of template images)."""
     global _file_manager
     if _file_manager is None:
         _file_manager = FileManager()
@@ -143,8 +143,8 @@ _runner_loop: SurveyRunnerLoop | None = None
 def get_survey_runner_loop() -> SurveyRunnerLoop | None:
     """The survey runner's loop of this task, or ``None`` where surveys do not run.
 
-    Only built when a state machine and the lease table are configured
-    (BR9.1); local runs have neither, so no round ever starts there.
+    Only built when a state machine and the lease table are configured;
+    local runs have neither, so no round ever starts there.
     """
     global _runner_loop
     if _runner_loop is None and config.survey_runner_configured:
@@ -154,14 +154,14 @@ def get_survey_runner_loop() -> SurveyRunnerLoop | None:
 
 
 def _wake_survey_runner() -> None:
-    """Ask for one round right away (after an accept or a delete, WF1 / WF6)."""
+    """Ask for one round right away (after an accept or a delete)."""
     loop = get_survey_runner_loop()
     if loop is not None:
         loop.wake()
 
 
 def _principal(request: Request) -> Principal:
-    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    """The signed-in user that ``AuthMiddleware`` put on the request."""
     principal: Principal = request.state.principal
     return principal
 
@@ -190,13 +190,13 @@ def _list_error(request: Request, message: str) -> Any:
 
 
 # =========================================================================
-# 画面表示エンドポイント
+# Screen display endpoints
 # =========================================================================
 
 
 @router.get("", response_class=HTMLResponse)
 async def survey_index(request: Request) -> Any:
-    """アンケートTOP画面"""
+    """Survey top screen."""
     return templates.TemplateResponse(
         request,
         "survey/index.html",
@@ -205,7 +205,7 @@ async def survey_index(request: Request) -> Any:
 
 
 # =========================================================================
-# ペルソナ元データ（閲覧は使える人、管理は admin だけ、BR4.1・BR4.2）
+# Persona source data (viewing for those who can use it, management admin-only)
 # =========================================================================
 
 
@@ -217,9 +217,9 @@ async def _persona_data_context(principal: Principal) -> dict[str, Any]:
 
 @router.get("/persona-data", response_class=HTMLResponse)
 async def persona_data_page(request: Request) -> Any:
-    """ペルソナデータ設定画面（member は使えるデータを見るだけ）"""
+    """Persona data settings screen (members only see the data they can use)."""
     manager = get_dataset_manager()
-    # 状態の取得は失敗しても例外を投げない（閉域対応 U3 BR2.2）。Router は代替を持たない
+    # Fetching the status never raises on failure. The Router has no fallback
     nemotron_status = await _run(manager.check_nemotron_status)
     context = await _persona_data_context(_principal(request))
     return templates.TemplateResponse(
@@ -239,7 +239,7 @@ async def persona_data_page(request: Request) -> Any:
 
 @router.get("/persona-data/custom", response_class=HTMLResponse)
 async def custom_dataset_list(request: Request) -> Any:
-    """カスタムデータの一覧（読み直し用、data-reload-url）"""
+    """List of custom data (for reloading, data-reload-url)."""
     context = await _persona_data_context(_principal(request))
     return templates.TemplateResponse(
         request,
@@ -252,7 +252,7 @@ _nemotron_download_status: dict = {"downloading": False, "error": None}
 
 
 def _download_nemotron_background(principal: Principal) -> None:
-    """バックグラウンドでNemotronデータセットをダウンロードする。"""
+    """Download the Nemotron dataset in the background."""
     try:
         get_dataset_manager().download_nemotron_dataset(principal)
     except Exception:
@@ -263,7 +263,7 @@ def _download_nemotron_background(principal: Principal) -> None:
 
 
 async def _nemotron_status_response(request: Request) -> Any:
-    """The "downloading" partial, with the Manager's status (no stand-in, BR2.2)."""
+    """The "downloading" partial, with the Manager's status (no stand-in)."""
     status = await _run(get_dataset_manager().check_nemotron_status)
     return templates.TemplateResponse(
         request,
@@ -279,9 +279,9 @@ async def _nemotron_status_response(request: Request) -> Any:
 
 @router.post("/persona-data/download-nemotron", response_class=HTMLResponse)
 async def download_nemotron(request: Request) -> Any:
-    """Nemotronデータセットのダウンロードをバックグラウンドで開始（admin だけ）"""
+    """Start the Nemotron dataset download in the background (admin only)."""
     principal = _principal(request)
-    # 裏で動かす前に止める（裏の失敗は応答に届かない）。閉域では取得しない（U3 BR2.3）
+    # Stop before running in the background (a background failure does not reach the response). Not fetched in a closed network
     get_dataset_manager().ensure_nemotron_downloadable(principal)
     if _nemotron_download_status["downloading"]:
         return await _nemotron_status_response(request)
@@ -291,10 +291,10 @@ async def download_nemotron(request: Request) -> Any:
     return await _nemotron_status_response(request)
 
 
-# 受け身の要求（BR1.9）: 5 秒ごとの自動更新。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
+# Passive request: auto-refresh every 5 seconds. Listed in PASSIVE_REQUESTS of web/auth_middleware.py
 @router.get("/persona-data/nemotron-status", response_class=HTMLResponse)
 async def nemotron_download_status(request: Request) -> Any:
-    """Nemotronダウンロード状況をポーリングで返す"""
+    """Return the Nemotron download status by polling."""
     manager = get_dataset_manager()
     status = await _run(manager.check_nemotron_status)
     listing = await _run(manager.list_persona_data, _principal(request))
@@ -386,7 +386,7 @@ async def _column_mapping(
 
 @router.post("/persona-data/upload-custom", response_class=HTMLResponse)
 async def upload_custom_step1(request: Request, file: UploadFile = File(...)) -> Any:
-    """Step1: CSVアップロード → カラム解析 → マッピングUI表示（admin だけ）"""
+    """Step 1: CSV upload -> column analysis -> show the mapping UI (admin only)."""
     principal = _principal(request)
     manager = get_dataset_manager()
     manager.ensure_manageable(principal)
@@ -406,7 +406,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
             )
         parsed = await _run(manager.parse_csv_columns, principal, content)
 
-        # CSVバイト列を一時的にS3に保存（マッピング確定後に使用）
+        # Temporarily store the CSV bytes in S3 (used after the mapping is confirmed)
         temp_key = f"persona-dataset/temp/{uuid.uuid4().hex[:8]}-{file.filename}"
         await _run(manager.upload_temp_file, principal, content, temp_key)
 
@@ -430,7 +430,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
 
 @router.post("/persona-data/preview-prompt", response_class=HTMLResponse)
 async def preview_persona_prompt(request: Request) -> Any:
-    """マッピング設定に基づくシステムプロンプトのプレビューを返す。"""
+    """Return a preview of the system prompt based on the mapping settings."""
     principal = _principal(request)
     manager = get_dataset_manager()
     manager.ensure_manageable(principal)
@@ -497,7 +497,7 @@ async def _import(request: Request, *, dwh: bool) -> Any:
                 avoid_name_conflict=dwh,
             )
         )
-        # 一時ファイルを削除（best-effort: 失敗しても処理は継続）
+        # Delete the temporary file (best-effort: continue even if it fails)
         try:
             await _run(manager.delete_temp_file, principal, temp_key)
         except Exception:
@@ -507,7 +507,7 @@ async def _import(request: Request, *, dwh: bool) -> Any:
         if error_kind_of(e) in _ACCESS_KINDS:
             raise
         logger.error("Failed to import custom persona data", exc_info=True)
-        # 件数不足・形式不正・名前の重複はカタログ文言で具体的に伝える（Issue #118）。
+        # Too few rows, a bad format and a duplicate name are explained specifically with catalog wording (Issue #118)
         return _upload_result(
             request,
             user_message_for(
@@ -523,13 +523,13 @@ async def _import(request: Request, *, dwh: bool) -> Any:
 
 @router.post("/persona-data/confirm-mapping", response_class=HTMLResponse)
 async def upload_custom_step2(request: Request) -> Any:
-    """Step2: マッピング確定 → Parquet変換 → 名前と利用範囲を付けて登録"""
+    """Step 2: confirm the mapping -> convert to Parquet -> register with a name and usage scope."""
     return await _import(request, dwh=False)
 
 
 @router.get("/persona-data/custom/{data_id}/detail", response_class=HTMLResponse)
 async def custom_dataset_detail(request: Request, data_id: str) -> Any:
-    """カスタムデータのマッピング情報（使える人だけ）"""
+    """Mapping info of custom data (only for users who can use it)."""
     manager = get_dataset_manager()
     record = await _run(manager.get_custom_persona_data, _principal(request), data_id)
     return templates.TemplateResponse(
@@ -545,7 +545,7 @@ async def custom_dataset_detail(request: Request, data_id: str) -> Any:
 
 @router.delete("/persona-data/custom/{data_id}", response_class=HTMLResponse)
 async def delete_custom_dataset(request: Request, data_id: str) -> Any:
-    """カスタムデータを削除（admin だけ）"""
+    """Delete custom data (admin only)."""
     principal = _principal(request)
     manager = get_dataset_manager()
     try:
@@ -565,7 +565,7 @@ async def delete_custom_dataset(request: Request, data_id: str) -> Any:
 
 @router.get("/persona-data/custom/{data_id}/scope", response_class=HTMLResponse)
 async def custom_dataset_scope_dialog(request: Request, data_id: str) -> Any:
-    """カスタムデータの利用範囲のダイアログ（admin だけ、M10）"""
+    """Usage-scope dialog of custom data (admin only)."""
     dialog = await _run(
         get_dataset_manager().scope_dialog, _principal(request), data_id
     )
@@ -576,7 +576,7 @@ async def custom_dataset_scope_dialog(request: Request, data_id: str) -> Any:
 
 @router.post("/persona-data/custom/{data_id}/scope", response_class=HTMLResponse)
 async def save_custom_dataset_scope(request: Request, data_id: str) -> Any:
-    """カスタムデータの利用範囲の保存（開いたときとの差分だけ）"""
+    """Save the usage scope of custom data (only the difference from when it was opened)."""
     change = await asset_scope_views.change_from_request(request)
     try:
         await _run(
@@ -593,12 +593,12 @@ async def save_custom_dataset_scope(request: Request, data_id: str) -> Any:
 
 
 # =========================================================================
-# データ分析エージェント連携（DWHセグメント抽出、admin だけ）
+# Data analysis agent integration (DWH segment extraction, admin only)
 # =========================================================================
 
 
 def _survey_sse_event(event_type: str, data: str) -> str:
-    """SSEイベントをフォーマット"""
+    """Format an SSE event."""
     lines = data.split("\n") if data else [""]
     data_lines = "\n".join(f"data: {line}" for line in lines)
     return f"event: {event_type}\n{data_lines}\n\n"
@@ -606,15 +606,15 @@ def _survey_sse_event(event_type: str, data: str) -> str:
 
 @router.post("/persona-data/dwh-extract")
 async def dwh_extract(request: Request) -> Any:
-    """データ分析エージェント連携: セグメント抽出（SSEストリーミング）"""
+    """Data analysis agent integration: segment extraction (SSE streaming)."""
     import queue as queue_mod
 
     principal = _principal(request)
     manager = get_dataset_manager()
-    # 流し始める前に止める（流し始めたあとは状態コードを返せない）
+    # Stop before streaming starts (a status code cannot be returned once streaming has started)
     manager.ensure_manageable(principal)
     try:
-        # 閉域対応 U3 BR3.7: 使ってよくない環境では error イベント 1 つだけを返す
+        # In an environment where use is not allowed, return only one error event
         manager.ensure_data_agent_allowed(principal)
     except SurveyDatasetManagerError as e:
         refusal = _survey_sse_event("error", user_message_for(e))
@@ -639,7 +639,7 @@ async def dwh_extract(request: Request) -> Any:
 
         future = executor.submit(_run_extraction)
 
-        # 待つのはスレッドで行う（イベントループの上で待つと他の要求が止まる）
+        # Wait in a thread (waiting on the event loop would stall other requests)
         while not future.done():
             try:
                 evt = await asyncio.to_thread(event_queue.get, timeout=0.3)
@@ -722,7 +722,7 @@ async def dwh_extract(request: Request) -> Any:
 
 @router.post("/persona-data/dwh-preview", response_class=HTMLResponse)
 async def dwh_preview(request: Request) -> Any:
-    """DWH抽出結果のプレビュー＋マッピングUIを返す"""
+    """Return the DWH extraction preview and the mapping UI."""
     principal = _principal(request)
     manager = get_dataset_manager()
     manager.ensure_manageable(principal)
@@ -734,14 +734,14 @@ async def dwh_preview(request: Request) -> Any:
         csv_bytes = await _run(manager.download_temp_file, principal, temp_key)
         parsed = await _run(manager.parse_csv_columns, principal, csv_bytes)
 
-        # LLMマッピング提案（標準カラム + その他カラム）
+        # LLM mapping proposal (standard columns + other columns)
         suggestion = await _run(
             manager.suggest_column_mapping,
             principal,
             parsed["columns"],
             parsed["samples"],
         )
-        # auto_mapping と suggested mapping をマージ（suggestedを優先）
+        # Merge auto_mapping and the suggested mapping (suggested wins)
         merged_mapping = {**parsed["auto_mapping"], **suggestion.get("mapping", {})}
         return await _column_mapping(
             request,
@@ -768,12 +768,12 @@ async def dwh_preview(request: Request) -> Any:
 
 @router.post("/persona-data/dwh-confirm", response_class=HTMLResponse)
 async def dwh_confirm(request: Request) -> Any:
-    """DWH抽出データのマッピング確定 → Parquet変換 → 登録（重なる名前は (2) 以降）"""
+    """Confirm the DWH data mapping -> convert to Parquet -> register (overlapping names get (2) onward)."""
     return await _import(request, dwh=True)
 
 
 # =========================================================================
-# テンプレート管理
+# Template management
 # =========================================================================
 
 
@@ -785,7 +785,7 @@ async def templates_list(
     cursor: Optional[str] = None,
     append: bool = False,
 ) -> Any:
-    """テンプレート一覧（タブ別、M6、BR1.2）"""
+    """Template list (per tab)."""
     search_query = (search or "").strip()
     try:
         listing = await _run(
@@ -832,7 +832,7 @@ def _template_form_limits() -> dict[str, int]:
 
 @router.get("/templates/new", response_class=HTMLResponse)
 async def template_new(request: Request) -> Any:
-    """テンプレート作成画面"""
+    """Template creation screen."""
     return templates.TemplateResponse(
         request,
         "survey/template_form.html",
@@ -846,12 +846,12 @@ async def template_new(request: Request) -> Any:
 
 
 # -------------------------------------------------------------------------
-# アンケートAI生成（Issue #23）
+# AI survey generation (Issue #23)
 # -------------------------------------------------------------------------
 
 
 def _parse_ai_messages(payload: Any) -> list[dict[str, str]]:
-    """リクエストbodyから会話履歴(messages)をパース。"""
+    """Parse the conversation history (messages) from the request body."""
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="リクエストボディが不正です")
     raw = payload.get("messages")
@@ -880,7 +880,7 @@ _AI_INPUT_HINT = (
 
 @router.post("/templates/ai-chat")
 async def template_ai_chat(request: Request) -> JSONResponse:
-    """AIアンケート作成ヒアリングの1ターンを処理する。"""
+    """Handle one turn of the AI survey-creation interview."""
     try:
         payload = await request.json()
     except Exception:
@@ -910,7 +910,7 @@ async def template_ai_chat(request: Request) -> JSONResponse:
 
 @router.post("/templates/ai-generate")
 async def template_ai_generate(request: Request) -> JSONResponse:
-    """AIがアンケート設問ドラフトを生成する。"""
+    """Have the AI generate a survey question draft."""
     try:
         payload = await request.json()
     except Exception:
@@ -947,14 +947,14 @@ async def template_ai_generate(request: Request) -> JSONResponse:
 
 
 def _preview_route(file_path: str) -> str:
-    """The app's preview route of a checked template image (closed network U4)."""
+    """The app's preview route of a checked template image."""
     return "/survey/image-preview/file?" + urlencode({"file_path": file_path})
 
 
 def _preview_url(principal: Principal, file_path: str) -> str:
-    """A preview URL through FileAttachments (the parent template's check, BR1.9).
+    """A preview URL through FileAttachments (checked against the parent template).
 
-    The app's own route for both deliveries (U4 BR4.2, Q2 A); nothing is signed
+    The app's own route for both deliveries; nothing is signed
     while the page is drawn. Empty when the image is deleted or not readable.
     """
     try:
@@ -967,12 +967,12 @@ def _preview_url(principal: Principal, file_path: str) -> str:
 
 @router.get("/templates/{template_id}/edit", response_class=HTMLResponse)
 async def template_edit(request: Request, template_id: str) -> Any:
-    """テンプレート編集画面（管理できる人だけ。共有された人は 403）"""
+    """Template edit screen (users who can manage only; shared users get 403)."""
     principal = _principal(request)
     tmpl = await _run(
         get_template_manager().get_template_for_edit, principal, template_id
     )
-    # 既存画像のプレビューURLは親のテンプレートで判定して作る（任意のパスは受けない）
+    # The preview URL of an existing image is built after checking against the parent template (arbitrary paths are not accepted)
     images_with_urls = []
     for img in tmpl.images:
         d = img.to_dict()
@@ -993,7 +993,7 @@ async def template_edit(request: Request, template_id: str) -> Any:
 
 
 # =========================================================================
-# アンケート開始
+# Survey start
 # =========================================================================
 
 
@@ -1004,9 +1004,9 @@ async def survey_start_page(
     search: Optional[str] = None,
     template_id: Optional[str] = None,
 ) -> Any:
-    """アンケート開始画面（読めるテンプレートと使えるデータソースだけ）
+    """Survey start screen (only readable templates and usable data sources).
 
-    ``template_id``（一覧の「使う」）は、読めるときだけ選んでおく。
+    ``template_id`` ("use" in the list) is preselected only when readable.
     """
     principal = _principal(request)
     search_query = (search or "").strip()
@@ -1090,13 +1090,13 @@ async def survey_start_page(
 
 
 def _clean_filters(raw: dict) -> dict | None:
-    """フィルタJSONから空値を除去して返す。"""
+    """Remove empty values from the filter JSON and return it."""
     return SurveyExecutionManager.normalize_filters(raw)
 
 
 @router.get("/filter-options", response_class=HTMLResponse)
 async def filter_options(request: Request) -> Any:
-    """データソースに応じたフィルタ選択肢を返す（使えるデータソースだけ）"""
+    """Return filter choices for the data source (only usable data sources)."""
     datasource = request.query_params.get("datasource", "nemotron")
     manager = get_dataset_manager()
     filter_values = {}
@@ -1117,7 +1117,7 @@ async def filter_options(request: Request) -> Any:
 
 @router.post("/preview", response_class=HTMLResponse)
 async def preview_personas(request: Request) -> Any:
-    """フィルタ条件に基づくペルソナプレビュー"""
+    """Persona preview based on the filter conditions."""
     principal = _principal(request)
     form = await request.form()
     filters_json = str(form.get("filters_json", "{}"))
@@ -1132,7 +1132,7 @@ async def preview_personas(request: Request) -> Any:
     manager = get_dataset_manager()
 
     def _collect_preview() -> tuple[int, int, dict]:
-        """DuckDB/S3 への同期クエリ3本をまとめてスレッド上で実行する。"""
+        """Run the three synchronous queries to DuckDB/S3 together in a thread."""
         total = manager.get_filtered_count(principal, None, datasource)
         count = (
             manager.get_filtered_count(principal, filters, datasource)
@@ -1143,8 +1143,8 @@ async def preview_personas(request: Request) -> Any:
         return total, count, stats
 
     try:
-        # DuckDB/httpfs 経由の S3 参照は同期処理。イベントループ上で実行すると
-        # S3 遅延時に他リクエストまで停止する（Issue #118）。
+        # S3 reads through DuckDB/httpfs are synchronous. Running them on the event loop
+        # would stall other requests when S3 is slow (Issue #118).
         total, count, stats = await _run(_collect_preview)
     except Exception as e:
         if error_kind_of(e) in _ACCESS_KINDS:
@@ -1174,7 +1174,7 @@ async def preview_personas(request: Request) -> Any:
 
 
 # =========================================================================
-# 結果
+# Results
 # =========================================================================
 
 
@@ -1186,7 +1186,7 @@ async def results_list(
     cursor: Optional[str] = None,
     append: bool = False,
 ) -> Any:
-    """結果一覧（タブ別、M6、BR1.2）。名前は実行したときの写しで出す"""
+    """Result list (per tab). Names are shown as the copy taken at run time."""
     search_query = (search or "").strip()
     try:
         listing = await _run(
@@ -1223,7 +1223,7 @@ async def results_list(
 
 @router.get("/results/{survey_id}", response_class=HTMLResponse)
 async def result_detail(request: Request, survey_id: str) -> Any:
-    """結果詳細画面（操作は管理できる人だけ、BR2.7〜BR2.11）"""
+    """Result detail screen (actions only for users who can manage)."""
     detail = await _run(
         get_execution_manager().get_survey_detail, _principal(request), survey_id
     )
@@ -1233,8 +1233,8 @@ async def result_detail(request: Request, survey_id: str) -> Any:
     image_urls = {
         img.id: f"/survey/results/{survey.id}/images/{img.id}" for img in images
     }
-    # 実行はバックグラウンドで走るため失敗理由はコードとしてDBに残っている。
-    # 文言への解決はここ（表示層）で行う（Issue #118）。
+    # Execution runs in the background, so the failure reason remains in the DB as a code.
+    # It is resolved to wording here (display layer) (Issue #118).
     execution_error = (
         user_message_for_code(survey.error_code, survey.error_context)
         if survey.status == "error"
@@ -1259,7 +1259,7 @@ async def result_detail(request: Request, survey_id: str) -> Any:
 async def delete_survey(
     request: Request, survey_id: str, redirect: bool = False
 ) -> Any:
-    """アンケート削除（管理できる人だけ）。詳細画面からは一覧へ戻す"""
+    """Delete a survey (users who can manage only). From the detail screen, return to the list."""
     manager = get_execution_manager()
     try:
         await _run(manager.delete_survey, _principal(request), survey_id)
@@ -1268,7 +1268,7 @@ async def delete_survey(
             raise
         logger.error("Failed to delete survey", exc_info=True)
         return toast_response(e, default="削除に失敗しました")
-    # 実行中や待ちのものが消えたら、次の待ちを始められるよう進行役を起こす（WF6）
+    # When a running or waiting one is removed, wake the runner so it can start the next waiting one
     _wake_survey_runner()
     if redirect:
         return Response(status_code=200, headers={"HX-Redirect": "/survey/results"})
@@ -1277,7 +1277,7 @@ async def delete_survey(
 
 @router.get("/results/{survey_id}/images/{image_id}")
 async def result_image(request: Request, survey_id: str, image_id: str) -> Any:
-    """結果の写しの画像（読める人だけ、BR2.8）。公開は 302、閉域は流す（閉域対応 U4）"""
+    """Image of the result copy (readable users only). Public mode redirects 302; the closed network streams it."""
     result = await _run(
         get_execution_manager().deliver_result_image,
         _principal(request),
@@ -1288,13 +1288,13 @@ async def result_image(request: Request, survey_id: str, image_id: str) -> Any:
 
 
 # =========================================================================
-# 画像アップロード
+# Image upload
 # =========================================================================
 
 
 @router.post("/templates/upload-image")
 async def upload_survey_image(request: Request, file: UploadFile = File(...)) -> Any:
-    """アンケートテンプレート用画像をアップロード（利用者のキー、24 時間の期限、BR5.1）"""
+    """Upload an image for a survey template (user's key, 24-hour expiry)."""
     principal = _principal(request)
     try:
         file_manager = get_file_manager()
@@ -1324,11 +1324,11 @@ async def upload_survey_image(request: Request, file: UploadFile = File(...)) ->
 
 @router.get("/image-preview")
 async def image_preview(request: Request, file_path: str) -> Any:
-    """画像のプレビューURL（アプリのプレビューのルート）を返す。
+    """Return the image preview URL (the app's preview route).
 
-    読めるアップロード・読めるテンプレートの画像のパスだけ（BR1.9、BR5.8）。任意の
-    パス・他人のパスは 404 で URL を作らない（共通の例外ハンドラが答える）。署名付き URL は
-    作らない（閉域対応 U4 BR4.2）
+    Only paths of readable uploads and readable template images. Arbitrary
+    paths and other users' paths give 404 and no URL is made (the shared exception handler answers). No signed URL is
+    made.
     """
     await _run(get_file_manager().check_preview_path, _principal(request), file_path)
     return JSONResponse({"url": _preview_route(file_path)})
@@ -1336,10 +1336,10 @@ async def image_preview(request: Request, file_path: str) -> Any:
 
 @router.get("/image-preview/file")
 async def image_preview_file(request: Request, file_path: str) -> Any:
-    """テンプレートの画像そのもの（閉域対応 U4 BR3.4）。
+    """The template image itself.
 
-    ``/image-preview`` と同じ検査（BR5.8）を通したパスだけを配る。公開は署名付き URL へ
-    302、閉域はアプリが流す。任意のパス・他人のパスは 404 で、開かず署名もしない。
+    Only paths that passed the same check as ``/image-preview`` are served. Public mode redirects
+    302 to a signed URL; the closed network has the app stream it. Arbitrary paths and others' paths give 404 without opening or signing.
     """
     result = await _run(
         get_file_manager().deliver_preview, _principal(request), file_path
@@ -1348,7 +1348,7 @@ async def image_preview_file(request: Request, file_path: str) -> Any:
 
 
 # =========================================================================
-# テンプレートCRUD操作
+# Template CRUD operations
 # =========================================================================
 
 
@@ -1377,7 +1377,7 @@ def _questions_invalid(request: Request) -> Any:
 
 @router.post("/templates", response_class=HTMLResponse)
 async def create_template(request: Request) -> Any:
-    """テンプレート保存（作った人が所有者になる、BR1.1）"""
+    """Save a template (the creator becomes the owner)."""
     parsed = _form_template(await request.form())
     if parsed is None:
         return _questions_invalid(request)
@@ -1385,7 +1385,7 @@ async def create_template(request: Request) -> Any:
 
     manager = get_template_manager()
     try:
-        # 画像は保存する人のアップロードとして紐付ける（BR5.3）
+        # An image is attached as the saving user's upload
         await _run(
             manager.create_template,
             _principal(request),
@@ -1395,7 +1395,7 @@ async def create_template(request: Request) -> Any:
         )
     except SurveyTemplateManagerError as e:
         if error_kind_of(e) in _ACCESS_KINDS:
-            # 他人の・期限切れの画像は、ないものと同じ 404 のトースト
+            # Someone else's or expired images give the same 404 toast as nonexistent
             raise
         if isinstance(e, SurveyTemplateValidationError):
             logger.warning("Template validation error", exc_info=True)
@@ -1405,7 +1405,7 @@ async def create_template(request: Request) -> Any:
             request, user_message_for(e, default="保存に失敗しました"), 500
         )
 
-    # 成功時はテンプレート一覧にリダイレクト（htmx対応）
+    # On success, redirect to the template list (htmx supported)
     response = HTMLResponse(content="", status_code=200)
     response.headers["HX-Redirect"] = "/survey/templates"
     return response
@@ -1425,7 +1425,7 @@ def _template_save_error(request: Request, message: str, status_code: int) -> An
 
 @router.put("/templates/{template_id}", response_class=HTMLResponse)
 async def update_template(request: Request, template_id: str) -> Any:
-    """テンプレート更新（管理できる人だけ。変えた欄だけを書く）"""
+    """Update a template (users who can manage only; only changed fields are written)."""
     parsed = _form_template(await request.form())
     if parsed is None:
         return _questions_invalid(request)
@@ -1433,7 +1433,7 @@ async def update_template(request: Request, template_id: str) -> Any:
 
     manager = get_template_manager()
     try:
-        # 新しく足した画像だけを更新する人のアップロードとして紐付ける（BR5.3）
+        # Only newly added images are attached as the updating user's upload
         await _run(
             manager.update_template,
             _principal(request),
@@ -1460,7 +1460,7 @@ async def update_template(request: Request, template_id: str) -> Any:
 
 @router.delete("/templates/{template_id}", response_class=HTMLResponse)
 async def delete_template(request: Request, template_id: str) -> Any:
-    """テンプレート削除（管理できる人だけ。共有も一緒に消す）"""
+    """Delete a template (users who can manage only; shares are removed too)."""
     manager = get_template_manager()
     try:
         await _run(manager.delete_template, _principal(request), template_id)
@@ -1469,19 +1469,19 @@ async def delete_template(request: Request, template_id: str) -> Any:
             raise
         logger.error("Template delete error", exc_info=True)
         return toast_response(e, default="削除に失敗しました")
-    # 削除成功 - カードを空にする
+    # On successful deletion, empty the card
     return HTMLResponse(content="")
 
 
 # =========================================================================
-# アンケート実行
+# Survey execution
 # =========================================================================
 
 
 def _execute_error(request: Request, message: str, status_code: int) -> Any:
     """The error under the start form (``#execute-error``)."""
-    # HX-Retarget はスワップ判定より前に処理されるが、それだけでは非2xx本文が
-    # スワップされないため mark_renderable が必要（Issue #117）
+    # HX-Retarget is processed before the swap decision, but that alone does not
+    # swap non-2xx bodies, so mark_renderable is needed (Issue #117)
     response = mark_renderable(
         templates.TemplateResponse(
             request,
@@ -1497,7 +1497,7 @@ def _execute_error(request: Request, message: str, status_code: int) -> Any:
 
 @router.post("/execute", response_class=HTMLResponse)
 async def execute_survey(request: Request) -> Any:
-    """アンケート実行（読めるテンプレート・使えるデータだけ。保存後に裏で実行）"""
+    """Run a survey (only readable templates and usable data; runs in the background after saving)."""
     principal = _principal(request)
     form = await request.form()
     template_id = str(form.get("template_id", ""))
@@ -1524,9 +1524,9 @@ async def execute_survey(request: Request) -> Any:
 
     manager = get_execution_manager()
 
-    # 1. アンケートレコードを作成（判定とバリデーションを含む）
-    #    件数検証が DuckDB/httpfs 経由で S3 を同期参照するため、スレッドへ
-    #    委譲する（Issue #118）。
+    # 1. Create the survey record (includes checks and validation)
+    #    The count check reads S3 synchronously through DuckDB/httpfs, so it is
+    #    delegated to a thread (Issue #118).
     try:
         start = await _run(
             lambda: manager.create_survey(
@@ -1548,19 +1548,19 @@ async def execute_survey(request: Request) -> Any:
         if error_kind_of(e) in _ACCESS_KINDS:
             raise
         logger.error("Survey creation error", exc_info=True)
-        # 件数取得のS3/DuckDB障害など一時的な失敗（TRANSIENT）は、画面を書き換えず
-        # トーストで通知して入力を保持する（error-catalog.md「TRANSIENT の表示」）。
+        # A transient failure (TRANSIENT) such as an S3/DuckDB failure while counting does not rewrite the screen;
+        # notify with a toast and keep the input (see error-catalog.md "TRANSIENT display").
         if is_transient(e):
             return toast_response(e, default="アンケート作成に失敗しました")
         return _execute_error(
             request, user_message_for(e, default="アンケート作成に失敗しました"), 500
         )
 
-    # 2. 待ちに入れたので、進行役を 1 回起こす（待たない。推論は Step Functions、WF1）。
-    #    失敗は進行役がアンケートに記録する（例外を投げない）
+    # 2. It is queued, so wake the runner once (without waiting; inference runs on Step Functions).
+    #    The runner records a failure on the survey (it raises no exception)
     _wake_survey_runner()
 
-    # 3. 開始メッセージを表示し、結果一覧へ自動遷移
+    # 3. Show the start message and move to the result list automatically
     return templates.TemplateResponse(
         request,
         "survey/partials/survey_submitted.html",
@@ -1569,13 +1569,13 @@ async def execute_survey(request: Request) -> Any:
 
 
 # =========================================================================
-# 結果取得・分析
+# Result retrieval and analysis
 # =========================================================================
 
 
 @router.get("/results/{survey_id}/download")
 async def download_csv(request: Request, survey_id: str) -> Any:
-    """CSVダウンロード（読める人だけ）。公開は 302、閉域は流す（閉域対応 U4 BR3.2）"""
+    """CSV download (readable users only). Public mode redirects 302; the closed network streams it."""
     result = await _run(
         get_execution_manager().deliver_result_csv, _principal(request), survey_id
     )
@@ -1595,7 +1595,7 @@ def _analysis_error(request: Request, message: str) -> Any:
 
 @router.get("/results/{survey_id}/personas", response_class=HTMLResponse)
 async def persona_statistics(request: Request, survey_id: str) -> Any:
-    """調査対象ペルソナ統計データ取得"""
+    """Get statistics of the surveyed personas."""
     manager = get_analysis_manager()
     try:
         stats = await _run(
@@ -1615,7 +1615,7 @@ async def persona_statistics(request: Request, survey_id: str) -> Any:
 
 @router.get("/results/{survey_id}/visual", response_class=HTMLResponse)
 async def visual_analysis(request: Request, survey_id: str) -> Any:
-    """ビジュアル分析データ取得"""
+    """Get data for visual analysis."""
     manager = get_analysis_manager()
     try:
         data = await _run(manager.get_visual_analysis, _principal(request), survey_id)
@@ -1631,13 +1631,13 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
     )
 
 
-# AI を動かして保存するので、開始は CSRF の検査を受ける POST にする（NFR4.13）
+# This runs the AI and saves, so starting is a POST that goes through the CSRF check
 @router.post("/results/{survey_id}/report/generate")
 async def generate_report_stream(request: Request, survey_id: str) -> Any:
-    """インサイトレポートをSSEストリーミングで生成し、完了時に自動保存する
+    """Generate an insight report with SSE streaming and save it automatically on completion.
 
-    判定（管理できる人だけ、BR2.11）は流し始める前に済ませ、読めない・ないものは
-    404、共有された人は 403 を共通の例外ハンドラが返す。
+    The check (users who can manage only) is done before streaming starts; unreadable or nonexistent items
+    get 404 and shared users get 403 from the shared exception handler.
     """
     principal = _principal(request)
     manager = get_analysis_manager()
@@ -1653,7 +1653,7 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
                 )
                 yield f"data: {data}\n\n"
 
-            # 自動保存
+            # Auto-save
             manager.save_insight_report(principal, survey_id, "".join(full_content))
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except SurveyAnalysisManagerError:
@@ -1684,12 +1684,12 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
 
 
 # =========================================================================
-# ヘルパー関数
+# Helper functions
 # =========================================================================
 
 
 def _parse_questions(questions_data: list) -> list[Question]:
-    """フォームから送信された質問データをQuestionオブジェクトに変換する"""
+    """Convert question data submitted from the form to Question objects."""
     questions = []
     for q in questions_data:
         q_type = q.get("question_type", "free_text")
@@ -1714,7 +1714,7 @@ def _parse_questions(questions_data: list) -> list[Question]:
 
 
 def _parse_images(images_data: list) -> list[TemplateImage]:
-    """フォームから送信された画像データをTemplateImageオブジェクトに変換する"""
+    """Convert image data submitted from the form to TemplateImage objects."""
     images = []
     for img in images_data:
         images.append(

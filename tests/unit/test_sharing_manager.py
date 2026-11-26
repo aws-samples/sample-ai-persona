@@ -1,8 +1,7 @@
-"""SharingManager（共有の入口の業務）の単体テスト。
+"""Unit tests for SharingManager (the entry point for sharing).
 
-Component（ResourceSharing）は本物、Store はメモリ上の偽物、DepartmentDirectory は
-モックにする（unit-test-instructions.md）。対応: BR1.4、BR1.12、BR2.1、BR6.5、
-BR7.1、BR7.5、WF1、WF2。
+The component (ResourceSharing) is real, the store is an in-memory fake and
+DepartmentDirectory is a mock.
 """
 
 from unittest.mock import Mock
@@ -78,8 +77,8 @@ class TestDialog:
         view = manager.dialog(MEMBER_B, "persona", "p1")
         assert [d.group_id for d in view.choices] == ["sales", "plan"]
         assert view.selected == {"sales"} and not view.is_bulk
-        assert view.show_scope_note  # BR7.5
-        assert view.show_persona_notice  # BR6.5
+        assert view.show_scope_note
+        assert view.show_persona_notice
 
     def test_single_dialog_of_a_shared_only_target_is_forbidden(self, manager, store):
         store.add("p1", "sub-a", {"sales"})
@@ -94,7 +93,7 @@ class TestDialog:
     def test_bulk_dialog_counts_per_department_without_names(self, manager, store):
         store.add("p1", "sub-b", {"sales"})
         store.add("p2", "sub-b", {"sales", "plan"})
-        store.add("p3", "sub-a")  # 読めない
+        store.add("p3", "sub-a")  # not readable
         view = manager.bulk_dialog(MEMBER_B, "persona", ["p1", "p2", "p3", "p1"])
         assert view.is_bulk
         assert view.mixed == {"plan": (1, 2), "sales": (2, 2)}
@@ -140,7 +139,7 @@ class TestDialog:
 class TestSave:
     def test_single_save_builds_the_change_from_the_picker(self, manager, store):
         store.add("p1", "sub-b", {"sales", "hr"})
-        # 開いたときに sales（選択）。plan を足し sales を外す。hr は範囲外で残る
+        # On open, sales is selected. Add plan and drop sales; hr is out of range and stays.
         result = manager.save(
             MEMBER_B,
             "persona",
@@ -154,7 +153,7 @@ class TestSave:
         assert store.bodies["p1"]["shared_group_ids"] == {"plan", "hr"}
 
     def test_department_added_after_opening_is_not_removed(self, manager, store):
-        store.add("p1", "sub-b", {"plan"})  # 開いた後に別の人が plan を足した
+        store.add("p1", "sub-b", {"plan"})  # someone else added plan after the open
         manager.save(
             MEMBER_B, "persona", "p1", selected=["sales"], unchanged=[], initial=[]
         )
@@ -176,7 +175,7 @@ class TestSave:
 
     def test_bulk_save_reports_failures(self, manager, store):
         store.add("p1", "sub-a")
-        store.add("p2", "sub-b")  # 読めない
+        store.add("p2", "sub-b")  # not readable
         result = manager.bulk_save(
             MEMBER_A,
             "persona",
@@ -194,7 +193,7 @@ class TestSave:
         assert not result.is_complete
 
     def test_bulk_save_names_readable_failures(self, manager, store):
-        store.add("p1", "sub-b", {"sales"})  # 共有されているだけ（名前は読める）
+        store.add("p1", "sub-b", {"sales"})  # only shared (the name is readable)
         result = manager.bulk_save(
             MEMBER_A, "persona", ["p1"], selected=["sales"], unchanged=[], initial=[]
         )

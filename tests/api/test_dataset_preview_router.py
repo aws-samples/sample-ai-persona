@@ -1,8 +1,7 @@
-"""
-データセットプレビューエンドポイントのAPIテスト
+"""API tests for the dataset preview endpoint.
 
-U5: プレビューは PersonaManager が判定してから出す（BR2.6）。URL のパラメータは
-紐付けの ID からデータセットの ID に変わった。
+PersonaManager decides whether a preview may be shown. The URL parameter is the
+dataset ID, not the binding ID.
 """
 
 from unittest.mock import patch
@@ -18,7 +17,7 @@ class TestDatasetPreviewEndpoint:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_preview_success(self, mock_get_manager, client):
-        """プレビューが正常に表示される"""
+        """The preview is displayed normally."""
         mock_get_manager.return_value.preview_binding_data.return_value = {
             "columns": ["user_id", "product", "amount"],
             "rows": [["U123", "商品A", 1000]],
@@ -39,7 +38,7 @@ class TestDatasetPreviewEndpoint:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_preview_error(self, mock_get_manager, client):
-        """エラー時にエラーメッセージが表示される"""
+        """An error message is displayed on failure."""
         mock_get_manager.return_value.preview_binding_data.side_effect = (
             PersonaManagerError(
                 "binding not found", code=ErrorCode.DATASET_BINDING_NOT_FOUND
@@ -75,7 +74,7 @@ class TestDatasetPreviewEndpoint:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_preview_empty_data(self, mock_get_manager, client):
-        """データが0件の場合にメッセージが表示される"""
+        """A message is displayed when there are zero rows."""
         mock_get_manager.return_value.preview_binding_data.return_value = {
             "columns": ["user_id"],
             "rows": [],

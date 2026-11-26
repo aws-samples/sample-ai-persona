@@ -1,10 +1,9 @@
-"""高度な生成（ベータ）のページの部品の振る舞い（U1、Step 33）。
+"""Behaviour of the advanced generation (beta) page components.
 
-実際のページのテンプレートを描き、アプリの JSON・断片・SSE と S3 への PUT は、ページの中の
-要求をこのテストが差し替えて答える（起動中のアプリも実 AWS も使わない）。待ち時間（送り直しの
-1・2・4 秒、URL の取り直し、SSE のつなぎ直し）は ``window.ADVANCED_UPLOAD_TIMING`` で縮める。
-対応: US1.1、US2.1、US3.1、US5.1、US9.1、US10.1、BR2.4、BR2.5、BR3.4、BR8.4、BR10.2、
-NFR3.8、NFR5.21、NFR10.1。
+Renders the real page templates; the app's JSON, fragments and SSE, and the S3
+PUT, are answered by this test intercepting the page's requests (no running app
+and no real AWS). Wait times (retries at 1, 2 and 4 seconds, URL refresh, SSE
+reconnect) are shortened with ``window.ADVANCED_UPLOAD_TIMING``.
 """
 
 from __future__ import annotations
@@ -60,7 +59,7 @@ def _open(
 def _row_context(
     source_file: Any, row_error: str | None = None, stuck: bool = False
 ) -> dict[str, Any]:
-    """What the router gives one row (U2: the list item and the stuck flag)."""
+    """What the router gives one row (the list item and the stuck flag)."""
     return {
         "source_file": source_file,
         "item": SourceFileListItem.of(source_file, now=s.NOW, retention_days=7),
@@ -169,7 +168,7 @@ class TestFilePicker:
     def test_file_input_is_reachable_by_keyboard_with_a_name(
         self, ui: UiHarness
     ) -> None:
-        """見た目を隠したファイルの選択も、キーボードで届き名前を持つ（a11y 3・27）。"""
+        """A visually hidden file input is still keyboard-reachable and has an accessible name."""
         _open(ui)
         page = ui.page
 
@@ -231,7 +230,7 @@ class TestUpload:
         assert s3.max_in_flight <= 4
         status = ui.page.inner_text("[data-testid='advanced-upload-status']")
         assert "準備OK" in status
-        # 準備OK の表を選ぶと生成を始められる
+        # Selecting a ready table enables starting the generation
         button = "[data-testid='advanced-generate-button']"
         assert ui.page.is_disabled(button)
         ui.page.check("[data-testid='advanced-upload-select']")
@@ -267,7 +266,7 @@ class TestUpload:
         assert ui.page.locator("[data-testid='advanced-upload-select']").count() == 0
 
     def test_urls_are_refreshed_before_they_expire(self, ui: UiHarness) -> None:
-        # 期限の 5 分前より前に取り直す（期限をすぐに迎える設定で確かめる）
+        # The URL is refreshed more than 5 minutes before expiry (checked with an immediate expiry)
         _open(ui, timing={"refreshLeadMs": 100 * 365 * 24 * 3600 * 1000})
         s3 = _upload_ready(ui)
         refreshed = _session(range(1, 7), version=2)
@@ -325,7 +324,7 @@ class SseFake:
         )
 
     def _handle(self, route: Any, request: Any) -> None:
-        # ブラウザの自動のつなぎ直しはヘッダー、画面のつなぎ直しはクエリで届く
+        # The browser's automatic reconnect sends the header; the page's own reconnect sends the query
         query = parse_qs(urlsplit(request.url).query).get("last_event_id", [None])[0]
         self.last_event_ids.append(request.all_headers().get("last-event-id") or query)
         body = self.bodies.pop(0) if self.bodies else "event: done\ndata: \n\n"
@@ -371,7 +370,7 @@ class TestProgress:
         ui.page.wait_for_timeout(300)
 
         assert sse.last_event_ids[:2] == [None, "2"]
-        assert len(sse.last_event_ids) == 2  # done のあとはつなぎ直さない
+        assert len(sse.last_event_ids) == 2  # no reconnect after done
         log = ui.page.inner_text("[data-testid='advanced-log']")
         assert "300 行を読み込みました" in log
         mark = ui.page.inner_text(
@@ -399,9 +398,9 @@ class TestProgress:
         rows = ui.page.locator("[data-testid='advanced-segment-row']")
         assert "50%" in rows.nth(0).inner_text()
         assert "50%" not in rows.nth(1).inner_text()
-        assert s.SCRIPT_TEXT in rows.nth(1).inner_text()  # 名前は文字として出る
+        assert s.SCRIPT_TEXT in rows.nth(1).inner_text()  # the name is rendered as text
         ui.page.wait_for_selector("[data-testid='advanced-unverified-warning']")
-        # 1 件も選んでいないあいだは保存できない
+        # Saving is disabled while nothing is selected
         save = "[data-testid='advanced-save-button']"
         assert ui.page.is_disabled(save)
         ui.page.check("[data-testid='advanced-candidate-check'] >> nth=0")
@@ -457,8 +456,8 @@ class TestProgress:
     def test_elapsed_time_counts_every_second_without_being_read_out(
         self, ui: UiHarness
     ) -> None:
-        # AC9.1.1、interaction-spec: 1 秒ごとに更新するが読み上げない
-        # （つなぎ直しても done を返さず、生成が続いているあいだを再現する）
+        # Updates every second but is not announced by screen readers
+        # (reconnects never return done, which reproduces a generation still running)
         SseFake(
             ui,
             [
@@ -543,7 +542,7 @@ def test_row_states_are_written_in_words(ui: UiHarness, state: str) -> None:
     assert ui.page.locator("[data-testid='advanced-upload-select']").count() == 0
 
 
-# --- U2: 一覧・削除・取り直し（US2.4、US3.2、US4.1、US4.2、NFR1.11、NFR10.2） --------
+# --- list, delete and re-fetch ------------------------------------------------
 
 ROWS = "[data-testid='advanced-upload-row']"
 WEEK = s.NOW.replace(hour=12) + __import__("datetime").timedelta(days=7)
@@ -756,7 +755,7 @@ class TestInspectingRow:
 
 
 class TestDocuments:
-    """U4 Step 26: AC2.2.2, AC3.3.3, AC6.2.4, NFR10.3 (rows, estimate, result)."""
+    """Rows, estimate and result."""
 
     SELECT = "[data-testid='advanced-upload-select']"
 
@@ -817,7 +816,7 @@ class TestDocuments:
         ui.check_a11y()
 
 
-# --- U5: the plan card and the cancel ------------------------------------------
+# --- the plan card and the cancel ----------------------------------------------
 
 CANCEL_URL = f"/persona/advanced/generations/{s.GENERATION_ID}/cancel"
 PLAN_URL = f"/persona/advanced/generations/{s.GENERATION_ID}/plan"
@@ -841,7 +840,7 @@ def _card_stream() -> str:
 
 
 class TestGenerationControls:
-    """Step 21: BR29.2, BR31.4, BR33.3, NFR3.28, NFR10.4, AC8.1.1, AC9.3.1."""
+    """Plan card and cancel behaviour."""
 
     def test_the_plan_confirmation_is_off_by_default(self, ui: UiHarness) -> None:
         _open(ui)
@@ -860,7 +859,7 @@ class TestGenerationControls:
         ui.page.wait_for_selector("[data-testid='advanced-plan-card']")
 
         purpose = ui.page.inner_text("[data-testid='advanced-plan-purpose']")
-        assert purpose == s.SCRIPT_TEXT  # NFR3.28: shown as text, never run
+        assert purpose == s.SCRIPT_TEXT  # shown as text, never run
         assert ui.page.evaluate("window.__xss === undefined")
         stage = "[data-testid='advanced-stage-awaiting_plan_approval']"
         assert ui.page.is_visible(stage)
@@ -934,7 +933,7 @@ class TestGenerationControls:
         assert "中止しました" in ui.page.inner_text(
             "[data-testid='advanced-cancelled']"
         )
-        # BR33.3: the form stays as it was and no longer says a run is going on
+        # the form stays as it was and no longer says a run is going on
         assert ui.page.input_value("[data-testid='advanced-purpose']") == (
             "首都圏の 30 代"
         )
@@ -961,8 +960,8 @@ class TestGenerationControls:
 
 
 # ---------------------------------------------------------------------------
-# U6: the detailed analysis box, up to three tables, the record's code kinds
-# and the settings section (BR34, BR35.4, BR37.1, BR38.1, NFR3.37, NFR10.5)
+# The detailed analysis box, up to three tables, the record's code kinds
+# and the settings section
 # ---------------------------------------------------------------------------
 
 GENERATE = "[data-testid='advanced-generate-button']"
@@ -1519,7 +1518,7 @@ def _load_plan_card(ui: UiHarness, plan: Any) -> None:
 
 
 class TestDataReadingCard:
-    """U6 addendum: the plan card shows how the tables read, as text."""
+    """The plan card shows how the tables read, as text."""
 
     @staticmethod
     def _load(ui: UiHarness, reading: Any) -> None:
@@ -1609,7 +1608,7 @@ class TestDataReadingCard:
 
 
 class TestPlanSteps:
-    """U6 addendum: the plan card numbers the steps; the record names playbooks."""
+    """The plan card numbers the steps; the record names playbooks."""
 
     def test_the_card_numbers_the_steps_with_their_names_and_reasons(
         self, ui: UiHarness

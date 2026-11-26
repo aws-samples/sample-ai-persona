@@ -1,8 +1,8 @@
-"""AgentCore Memory の Strategy ID を起動時に GetMemory で引く（infrastructure-specification.md）。
+"""Look up the AgentCore Memory Strategy ID with GetMemory at startup.
 
-v1.0.0 では Memory を Data スタックが作り、Strategy ID を手で書き写さない。環境変数で
-渡されていればそれを使い、引けなければ長期記憶を無効にして起動は続ける。
-boto3 のクライアントは unittest.mock で差し替える。
+The Data stack creates the Memory, so the Strategy ID is not copied by hand. If it is
+given by an environment variable, that value is used; if the lookup fails, long-term
+memory is disabled and startup continues. The boto3 client is replaced with unittest.mock.
 """
 
 import logging

@@ -1,7 +1,7 @@
-"""Rendering of the U3 shared parts and page-level accessibility markers.
+"""Rendering of the shared parts and page-level accessibility markers.
 
 Behaviour (keys, focus, timers) is covered by ``tests/ui/``; these tests look at
-the HTML the server renders (NFR6.7, NFR6.10, NFR6.11, contract C6).
+the HTML the server renders.
 """
 
 import re
@@ -28,7 +28,7 @@ def _outline_removed_without_replacement(html: str) -> list[str]:
 
 
 class TestFocusIsNeverHidden:
-    """NFR6.7: `focus:outline-none` always comes with a visible replacement."""
+    """`focus:outline-none` always comes with a visible replacement."""
 
     def test_templates_keep_a_visible_focus_style(self) -> None:
         offenders = {
@@ -59,7 +59,7 @@ def _tag(html: str, pattern: str) -> str:
 
 
 class TestDialogMacro:
-    """Contract C6: `dialog()` renders an accessible, initially hidden dialog."""
+    """`dialog()` renders an accessible, initially hidden dialog."""
 
     _SOURCE = (
         '{% from "components/dialog.html" import dialog, dialog_open_button %}'
@@ -122,7 +122,7 @@ class TestDialogMacro:
 
 
 class TestListTabsMacro:
-    """Contract C6: `list_tabs()` / `list_tabpanel()` only display given values."""
+    """`list_tabs()` / `list_tabpanel()` only display given values."""
 
     _SOURCE = (
         '{% from "components/list_tabs.html" import list_tabs, list_tabpanel %}'
@@ -165,7 +165,7 @@ class TestListTabsMacro:
 
 
 class TestBulkSelectMacro:
-    """Contract C6: nothing is rendered on the 「共有されたもの」 tab."""
+    """Nothing is rendered on the 「共有されたもの」 tab."""
 
     _SOURCE = (
         '{% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}'
@@ -187,7 +187,7 @@ class TestBulkSelectMacro:
 
 
 class TestDepartmentPickerMacro:
-    """Contract C6: `department_picker()` reads Department and keeps ids unique."""
+    """`department_picker()` reads Department and keeps ids unique."""
 
     _SOURCE = (
         '{% from "components/department_picker.html" import department_picker %}'
@@ -232,7 +232,7 @@ class TestDepartmentPickerMacro:
 
 
 class TestStatusLabelMacro:
-    """NFR6.11 / A3: the state is text in 〔〕 with a border, not colour alone."""
+    """The state is text in 〔〕 with a border, not colour alone."""
 
     _SOURCE = '{% from "components/status_label.html" import status_label %}{{ status_label(text) }}'
 
@@ -267,11 +267,11 @@ def _list_screen_managers() -> dict[str, Mock]:
     from src.models.sharing import ListTab, TabbedList
 
     discussion = Mock()
-    # U6: 議論の一覧もタブ別（TabbedList）
+    # The discussion list is tabbed too (TabbedList)
     discussion.list_discussions.return_value = TabbedList(
         tab=ListTab.MINE, items=[], counts={"mine": 0, "shared": 0}
     )
-    # U7: アンケートの結果・テンプレートの一覧もタブ別（TabbedList）
+    # The survey result and template lists are tabbed too (TabbedList)
     execution = Mock()
     execution.list_surveys.return_value = TabbedList(
         tab=ListTab.MINE, items=[], counts={"mine": 0, "shared": 0}
@@ -294,7 +294,7 @@ def _title(html: str) -> str:
 
 
 class TestPageTitles:
-    """NFR6.10 / A7: the four list screens and M11 have distinct titles."""
+    """The four list screens and the not-found page have distinct titles."""
 
     def test_titles_are_distinct(self, test_app, login_as) -> None:
         paths = [
@@ -323,7 +323,7 @@ class TestPageTitles:
 
 
 class TestIsoDatetimeMacro:
-    """`<time datetime>` は、ブラウザーが読める ISO 8601 にする（日本時間への変換のため）。"""
+    """`<time datetime>` is ISO 8601 that the browser can read (for conversion to Japan time)."""
 
     SOURCE = (
         '{% from "components/datetime.html" import iso_datetime %}'

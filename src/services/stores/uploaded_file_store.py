@@ -1,9 +1,9 @@
-"""DynamoDB reads and writes of upload metadata (U5, BR5.1〜BR5.3).
+"""DynamoDB reads and writes of upload metadata.
 
 ``UploadedFiles`` (PK ``id``, TTL ``expires_at``). Reads are strongly
 consistent so a just-attached or just-detached file is never seen in its old
-state (NFR9.29). Attaching and detaching are single transactions of at most
-100 items (the ``TransactWriteItems`` limit, security-design.md §3):
+state. Attaching and detaching are single transactions of at most
+100 items (the ``TransactWriteItems`` limit):
 
 - attach: every item ``owner_sub = :owner AND attribute_not_exists(parent_id)
   AND expires_at > :now``; ``SET parent_type, parent_id, attached_at
@@ -11,7 +11,7 @@ state (NFR9.29). Attaching and detaching are single transactions of at most
 - detach: every item ``parent_type = :pt AND parent_id = :pid``;
   ``REMOVE parent_type, parent_id, attached_at SET expires_at = :original``
 
-Failures are classified (``reliability-design.md`` §4): a failed condition ->
+Failures are classified: a failed condition ->
 :class:`AttachConditionFailed`, ``TransactionConflict`` ->
 :class:`AttachConflict`, anything else -> :class:`UploadedFileStoreError`.
 Whether a user may attach or read a file is decided by ``FileAttachments``.
@@ -86,7 +86,7 @@ class UploadedFileStore:
         return self._file(item) if item else None
 
     def delete(self, file_id: str, parent_type: str, parent_id: str) -> None:
-        """Delete the metadata of a file attached to the given parent (U6 BR1.5).
+        """Delete the metadata of a file attached to the given parent.
 
         Raises:
             AttachConditionFailed: The file is not attached to that parent.
@@ -178,7 +178,7 @@ class UploadedFileStore:
         parent_id: str,
         now_epoch: int,
     ) -> None:
-        """Attach every file to the parent, or none (BR5.3).
+        """Attach every file to the parent, or none.
 
         Raises:
             ValueError: More than 100 files (a caller bug).
@@ -193,7 +193,7 @@ class UploadedFileStore:
                 "Update": {
                     "TableName": self.table_name,
                     "Key": {"id": {"S": file_id}},
-                    # attached_at: 後始末のスクリプトが保存の途中の議論を見分ける時刻
+                    # attached_at: when the cleanup script can tell a discussion is mid-save
                     "UpdateExpression": (
                         "SET parent_type = :pt, parent_id = :pid, attached_at = :now"
                         " REMOVE expires_at"

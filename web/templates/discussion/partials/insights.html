@@ -1,4 +1,4 @@
-<!-- インサイト一覧パーシャル -->
+<!-- Insight list partial -->
 {% from "components/dialog.html" import dialog %}
 <script>
     window.defaultCategories = {{ (default_categories|tojson|safe) if default_categories is defined and default_categories else '[]' }};
@@ -29,7 +29,7 @@
         ];
     }
 }">
-    <!-- 再生成ボタン（管理できる人だけ、U6 BR2.5） -->
+    <!-- Regenerate button (only for users who can manage) -->
     {%- set can_regenerate = discussion_id is defined and discussion_id and manageable is defined and manageable %}
     {% if can_regenerate %}
     <div class="mb-4 flex justify-end">
@@ -81,7 +81,7 @@
     </div>
     {% endif %}
 
-    <!-- 再生成ダイアログ（要求が成功したときだけ閉じる。失敗したら開いたまま。背景のクリックでは閉じない） -->
+    <!-- Regenerate dialog (closes only when the request succeeds; stays open on failure; not closed by a backdrop click) -->
     {% if can_regenerate %}
     {% call dialog("regenerate-insights-dialog", "インサイトカテゴリーを変更", close_on_success=True, panel_class="max-w-3xl") %}
 

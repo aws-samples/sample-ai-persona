@@ -1,10 +1,10 @@
 """
-議論関連のルーター
+Discussion router
 
-v1.0.0 U6: Router は判定しない。``request.state.principal`` を Manager に渡し、
-判定の例外（``*_NOT_FOUND``・``ACCESS_DENIED``・``LOOKUP_UNAVAILABLE``）は
-共通の例外ハンドラ（約束 C13）に任せる。議論の開始で参加者が読めなければ
-M12 の枠（``discussion/partials/conversation_stopped.html``）を返す。
+The Router decides nothing. It passes ``request.state.principal`` to the Manager and leaves
+the decision exceptions (``*_NOT_FOUND``, ``ACCESS_DENIED``, ``LOOKUP_UNAVAILABLE``) to
+the shared exception handler. If a participant cannot be read when a discussion starts,
+it returns the stop panel (``discussion/partials/conversation_stopped.html``).
 """
 
 import logging
@@ -64,9 +64,9 @@ from web.sanitize import render_markdown  # noqa: E402
 
 templates.env.filters["markdown"] = render_markdown
 
-# 表示用ヘルパーをテンプレートのグローバル関数として登録（persona.py と同様）。
-# country_service は ISO国コード→名前の純粋なデータ参照であり、表示ヘルパーとして
-# Router から直接利用する（アーキ規約「Router→Manager経由」の表示ヘルパー例外）。
+# Register display helpers as template global functions (same as persona.py).
+# country_service is a pure data lookup from ISO country code to name, so the Router uses it
+# directly as a display helper (the display-helper exception to the architecture rule "Router -> via Manager").
 from src.services import country_service  # noqa: E402
 from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
 from ._persona_avatar import persona_avatar_url  # noqa: E402
@@ -78,18 +78,18 @@ templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
 templates.env.globals["persona_avatar_url"] = persona_avatar_url
 templates.env.globals["model_display_name"] = display_name_for
 
-# スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
+# Thread pool executor (to run synchronous AI work asynchronously)
 executor = ThreadPoolExecutor(max_workers=8)
 
 #: The tab panel of the results page (``list_tabpanel``); tab switches and
 #: ``listReload`` target it and get only the panel content back.
 LIST_PANEL_ID = "discussion-list"
 
-#: Where the stop panel (M12) of a discussion leads back to.
+#: Where the stop panel of a discussion leads back to.
 _SETUP_URL = "/discussion/setup"
 
 
-# シングルトンマネージャーインスタンス（モジュールレベルで共有）
+# Singleton manager instances (shared at module level)
 _persona_manager = None
 _discussion_manager = None
 _agent_discussion_manager = None
@@ -98,7 +98,7 @@ _file_manager = None
 
 
 def get_persona_manager() -> PersonaManager:
-    """PersonaManagerのシングルトンインスタンスを取得"""
+    """Get the PersonaManager singleton instance."""
     global _persona_manager
     if _persona_manager is None:
         _persona_manager = PersonaManager()
@@ -106,7 +106,7 @@ def get_persona_manager() -> PersonaManager:
 
 
 def get_discussion_manager() -> DiscussionManager:
-    """DiscussionManagerのシングルトンインスタンスを取得"""
+    """Get the DiscussionManager singleton instance."""
     global _discussion_manager
     if _discussion_manager is None:
         _discussion_manager = DiscussionManager()
@@ -114,7 +114,7 @@ def get_discussion_manager() -> DiscussionManager:
 
 
 def get_file_manager() -> FileManager:
-    """FileManagerのシングルトンインスタンスを取得"""
+    """Get the FileManager singleton instance."""
     global _file_manager
     if _file_manager is None:
         _file_manager = FileManager()
@@ -122,7 +122,7 @@ def get_file_manager() -> FileManager:
 
 
 def get_agent_discussion_manager() -> AgentDiscussionManager:
-    """AgentDiscussionManagerのシングルトンインスタンスを取得"""
+    """Get the AgentDiscussionManager singleton instance."""
     global _agent_discussion_manager
     if _agent_discussion_manager is None:
         _agent_discussion_manager = AgentDiscussionManager()
@@ -130,7 +130,7 @@ def get_agent_discussion_manager() -> AgentDiscussionManager:
 
 
 def get_report_manager() -> ReportManager:
-    """ReportManagerのシングルトンインスタンスを取得"""
+    """Get the ReportManager singleton instance."""
     global _report_manager
     if _report_manager is None:
         _report_manager = ReportManager()
@@ -138,7 +138,7 @@ def get_report_manager() -> ReportManager:
 
 
 def _principal(request: Request) -> Principal:
-    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    """The signed-in user that ``AuthMiddleware`` put on the request."""
     principal: Principal = request.state.principal
     return principal
 
@@ -164,7 +164,7 @@ def _attachment(filename: str) -> str:
 
 
 def _conversation_stopped(request: Request) -> Response:
-    """M12: a participant can no longer be read; the setup form is kept."""
+    """Stop panel: a participant can no longer be read; the setup form is kept."""
     return mark_renderable(
         templates.TemplateResponse(
             request,
@@ -181,7 +181,7 @@ def _conversation_stopped(request: Request) -> Response:
 
 
 def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  # type: ignore[no-untyped-def]
-    """フォームデータからカテゴリー情報を解析"""
+    """Parse category info from form data."""
     categories = []
     index = 0
 
@@ -195,7 +195,7 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
         name = form_data.get(name_key, "").strip()
         description = form_data.get(desc_key, "").strip()
 
-        # 名前と説明が両方ある場合のみ追加
+        # Add only when both name and description are present
         if name and description:
             try:
                 category = InsightCategory(name=name, description=description)
@@ -205,14 +205,14 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
 
         index += 1
 
-    # カテゴリーが見つからない場合はNone（デフォルトを使用）
+    # None if no categories are found (the default is used)
     return categories if categories else None
 
 
 @router.get("/setup", response_class=HTMLResponse)
 async def discussion_setup_page(request: Request) -> Any:
-    """議論設定ページ（ペルソナ一覧は htmx で遅延ロード）"""
-    # 閉域対応 U5（BR5.1）: 一覧と既定の選択を推論の範囲に合わせる
+    """Discussion setup page (the persona list is lazy-loaded with htmx)."""
+    # Match the list and the default selection to the inference scope
     selectable_models = list_selectable_models(
         config.ENABLE_ADDITIONAL_PERSONA_MODELS, config.INFERENCE_SCOPE
     )
@@ -235,7 +235,7 @@ async def discussion_setup_page(request: Request) -> Any:
 async def upload_discussion_document(
     request: Request, file: UploadFile = File(...)
 ) -> Any:
-    """議論用ドキュメントをアップロード（利用者のキーに置き、24 時間で使えなくなる、BR5.1）"""
+    """Upload a discussion document (placed under the user's key and unusable after 24 hours)."""
     try:
         file_manager = get_file_manager()
         file_content = await file.read()
@@ -279,7 +279,7 @@ async def upload_discussion_document(
 
 @router.get("/result-partial/{discussion_id}", response_class=HTMLResponse)
 async def get_discussion_result_partial(request: Request, discussion_id: str) -> Any:
-    """議論結果パーシャルを取得（リアルタイム表示完了後に使用）。読める人だけ（BR2.4）"""
+    """Get the discussion result partial (used after real-time display finishes). Readable users only."""
     try:
         view = await _run(
             get_discussion_manager().get_discussion, _principal(request), discussion_id
@@ -309,9 +309,9 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
     )
 
 
-# AI を動かして保存するので、開始は CSRF の検査を受ける POST にする（NFR4.13）。
-# 画面は web/static/js/post-event-source.js で応答のストリームを読む。GET の SSE だと
-# 共有レポートの <img src> などから閲覧者の権限で始められてしまうため
+# This runs the AI and saves, so starting is a POST that goes through the CSRF check.
+# The screen reads the response stream with web/static/js/post-event-source.js. With a GET SSE,
+# an <img src> in a shared report could start it with the viewer's permissions
 @router.post("/stream")
 async def stream_discussion(
     request: Request,
@@ -350,7 +350,7 @@ async def stream_discussion(
         )
     except CodedError as e:
         if isinstance(e, ParticipantNotFoundError):
-            # M12: 読めない参加者を含む。理由は出さず、画面が枠を出す
+            # Includes an unreadable participant. No reason is given; the screen shows the panel
             return single(_sse({"type": "stopped"}))
         logger.warning("Discussion stream not started", exc_info=True)
         return single(
@@ -359,7 +359,7 @@ async def stream_discussion(
             )
         )
 
-    # カテゴリー情報を解析
+    # Parse category info
     categories = None
     if categories_json:
         try:
@@ -372,7 +372,7 @@ async def stream_discussion(
 
     doc_ids = [d.strip() for d in document_ids.split(",") if d.strip()] or None
 
-    # per-persona モデル選択を解析（URLエンコードしたJSON文字列1個で受ける）
+    # Parse per-persona model selection (received as one URL-encoded JSON string)
     persona_models = None
     if persona_models_json:
         try:
@@ -470,10 +470,10 @@ async def discussion_results_page(
     cursor: Optional[str] = None,
     append: bool = False,
 ) -> Any:
-    """議論・インタビュー結果の一覧（タブ別、M6、BR2.1）。
+    """List of discussion/interview results (per tab).
 
-    タブの切り替え・検索・絞り込み・読み直し（HX-Target が一覧部分）と
-    「もっと見る」には一覧部分だけを返す。member の tab=all は「自分のもの」。
+    Only the list part is returned for tab switching, search, filtering, reloading (HX-Target is the list part)
+    and "show more". For members, tab=all means "my own".
     """
     panel_only = request.headers.get("HX-Target") == LIST_PANEL_ID or append
     search_query = (search or "").strip()
@@ -531,7 +531,7 @@ async def start_discussion(
     memory_mode: str = Form("full"),
     document_ids: Optional[List[str]] = Form(None),
 ) -> Any:
-    """議論開始処理（htmx対応）"""
+    """Discussion start handler (htmx supported)."""
     if mode == "interview" or len(persona_ids) < 2:
         code = (
             ErrorCode.DISCUSSION_INTERVIEW_MODE_UNSUPPORTED
@@ -595,7 +595,7 @@ async def start_discussion(
                 )
 
             saved = await _run(_run_classic)
-        # 発言は本体の外にあるため、保存した議論を読む人として読み直して表示する
+        # The statements live outside the body, so re-read the saved discussion as the reader and show it
         view = await _run(get_discussion_manager().get_discussion, principal, saved.id)
     except CodedError as e:
         if isinstance(e, ParticipantNotFoundError):
@@ -603,15 +603,15 @@ async def start_discussion(
             return _conversation_stopped(request)
         logger.error("Failed to start discussion", exc_info=True)
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
-            # 他人の・期限切れの資料は、ないものと同じ 404 のトースト（BR5.3、BR5.4）
+            # Someone else's or expired material gives the same 404 toast as nonexistent
             return toast_response(e, status_code=404)
         if error_kind_of(e) is ErrorKind.FORBIDDEN:
             return toast_response(e, status_code=403)
         if is_correctable(e) and isinstance(
             e, (DiscussionManagerError, AgentDiscussionManagerError)
         ):
-            # 入力を直せば解決するエラー（トピック文字数・ペルソナ数等）は
-            # #discussion-result（フォーム自身の外側の専用領域）に表示する。
+            # Errors the user can fix by correcting input (topic length, persona count, etc.)
+            # are shown in #discussion-result (a dedicated area outside the form itself).
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
@@ -625,13 +625,13 @@ async def start_discussion(
                     status_code=400,
                 )
             )
-        # 再試行で解決しうるエラーは設定フォームを消さずトーストで通知する
+        # Errors that a retry can fix are shown as a toast without clearing the settings form
         return toast_response(
             e, default="議論の開始中にエラーが発生しました", status_code=500
         )
     except Exception as e:
-        # コードを持たない未知の例外は TRANSIENT 相当。本体を置換すると入力が
-        # 失われ、かつ非2xx本文は htmx がスワップしないため、トーストで通知する。
+        # An unknown exception with no code is treated like TRANSIENT. Replacing the body would
+        # lose the input, and htmx does not swap non-2xx bodies, so notify with a toast.
         logger.error("Failed to start discussion (unclassified)", exc_info=True)
         return toast_response(
             e, default="議論の開始中にエラーが発生しました", status_code=500
@@ -646,7 +646,7 @@ async def start_discussion(
 
 @router.get("/{discussion_id}/export")
 async def export_discussion(request: Request, discussion_id: str) -> Any:
-    """議論を Markdown でエクスポートする（読める人だけ、BR9.1）"""
+    """Export a discussion as Markdown (readable users only)."""
     filename, text = await _run(
         get_discussion_manager().export_discussion, _principal(request), discussion_id
     )
@@ -661,10 +661,10 @@ async def export_discussion(request: Request, discussion_id: str) -> Any:
 async def get_discussion_document(
     request: Request, discussion_id: str, document_id: str
 ) -> Any:
-    """議論の添付 1 つ（閉域対応 U4 BR3.5）。
+    """One attachment of a discussion.
 
-    議論を読めて、その議論の添付で、添付を読めるときだけ配る。公開は署名付き URL へ
-    302、閉域はアプリが流す。読めなければ共通の例外ハンドラが 404 で答え、S3 に触れない。
+    Served only when the discussion is readable, the attachment belongs to it, and the attachment is readable. Public mode redirects 302
+    to a signed URL; the closed network has the app stream it. If unreadable the shared exception handler answers 404 and S3 is not touched.
     """
     result = await _run(
         get_discussion_manager().deliver_document,
@@ -677,13 +677,13 @@ async def get_discussion_document(
 
 @router.get("/{discussion_id}", response_class=HTMLResponse)
 async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
-    """議論詳細ページ（インタビューを含む）。読める人だけ（BR2.4）、操作は管理できる人だけ"""
+    """Discussion detail page (including interviews). Readable users only; actions only for those who can manage."""
     from src.managers.settings_manager import SettingsManager
 
     principal = _principal(request)
     manager = get_discussion_manager()
     view = await _run(manager.get_discussion, principal, discussion_id)
-    # 添付はアプリのルートで開く（公開・閉域とも。閉域対応 U4 BR4.2）。署名はここで作らない
+    # Attachments are opened through an app route (both public and closed network). The signature is not made here
     servable = await _run(manager.servable_document_ids, principal, view)
     document_urls = {
         doc_id: f"/discussion/{quote(discussion_id, safe='')}/documents/"
@@ -714,7 +714,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
 
 @router.post("/{discussion_id}/regenerate-insights", response_class=HTMLResponse)
 async def regenerate_insights(request: Request, discussion_id: str) -> Any:
-    """インサイト再生成エンドポイント（htmx対応、管理できる人だけ、BR2.5）"""
+    """Insight regeneration endpoint (htmx supported, users who can manage only)."""
     discussion_manager = get_discussion_manager()
     try:
         form_data = await request.form()
@@ -728,8 +728,8 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
     except DiscussionManagerError as e:
         logger.error("Failed to regenerate insight", exc_info=True)
         if is_correctable(e):
-            # 入力を直せば解決するエラーは #insights-container（再生成フォームの
-            # 外側の専用領域）に表示する。カテゴリー入力はモーダル内の別要素で残る。
+            # Errors the user can fix by correcting input are shown in #insights-container (a dedicated area
+            # outside the regeneration form). The category input stays as a separate element in the modal.
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
@@ -743,14 +743,14 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
                     status_code=400,
                 )
             )
-        # 再試行で解決しうるエラーはインサイト表示を消さずトーストで通知する
+        # Errors that a retry can fix are shown as a toast without clearing the insight display
         return toast_response(
             e,
             default="インサイトの再生成中にエラーが発生しました",
             status_code=500,
         )
     except CodedError:
-        # 読めない（404）・管理できない（403）・ai:execute がない（403）は共通のハンドラ
+        # Unreadable (404), unmanageable (403) and missing ai:execute (403) go to the shared handler
         raise
     except Exception as e:
         logger.error("Failed to regenerate insight (unclassified)", exc_info=True)
@@ -775,7 +775,7 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
 
 @router.delete("/{discussion_id}", response_class=HTMLResponse)
 async def delete_discussion(request: Request, discussion_id: str) -> Any:
-    """議論削除処理（htmx対応、管理できる人だけ、BR1.5）"""
+    """Discussion deletion handler (htmx supported, users who can manage only)."""
     try:
         await _run(
             get_discussion_manager().delete_discussion,
@@ -803,7 +803,7 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
 
 @router.get("/insights/{discussion_id}", response_class=HTMLResponse)
 async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
-    """議論インサイト取得（htmx対応、読める人だけ）"""
+    """Get discussion insights (htmx supported, readable users only)."""
     try:
         view = await _run(
             get_discussion_manager().get_discussion, _principal(request), discussion_id
@@ -839,14 +839,14 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
 
 
 # =============================================================================
-# レポート関連エンドポイント
+# Report endpoints
 # =============================================================================
 
 
 def _data_agent_refusal(
     report_manager: ReportManager, principal: Principal
 ) -> StreamingResponse | None:
-    """One ``error`` event when the data agent may not be used (U3 BR3.7).
+    """One ``error`` event when the data agent may not be used.
 
     Checked before the stream starts, so the agent is never called; ``None``
     lets the request go on.
@@ -902,14 +902,14 @@ def _stream_agent_events(run: Callable[[Any], None], default: str) -> Any:
                 return
     exc = future.exception() if future.done() else None
     if exc is not None:
-        # 容量超過など種別が判る例外はカタログの文言を返す。診断情報はログにだけ残す
+        # Exceptions with a known kind, such as over capacity, return the catalog wording. Diagnostics go only to the log
         logger.error("Failed to generate report", exc_info=exc)
         yield _sse_error(user_message_for(exc, default=default))
         return
     yield _sse({"type": "done"})
 
 
-# AI を動かして保存するので、開始は CSRF の検査を受ける POST にする（NFR4.13）
+# This runs the AI and saves, so starting is a POST that goes through the CSRF check
 @router.post("/{discussion_id}/report/generate")
 async def generate_report_stream(
     request: Request,
@@ -917,7 +917,7 @@ async def generate_report_stream(
     template_type: str = Form("summary"),
     custom_prompt: Optional[str] = Form(None),
 ) -> Any:
-    """レポートをSSEストリーミングで生成する（読める人、BR4.1）"""
+    """Generate a report with SSE streaming (readable users)."""
     principal = _principal(request)
     if template_type not in REPORT_TEMPLATE_TYPES:
         return StreamingResponse(
@@ -971,10 +971,10 @@ async def generate_followup_report_stream(
     followup_prompt: str = Form(...),
     previous_report: str = Form(...),
 ) -> Any:
-    """フォローアップ分析をPOST SSEストリーミングで生成する。
+    """Generate a follow-up analysis with POST SSE streaming.
 
-    短期記憶のセッションは議論と利用者の組からサーバーが決める（BR4.3。画面から
-    送られたセッション ID は使わない）。
+    The short-term memory session is decided by the server from the pair of discussion and user (the
+    session ID sent from the screen is not used).
     """
     principal = _principal(request)
     report_manager = get_report_manager()
@@ -1003,7 +1003,7 @@ async def save_report(
     content: str = Form(...),
     custom_prompt: Optional[str] = Form(None),
 ) -> Any:
-    """プレビュー済みレポートを保存する（管理できる人、ID はサーバーが振る、BR4.2、BR4.4）"""
+    """Save a previewed report (users who can manage; the ID is assigned by the server)."""
     from src.managers.settings_manager import SettingsManager
 
     principal = _principal(request)
@@ -1082,7 +1082,7 @@ async def update_report_content(
     report_id: str,
     content: str = Form(...),
 ) -> Any:
-    """レポート内容を更新する（管理できる人だけ）"""
+    """Update report content (users who can manage only)."""
     from markupsafe import escape
 
     try:
@@ -1097,7 +1097,7 @@ async def update_report_content(
         if error_kind_of(e) in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN):
             raise
         logger.warning("Failed to update report", exc_info=True)
-        # 再試行で直る失敗はトースト（画面を書き換えない）。直せる失敗は印を付けて本文を出す
+        # Failures a retry fixes get a toast (the screen is not rewritten). Fixable failures are marked and the body is shown
         if not is_correctable(e):
             return toast_response(e)
         message = user_message_for(e, default="更新に失敗しました")
@@ -1118,7 +1118,7 @@ async def get_report(
     discussion_id: str,
     report_id: str,
 ) -> Any:
-    """レポート内容を取得する（読める人だけ）"""
+    """Get report content (readable users only)."""
     principal = _principal(request)
     report_manager = get_report_manager()
     report = await _run(report_manager.get_report, principal, discussion_id, report_id)
@@ -1142,7 +1142,7 @@ async def export_report(
     report_id: str,
     format: str = "md",
 ) -> Any:
-    """レポートをファイルエクスポートする（読める人だけ）"""
+    """Export a report as a file (readable users only)."""
     filename, content = await _run(
         get_report_manager().export_report,
         _principal(request),
@@ -1163,7 +1163,7 @@ async def delete_report(
     discussion_id: str,
     report_id: str,
 ) -> Any:
-    """レポートを削除する（管理できる人だけ）"""
+    """Delete a report (users who can manage only)."""
     from markupsafe import escape
 
     try:
@@ -1177,7 +1177,7 @@ async def delete_report(
         if error_kind_of(e) in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN):
             raise
         logger.error("Failed to delete report", exc_info=True)
-        # 再試行で直る失敗はトースト（行を消さない）。直せる失敗は印を付けて本文を出す
+        # Failures a retry fixes get a toast (the row is not removed). Fixable failures are marked and the body is shown
         if not is_correctable(e):
             return toast_response(e)
         message = user_message_for(e, default="レポートの削除に失敗しました")

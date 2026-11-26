@@ -1,7 +1,8 @@
-"""AgentCore Memory の Summary / Semantic 戦略（src/services/memory/*_strategy.py）。
+"""AgentCore Memory Summary / Semantic strategies (src/services/memory/*_strategy.py).
 
-本物の MemoryClient が持つ bedrock-agentcore クライアントに botocore Stubber を当て、
-送るリクエストの形と、応答・エラーの扱いを確かめる。実 AWS には触れない。
+A botocore Stubber is attached to the bedrock-agentcore client held by the real
+MemoryClient, to check the request shape and how responses and errors are handled.
+It does not touch real AWS.
 """
 
 from datetime import datetime, timezone
@@ -148,8 +149,8 @@ def test_retrieve_with_no_records_is_empty(strategy, stub):
 
 
 def test_retrieve_api_error_yields_no_memories(strategy, stub):
-    # MemoryClient.retrieve_memories が ClientError を握りつぶして [] を返すため、
-    # 戦略側の ClientError 分岐には届かない
+    # MemoryClient.retrieve_memories swallows ClientError and returns [], so
+    # it never reaches the strategy's ClientError branch
     _error(stub, "retrieve_memory_records", "ThrottledException")
     assert strategy.retrieve("p1", "q") == []
 
@@ -336,7 +337,7 @@ def test_delete_removes_a_record_of_the_actor(strategy, stub):
 
 @pytest.mark.parametrize("other", ["p2", "p10"])
 def test_delete_refuses_a_record_of_another_actor(strategy, stub, other):
-    # delete_memory_record を積んでいないので、呼ばれれば Stubber が失敗する
+    # delete_memory_record is not queued, so a call would make the Stubber fail
     stub.add_response(
         "get_memory_record", _record(strategy, rid("r1"), _prefix(strategy, other))
     )

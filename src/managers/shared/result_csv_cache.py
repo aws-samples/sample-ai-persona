@@ -1,12 +1,12 @@
-"""The per-process cache of survey result CSVs (U7, NFR2.22, BR2.5).
+"""The per-process cache of survey result CSVs.
 
 A pure helper with no decision in it, so it lives in ``shared/``: both
 ``SurveyAnalysisManager`` (reads) and ``SurveyExecutionManager`` (evicts on
 delete) use the one instance of the process (:func:`shared_result_cache`).
-Callers only touch it after the authorization check (BR2.4, BR2.5); the key is
+Callers only touch it after the authorization check; the key is
 the survey ID and the bytes are the same for every reader.
 
-Limits (``performance-design.md`` §2): 20 entries, 256MB in total, 32MB per
+Limits: 20 entries, 256MB in total, 32MB per
 entry (larger CSVs are not kept), 300 seconds. When a limit is reached the
 least recently used entry goes first. One lock guards every operation; two
 threads may still read the same CSV from S3 at once (no single-flight), which
@@ -85,7 +85,7 @@ class ResultCsvCache:
                 self._drop(oldest)
 
     def evict(self, survey_id: str) -> None:
-        """Forget ``survey_id`` (its survey was deleted, BR1.8)."""
+        """Forget ``survey_id`` (its survey was deleted)."""
         with self._lock:
             if survey_id in self._entries:
                 self._drop(survey_id)

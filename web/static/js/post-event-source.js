@@ -1,16 +1,12 @@
 /**
- * PostEventSource: EventSource と同じ使い方で、POST の応答に流れる SSE を読む。
+ * PostEventSource: reads SSE sent in a POST response, used like EventSource.
  *
- * AI を動かして保存する入口（議論・レポートの生成）は、CSRF の検査を受ける POST で
- * 始める（NFR4.13）。GET の EventSource だと、同じオリジンに置かれた <img src> や
- * リンクの遷移からも閲覧者の権限で始められてしまうため。
+ * Entry points that run AI and save the result (discussion and report generation) start with a POST that passes the CSRF check. With a GET EventSource, an <img src> or a link navigation from the same origin could start them with the viewer's privileges.
  *
- * - 本文は application/x-www-form-urlencoded、X-Requested-With を付けて送る
- *   （web/middleware.py の CSRF 検査を通る）
- * - EventSource と違い、切れても自動で再接続しない（再接続すると処理がもう一度走る）
- * - 応答が 2xx の text/event-stream でなければ（CSRF の拒否、ログイン切れの転送など）
- *   onerror を呼んで閉じる。ストリームが終わったときも onerror を呼んで閉じる
- *   （EventSource と同じ。呼び出し側は完了の印を見て無視する）
+ * - The body is application/x-www-form-urlencoded and X-Requested-With is set (passes the CSRF check in web/middleware.py)
+ * - Unlike EventSource, it does not reconnect automatically on disconnect (reconnecting would run the work again)
+ * - If the response is not a 2xx text/event-stream (CSRF rejection, redirect on login expiry, and so on), it calls onerror and closes. It also calls onerror and closes when the stream ends
+ *   (same as EventSource; callers ignore it after seeing the completion marker)
  */
 (function () {
     'use strict';
@@ -106,7 +102,7 @@
 
         function handleLine(line) {
             if (line === '') { dispatch(); return; }
-            if (line.charAt(0) === ':') return;  // コメント行
+            if (line.charAt(0) === ':') return;  // Comment line
             var colon = line.indexOf(':');
             var field = colon === -1 ? line : line.slice(0, colon);
             var value = colon === -1 ? '' : line.slice(colon + 1);

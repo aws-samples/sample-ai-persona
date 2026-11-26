@@ -1,18 +1,17 @@
-"""
-Dataset Manager - データセットのビジネスロジック
+"""Dataset Manager: business logic for datasets.
 
-v1.0.0 U7 (``functional-design/rules.md``):
+Rules:
 
-- BR3.1 / BR3.3: every method (the settings screen) first checks
+- Every method (the settings screen) first checks
   ``settings:manage``; others get ``SETTINGS_NOT_FOUND`` (the same 404 as a
   missing page) and nothing is read or written.
-- BR1.5: an edit writes only the changed columns, so the usage scope stays.
-- BR5.2: the usage scope changes with ``ADD`` / ``DELETE``; only added
+- An edit writes only the changed columns, so the usage scope stays.
+- The usage scope changes with ``ADD`` / ``DELETE``; only added
   departments must exist. ``asset.scope_changed`` is logged.
-- BR5.6: persona-dedicated datasets are not organization assets; the settings
+- Persona-dedicated datasets are not organization assets; the settings
   screen neither lists nor changes them.
 
-Members see the datasets they may use through ``PersonaManager`` (U5).
+Members see the datasets they may use through ``PersonaManager``.
 """
 
 import logging
@@ -50,7 +49,7 @@ class DatasetManagerError(CodedError):
 
 
 class DatasetManager:
-    """データセット管理マネージャー（設定画面、admin だけ）"""
+    """Dataset management Manager (settings screen, admin only)"""
 
     def __init__(
         self,
@@ -66,7 +65,7 @@ class DatasetManager:
             survey_batch_service: Batch service (the singleton when omitted).
             dataset_store: Dataset records (the singleton when omitted).
             s3_service: The CSV files (``None`` without S3: local files).
-            departments: The per-task department copy (scope choices, C4).
+            departments: The per-task department copy (scope choices).
             binding_store: Persona bindings, removed with a deleted dataset
                 (the singleton on first use when omitted).
         """
@@ -105,7 +104,7 @@ class DatasetManager:
         self, principal: Principal, file_content: bytes, sample_rows: int = 100
     ) -> tuple[List[DatasetColumn], int]:
         """
-        CSVファイルからスキーマを解析
+        Parse the schema from a CSV file
 
         Returns:
             (columns, row_count)
@@ -116,9 +115,10 @@ class DatasetManager:
     def _analyze_schema(
         self, file_content: bytes, sample_rows: int = 100
     ) -> tuple[List[DatasetColumn], int]:
-        # ヘッダーの空・重複は DuckDB read_csv_auto がリネームしてクエリの列名と
-        # 食い違うため、アップロードの時点で弾く。文字コードの誤りはそのまま上げる
-        # （UnicodeDecodeError も ValueError の仲間なので先に分ける）
+        # Empty or duplicate headers are renamed by DuckDB read_csv_auto and then
+        # disagree with the query's column names, so they are rejected at upload.
+        # Encoding errors are raised as they are (UnicodeDecodeError is also a kind
+        # of ValueError, so it is separated first)
         try:
             return analyze_csv_schema(file_content, sample_rows)
         except UnicodeDecodeError:
@@ -139,25 +139,25 @@ class DatasetManager:
         columns: Optional[List[DatasetColumn]] = None,
     ) -> Dataset:
         """
-        CSVファイルをアップロードしてデータセットを作成（利用範囲は admin だけ）
+        Upload a CSV file and create a dataset (the usage scope starts as admin only)
         """
         self._require_manage(principal)
-        # スキーマ解析（columnsが指定されていない場合）
+        # Parse the schema (when columns are not given)
         if columns is None:
             columns, row_count = self._analyze_schema(file_content)
         else:
             _, row_count = self._analyze_schema(file_content)
 
-        # S3にアップロード。key は dataset id ベースの ASCII に正規化する
-        # （元ファイル名は日本語・空白を含みうるため key に埋めない。表示名は
-        # Dataset.name / metadata が保持する）。
+        # Upload to S3. The key is normalized to ASCII based on the dataset id
+        # (the original file name may contain Japanese or spaces, so it is not put in
+        # the key; the display name is kept in Dataset.name / metadata).
         file_id = str(uuid.uuid4())
         s3_key = f"datasets/{file_id}.csv"
 
         if self.s3_service:
             s3_path = self.s3_service.upload_file(file_content, s3_key)
         else:
-            # ローカルストレージにフォールバック
+            # Fall back to local storage
             from pathlib import Path
 
             local_dir = Path("datasets")
@@ -179,7 +179,7 @@ class DatasetManager:
         return dataset
 
     def get_datasets(self, principal: Principal) -> ScopedAssets[Dataset]:
-        """組織資産のデータセットと利用範囲（ペルソナ専用を除く、BR5.6）"""
+        """Organization-asset datasets and their usage scope (persona-dedicated ones excluded)"""
         self._require_manage(principal)
         datasets = self._datasets.list_org_assets()
         departments = self._department_directory.list_all() if datasets else []
@@ -192,7 +192,7 @@ class DatasetManager:
         )
 
     def get_dataset(self, principal: Principal, dataset_id: str) -> Optional[Dataset]:
-        """IDで組織資産のデータセットを取得（ペルソナ専用は None）"""
+        """Get an organization-asset dataset by ID (None for persona-dedicated)"""
         self._require_manage(principal)
         return self._org_dataset(dataset_id)
 
@@ -211,7 +211,7 @@ class DatasetManager:
         notes: Optional[str] = None,
         columns: Optional[List[DatasetColumn]] = None,
     ) -> Optional[Dataset]:
-        """変える列だけを書く（利用範囲は消さない、BR1.5）。見つからなければ None"""
+        """Write only the changed columns (the usage scope is kept). None if not found"""
         self._require_manage(principal)
         if self._org_dataset(dataset_id) is None:
             return None
@@ -228,24 +228,24 @@ class DatasetManager:
         return self._org_dataset(dataset_id)
 
     def delete_dataset(self, principal: Principal, dataset_id: str) -> bool:
-        """データセットを削除（ペルソナ専用は対象外）"""
+        """Delete a dataset (persona-dedicated ones are not targets)"""
         self._require_manage(principal)
         dataset = self._org_dataset(dataset_id)
         if not dataset:
             return False
 
-        # S3からファイル削除
+        # Delete the file from S3
         if self.s3_service and dataset.s3_path.startswith("s3://"):
             try:
                 self.s3_service.delete_file(dataset.s3_path)
             except Exception as e:
                 logger.warning("Failed to delete S3 file: %s", type(e).__name__)
 
-        # DB削除
+        # Delete from the DB
         self._datasets.delete(dataset_id)
         logger.info("Dataset deleted: %s", dataset_id)
 
-        # ペルソナとの紐付けを削除（残っても本体がないため読むときに飛ばされる）
+        # Delete the persona bindings (leftovers are skipped on read because the dataset itself is gone)
         try:
             self._bindings.delete_for_target(dataset_id, dataset_target_key(dataset_id))
         except PersonaBindingStoreError as e:
@@ -256,10 +256,10 @@ class DatasetManager:
             )
         return True
 
-    # --- 利用範囲（BR5.2） ---
+    # --- Usage scope ---
 
     def scope_dialog(self, principal: Principal, dataset_id: str) -> AssetScopeDialog:
-        """What the usage-scope dialog shows (M10).
+        """What the usage-scope dialog shows.
 
         Raises:
             CodedError: ``DATASET_NOT_FOUND`` (missing or persona-dedicated).
@@ -281,7 +281,7 @@ class DatasetManager:
     def update_scope(
         self, principal: Principal, dataset_id: str, change: AssetScopeChange
     ) -> Dataset:
-        """Change the usage scope with ``ADD`` / ``DELETE`` (BR5.2).
+        """Change the usage scope with ``ADD`` / ``DELETE``.
 
         Raises:
             CodedError: ``DATASET_NOT_FOUND`` (missing or persona-dedicated) or
@@ -315,6 +315,6 @@ class DatasetManager:
             )
         return dataset
 
-    # 紐付けの 5 メソッド（保存・ペルソナごとの一覧・削除・一括設定・プレビュー）は
-    # U5 で PersonaManager へ移した
-    # （ADR-007。紐付けの判定はペルソナの読み書きの判定と一緒に行うため）。
+    # The five binding methods (save, list per persona, delete, bulk set, preview)
+    # were moved to PersonaManager, because the binding decision is made together with
+    # the persona's read/write decision.

@@ -8,11 +8,11 @@ import { EdgeStack } from './edge-stack';
 
 export interface AIPersonaStageProps extends StageProps {
   parameter: AppParameter;
-  /** デプロイ先のアカウント。省略時は parameter.env.account。 */
+  /** Target account. Defaults to parameter.env.account. */
   account?: string;
   /**
-   * この Stage のモード（既定 public）。Stage を作る側（createDevStage / createClosedDevStage）が
-   * 決め、Stage はコンテキストの deploymentMode ではなくこの値で組み立てを変える（U1 閉域、BR1.2）。
+   * Mode of this Stage (default public). The caller (createDevStage / createClosedDevStage)
+   * decides it, and the Stage builds from this value rather than the deploymentMode context.
    */
   deploymentMode?: DeploymentMode;
 }
@@ -24,24 +24,24 @@ const EDGE_REGION = 'us-east-1';
 const CLOSED_INFERENCE_SCOPE_CONTEXT = 'closedInferenceScope';
 
 /**
- * v1.0.0 の Stage（FR9.1、ADR-001）。
+ * The v1.0.0 Stage.
  *
- * - 公開（deploymentMode=public、AIPersonaDev）: Data・App・Edge の 3 スタック。依存は App → Data と
- *   App → Edge だけ
- * - 閉域（deploymentMode=closed、AIPersonaDevClosed。U1 閉域、BR2.1）: Data・App の 2 スタック。
- *   CloudFront と WAF を使わないため Edge を作らず、App は Data にだけ依存する
+ * - Public (deploymentMode=public, AIPersonaDev): three stacks, Data, App and Edge. The only
+ *   dependencies are App -> Data and App -> Edge.
+ * - Closed (deploymentMode=closed, AIPersonaDevClosed): two stacks, Data and App. It uses no
+ *   CloudFront or WAF, so there is no Edge and App depends on Data only.
  *
- * 設定は parameters.ts を既定にし、コンテキスト（-c region=... / -c appDesiredCount=... /
- * -c enableMcpGateway=...）で上書きできる。モードの解決と閉域のパラメータの検査は
- * DeploymentProfile（deployment-profile.ts）が行い、synth 時に決められない形（MCP Gateway・
- * 台数の範囲外・閉域のパラメータの誤り）は synth でエラーにする。公開の Stage に
- * -c deploymentMode=closed を渡すとエラー（閉域は別の Stage で作る）。v0 のスタックとは
- * 名前・エクスポート名が重ならない。
+ * Settings default to parameters.ts and can be overridden by context (-c region=... /
+ * -c appDesiredCount=... / -c enableMcpGateway=...). DeploymentProfile (deployment-profile.ts)
+ * resolves the mode and validates closed parameters; values that cannot be decided at synth time
+ * (MCP Gateway, out-of-range counts, invalid closed parameters) fail synth. Passing
+ * -c deploymentMode=closed to the public Stage is an error (the closed one is a separate Stage).
+ * Names and export names do not overlap with the v0 stacks.
  */
 export class AIPersonaStage extends Stage {
   public readonly profile: ResolvedProfile;
   public readonly data: DataStack;
-  /** 公開の Stage だけにある（閉域は Edge を作らない）。 */
+  /** Only in the public Stage (the closed Stage has no Edge). */
   public readonly edge?: EdgeStack;
   public readonly app: AppStack;
 
@@ -50,7 +50,7 @@ export class AIPersonaStage extends Stage {
 
     const { parameter } = props;
     const account = props.account ?? parameter.env?.account;
-    // deploy.sh --region は -c region=<リージョン> で渡す（bootstrap・出力の取得と同じリージョンにする）
+    // deploy.sh --region is passed as -c region=<region> (same region as bootstrap and output lookup)
     const region =
       (this.node.tryGetContext('region') as string | undefined) ??
       parameter.env?.region ??
@@ -61,10 +61,10 @@ export class AIPersonaStage extends Stage {
       region,
       closed: parameter.closed,
       enableMcpGateway: this.mcpGatewayEnabled(parameter),
-      // U3: the closed profile rejects these two (BR5.4, BR5.5); the public one ignores them
+      // The closed profile rejects these two; the public one ignores them
       enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels,
       dataAgentRuntimeArn: parameter.dataAgentRuntimeArn,
-      // U5: 推論の範囲はこの Stage のコンテキスト（deploy.sh --inference-scope）が parameters.ts より優先（BR1.1）
+      // The Stage context (deploy.sh --inference-scope) takes precedence over parameters.ts for the inference scope
       inferenceScope: this.resolveInferenceScope(props, parameter),
       bedrockModelId: parameter.bedrockModelId,
       agentModelId: parameter.agentModelId,
@@ -109,8 +109,8 @@ export class AIPersonaStage extends Stage {
 
   /**
    * The Stage's mode: the value the Stage was built with. The public Stage rejects
-   * `-c deploymentMode=closed` (BR1.2) and passes any other context value on to the profile,
-   * which rejects values other than public and closed (BR1.4). The closed Stage does not
+   * `-c deploymentMode=closed` and passes any other context value on to the profile,
+   * which rejects values other than public and closed. The closed Stage does not
    * read the context.
    */
   private resolveDeploymentMode(props: AIPersonaStageProps, parameter: AppParameter): string {

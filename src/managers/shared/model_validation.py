@@ -1,9 +1,9 @@
-"""
-モデル選択バリデーションの共通ユーティリティ
+"""Shared utilities for model selection validation.
 
-AgentDiscussionManager, InterviewManager から共通利用される
-「選択されたmodel_idが利用可能か検証する」「未選択ペルソナに環境既定モデルを
-補完する」「ドキュメント合計サイズが選択モデルの上限を超えないか検証する」ロジック。
+Used by AgentDiscussionManager and InterviewManager: check that the selected
+model_id is available, fill personas without a selection with the
+environment default model, and check that the total document size stays
+within the selected model's limit.
 """
 
 from typing import Callable, Dict, Iterable, Mapping, Optional, Type
@@ -14,7 +14,7 @@ from ...models.model_registry import ModelSpec, models_in_scope, resolve_model_s
 
 
 def _is_accepted(model_id: str) -> bool:
-    """BR4.3: a model of the current scope's list, or the environment's default model."""
+    """A model of the current scope's list, or the environment's default model."""
     if model_id == config.AGENT_MODEL_ID:
         return True
     return any(
@@ -23,7 +23,7 @@ def _is_accepted(model_id: str) -> bool:
 
 
 def _called_spec(model_id: str) -> ModelSpec:
-    """BR4.4: the spec of the model actually called (after reading it for the scope)."""
+    """The spec of the model actually called (after reading it for the scope)."""
     return resolve_model_spec(model_id, config.INFERENCE_SCOPE, config.AGENT_MODEL_ID)
 
 
@@ -41,18 +41,19 @@ def validate_model_selection(
         "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled"
     ),
 ) -> None:
-    """選択されたmodel_idが利用可能か検証する。
+    """Check that the selected model_ids are available.
 
-    未対応のmodel_idは unsupported_code、追加ペルソナベースモデルだが
-    ENABLE_ADDITIONAL_PERSONA_MODELS無効時は disabled_code で例外を送出する。
+    An unsupported model_id raises ``unsupported_code``; an additional-persona
+    base model while ENABLE_ADDITIONAL_PERSONA_MODELS is off raises
+    ``disabled_code``.
 
     Args:
-        model_ids: 検証対象の {識別子: model_id} マップ（Noneは既定モデルとしてスキップ）
-        error_cls: 送出する例外クラス（呼び出し元のドメイン例外）
-        unsupported_code: 未対応model_id時のErrorCode
-        disabled_code: 追加ペルソナベースモデル無効時のErrorCode
-        unsupported_message: (identifier, model_id) -> ログ用メッセージ
-        disabled_message: model_id -> ログ用メッセージ
+        model_ids: {identifier: model_id} map to check (None means the default model; skipped).
+        error_cls: Exception class to raise (the caller's domain exception).
+        unsupported_code: ErrorCode for an unsupported model_id.
+        disabled_code: ErrorCode when additional-persona base models are disabled.
+        unsupported_message: (identifier, model_id) -> log message.
+        disabled_message: model_id -> log message.
     """
     if not model_ids:
         return
@@ -76,22 +77,21 @@ def resolve_effective_persona_models(
     persona_ids: Iterable[str],
     persona_models: Optional[Mapping[str, Optional[str]]],
 ) -> Dict[str, str]:
-    """未選択のペルソナにはconfig.AGENT_MODEL_ID（環境既定モデル）を補完する。
+    """Fill personas without a selection with config.AGENT_MODEL_ID (the environment default).
 
-    環境既定モデル（config.AGENT_MODEL_ID）はGemma4等のMantle系モデルに設定されうるため、
-    添付種別・サイズ検証は「明示的に選ばれたモデル」だけでなく実際に呼び出されるモデルを
-    対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
-    Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
+    The environment default may be set to a Mantle-family model such as Gemma4,
+    so attachment type/size checks must cover the model actually called, not only
+    explicitly chosen ones (skipping the check when persona_models is None would
+    let a Mantle-family default bypass the size and type limits).
 
     Args:
-        persona_ids: 対象ペルソナID群（discussionはpersona_agent、interviewは
-            session.participantsから呼び出し元がpersona_idのリストに変換して渡す）
-        persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
+        persona_ids: Target persona IDs (discussion passes persona_agent; interview
+            converts session.participants to a persona_id list).
+        persona_models: persona_id -> model_id map (default model if omitted).
 
     Returns:
-        persona_modelsの内容を保持しつつ、persona_idsに含まれる未選択分を補完したマップ
-        （persona_modelsに残る他のキーは変更しない。呼び出し元が明示的に選んだ値を
-        誤って落とさないため、persona_idsだけから作り直すのではなくコピーに補完する）
+        A copy of persona_models with the missing persona_ids filled in. Other
+        keys in persona_models are kept so explicit choices are never dropped.
     """
     resolved: Dict[str, str] = dict(persona_models or {})  # type: ignore[arg-type]
     for persona_id in persona_ids:
@@ -112,17 +112,18 @@ def validate_document_size_for_models(
         )
     ),
 ) -> None:
-    """選択モデルのmax_request_bytes（Gemma4等）に対しドキュメント合計サイズを検証する。
+    """Check the total document size against the selected model's max_request_bytes (Gemma4 etc.).
 
-    base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
+    The limit is the effective one after allowing for base64 overhead (about 4/3).
 
     Args:
-        total_size: 検証対象のドキュメント合計サイズ（バイト。合計方法は呼び出し元に委ねる。
-            discussionは新規添付のみ、interviewはセッション既存分も合算する）
-        persona_models: 検証対象の {persona_id: model_id} マップ
-        error_cls: 送出する例外クラス（呼び出し元のドメイン例外）
-        too_large_code: サイズ超過時のErrorCode
-        message: (model_id, total_size, effective_max) -> ログ用メッセージ
+        total_size: Total document size in bytes (how it is summed is up to the
+            caller: discussion counts new attachments only, interview adds the
+            session's existing ones).
+        persona_models: {persona_id: model_id} map to check.
+        error_cls: Exception class to raise (the caller's domain exception).
+        too_large_code: ErrorCode when the size is exceeded.
+        message: (model_id, total_size, effective_max) -> log message.
     """
     if not persona_models or total_size == 0:
         return

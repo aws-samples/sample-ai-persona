@@ -1,4 +1,4 @@
-"""Navigation menus (C1, WF1, NFR6.2, NFR6.3, B1-B3)."""
+"""Navigation menus."""
 
 from typing import Any
 
@@ -122,13 +122,13 @@ def test_base_page_has_no_axe_violations(nav: UiHarness) -> None:
 
 
 def test_admin_navigation_has_settings(nav: UiHarness) -> None:
-    """U7 BR3.1: 「設定」は admin のナビゲーションにだけある"""
+    """The Settings link appears only in the admin navigation."""
     assert nav.page.locator("[data-testid='nav-settings']").count() == 1
     assert nav.page.locator("[data-testid='nav-settings-mobile']").count() == 1
 
 
 def test_member_navigation_has_no_settings(ui: UiHarness, test_app: Any) -> None:
-    """U7 BR3.1、AC5.2.1: member のナビゲーション（広い画面・狭い画面）に「設定」がない"""
+    """The member navigation (wide and narrow screens) has no Settings link."""
     from fastapi.testclient import TestClient
 
     from tests.conftest import MEMBER_A

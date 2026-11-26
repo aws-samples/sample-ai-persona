@@ -1,10 +1,9 @@
 {#
-  カスタムペルソナデータの一覧（U7 BR4.1・BR4.2、M10）。
-  引数:
-    listing ... src/models/custom_persona_data.py の PersonaDataListing
-                （custom は使えるもの。admin は全件。manageable は admin か。
-                 scope_labels は admin のときの利用範囲の部署名）
-  削除と利用範囲は admin だけ。URL は ID（/survey/persona-data/custom/{id}/...）。
+  List of custom persona data.
+  Arguments:
+    listing ... PersonaDataListing from src/models/custom_persona_data.py
+                (custom holds the usable ones; admins see all. manageable is whether the user is an admin. scope_labels holds the department names of the usage scope, for admins)
+  Deletion and usage scope are admin-only. URLs use the ID (/survey/persona-data/custom/{id}/...).
 #}
 {%- set records = listing.custom if listing else [] -%}
 {% if records %}

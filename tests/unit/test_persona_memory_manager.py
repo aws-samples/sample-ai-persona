@@ -1,4 +1,4 @@
-"""PersonaMemoryManager の単体テスト"""
+"""Unit tests for PersonaMemoryManager."""
 
 from datetime import datetime
 from typing import Any
@@ -26,7 +26,7 @@ from tests.conftest import ADMIN, MEMBER_A, MEMBER_B
 from tests.log_helpers import LogCapture
 
 
-#: The persona's owner (U5: the memory screen is for managers only, BR4.1)
+#: The persona's owner (the memory screen is for managers only)
 OWNER = MEMBER_A.principal()
 
 #: AgentCore Memory IDs for the Stubber cases (the API needs 12+ / 40+ chars)
@@ -130,7 +130,7 @@ def manager(mock_db, mock_memory_service):
 
 @pytest.mark.unit
 class TestAddKnowledge:
-    """add_knowledge のテスト"""
+    """Tests for add_knowledge."""
 
     def test_success(self, manager, mock_memory_service):
         result = manager.add_knowledge(OWNER, "p1", "好きな食べ物", "ラーメン")
@@ -184,7 +184,7 @@ class TestAddKnowledge:
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )
-        # _memory_service_resolved=True なので service_factory は呼ばれない
+        # _memory_service_resolved=True, so service_factory is not called
         with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_FEATURE_DISABLED):
             mgr.add_knowledge(OWNER, "p1", "topic", "content")
 
@@ -203,7 +203,7 @@ class TestAddKnowledge:
 
 @pytest.mark.unit
 class TestGetMemories:
-    """get_memories のテスト"""
+    """Tests for get_memories."""
 
     def test_success_with_memories(self, manager, mock_memory_service):
         entries = [
@@ -293,12 +293,12 @@ class TestGetMemories:
 
 @pytest.mark.unit
 class TestDeleteMemory:
-    """delete_memory のテスト"""
+    """Tests for delete_memory."""
 
     def test_success(self, manager, mock_memory_service):
         result = manager.delete_memory(OWNER, "p1", "mem-1")
         assert result is True
-        # U5 R-01: the record's owner is checked before deleting it
+        # the record's owner is checked before deleting it
         mock_memory_service.delete_owned_memory.assert_called_once_with(
             actor_id="p1", memory_id="mem-1"
         )
@@ -379,7 +379,7 @@ class TestDeleteMemory:
 
 @pytest.mark.unit
 class TestDeleteAllMemories:
-    """delete_all_memories のテスト"""
+    """Tests for delete_all_memories."""
 
     def test_success(self, manager, mock_memory_service):
         entries = [
@@ -444,7 +444,7 @@ class TestDeleteAllMemories:
 
 @pytest.mark.unit
 class TestSafeGetMemories:
-    """safe_get_memories のテスト"""
+    """Tests for safe_get_memories."""
 
     def test_success(self, manager, mock_memory_service):
         entries = [
@@ -478,7 +478,7 @@ class TestSafeGetMemories:
 
 @pytest.mark.unit
 class TestParseTopicContent:
-    """_parse_topic_content のテスト"""
+    """Tests for _parse_topic_content."""
 
     def test_valid_topic(self, manager):
         content = '<topic name="好きな食べ物">ラーメンが好き</topic>'
@@ -497,7 +497,7 @@ class TestParseTopicContent:
 
 
 # =============================================================================
-# U5: メモリ画面は管理できる人だけ（BR4.1、AC4.2.4、NFR1.23）
+# The memory screen is for managers only
 # =============================================================================
 
 #: Someone in ``sales``; the persona below is shared with ``sales``.
@@ -584,15 +584,15 @@ class TestMemoryAccess:
             manager.get_memories(MEMBER_B.principal(), "p1")
 
 
-#: 記憶の中身・知識の本文に入れる目印（NFR3.11）。ログ・例外に出てはならない
+#: Marker placed in memory contents and knowledge bodies; must not appear in logs or exceptions
 _CONTENT_MARK = "MEMO-CONTENT-SENTINEL-7d1e"
 
 
 @pytest.mark.unit
 class TestMemoryContentStaysOutOfLogs:
-    """NFR3.11: 記憶の中身（知識の題名と本文を含む）をログ・例外に出さない。
+    """Memory contents (including knowledge titles and bodies) must not appear in logs or exceptions.
 
-    ログに入れてよいのはペルソナ・記憶の ID、件数、例外の種類だけ。
+    Only persona/memory IDs, counts and exception types may be logged.
     """
 
     @staticmethod
@@ -632,14 +632,14 @@ class TestMemoryContentStaysOutOfLogs:
         def attempt(call: Any) -> None:
             try:
                 call()
-            except Exception as e:  # noqa: BLE001 - 上がった例外も調べる
+            except Exception as e:  # noqa: BLE001 - also inspect exceptions that propagate
                 raised.append(e)
 
         service = mock_memory_service
         service.list_memories.return_value = self._entries()
         topic, body = f"題名{_CONTENT_MARK}", f"本文 {_CONTENT_MARK}"
 
-        # 成功の経路: 一覧・追加・1 件の削除・全件の削除
+        # Success paths: list, add, delete one, delete all
         attempt(lambda: manager.get_memories(OWNER, "p1", strategy_type="summary"))
         attempt(lambda: manager.get_memories(OWNER, "p1", strategy_type="semantic"))
         attempt(lambda: manager.add_knowledge(OWNER, "p1", topic, body))
@@ -648,7 +648,7 @@ class TestMemoryContentStaysOutOfLogs:
         attempt(lambda: manager.safe_get_memories(OWNER, "p1", "semantic"))
         assert not raised
 
-        # Service が失敗する経路
+        # Paths where the Service fails
         service.save_knowledge.side_effect = MemoryServiceError("save failed")
         attempt(lambda: manager.add_knowledge(OWNER, "p1", topic, body))
         service.save_knowledge.side_effect = ConnectionError("timeout")
@@ -661,11 +661,11 @@ class TestMemoryContentStaysOutOfLogs:
         attempt(lambda: manager.get_memories(OWNER, "p1"))
         attempt(lambda: manager.delete_all_memories(OWNER, "p1", "summary"))
         attempt(lambda: manager.safe_get_memories(OWNER, "p1"))
-        # 失敗はコード付きの例外で上がる（全件の削除の 1 件ずつの失敗は件数に数えないだけ、
-        # safe_get_memories は空を返す）
+        # Failures surface as coded exceptions (a single failure within delete-all is only
+        # left out of the count; safe_get_memories returns empty)
         assert len(raised) == 5
 
-        assert caplog.records  # 何も記録しない状態での空振りを防ぐ
+        assert caplog.records  # guard against passing vacuously with nothing logged
         assert_not_leaked(_CONTENT_MARK, caplog, logs.records(), raised)
 
 

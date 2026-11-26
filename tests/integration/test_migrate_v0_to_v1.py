@@ -1,8 +1,8 @@
-"""v0 → v1 の移行スクリプトの結合テスト（moto）。
+"""Integration tests (moto) for the v0 to v1 migration script.
 
-v0（us-east-1）と v1（ap-northeast-1）のテーブル・バケット・ユーザープールを moto で作り、
-dry-run は何も書かないこと、--apply で各リソースが v1 の形で入ること、再実行しても
-すべて「移行済み」になること（冪等）、v0 は変わらないことを確かめる。
+Builds v0 (us-east-1) and v1 (ap-northeast-1) tables, buckets and user pools with moto and
+verifies that dry-run writes nothing, --apply puts each resource in v1 form, a rerun
+marks everything as already migrated (idempotent), and v0 is unchanged.
 """
 
 import io

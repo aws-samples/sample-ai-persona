@@ -1,11 +1,11 @@
 """
-インタビュー関連のルーター
+Interview router
 
-v1.0.0 U6: セッションはアプリの外に置かれ、持ち主だけが使える（BR3.2）。Router は
-利用者（``request.state.principal``）を Manager に渡すだけで判定しない。添付は先に
-``FileManager.upload_interview_attachment`` で置き、ID を Manager に渡す（BR3.6）。
-会話を続けられなくなったとき（他人・期限切れのセッション、読めない参加者）は
-``error_type: conversation_stopped`` を返し、画面が M12 の枠を出す。
+Sessions live outside the app and only the owner can use them. The Router just
+passes the user (``request.state.principal``) to the Manager and decides nothing. Attachments are put first with
+``FileManager.upload_interview_attachment`` and their IDs passed to the Manager.
+When the conversation can no longer continue (someone else's or an expired session, an unreadable participant)
+it returns ``error_type: conversation_stopped`` and the screen shows the stop panel.
 """
 
 import logging
@@ -50,23 +50,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
-# 表示ヘルパー（ビジネスロジックを含まない純粋なURL組み立て）
+# Display helper (pure URL building with no business logic)
 from ._persona_avatar import persona_avatar_url  # noqa: E402
 
 templates.env.globals["persona_avatar_url"] = persona_avatar_url
 
-#: 保存名の上限（入力欄の検査）。
+#: Upper limit of the saved name (checked on the input field).
 SESSION_NAME_MAX_LENGTH = 100
-#: Where the stop panel (M12) of an interview leads back to.
+#: Where the stop panel of an interview leads back to.
 _BACK_URL = "/discussion/results?mode=interview"
 
 
 def _error_type_for(exc: Exception) -> str:
-    """例外を画面表示用の error_type 文字列に変換する。
+    """Convert an exception to an error_type string for the screen.
 
-    フロントエンド（chat.html の showDetailedError）はこの値でアイコン・
-    タイトル・再試行導線を切り替える。``conversation_stopped`` は M12 の枠
-    （他人・期限切れのセッション、読めない参加者。理由は区別しない）。
+    The frontend (showDetailedError in chat.html) uses this value to switch the icon,
+    title and retry path. ``conversation_stopped`` is the stop panel
+    (someone else's or an expired session, an unreadable participant; the reason is not distinguished).
     """
     if isinstance(exc, ConcurrentUpdateError):
         return "concurrent_update"
@@ -113,17 +113,17 @@ from web.sanitize import render_markdown  # noqa: E402
 
 templates.env.filters["markdown"] = render_markdown
 
-# スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
+# Thread pool executor (to run synchronous AI work asynchronously)
 executor = ThreadPoolExecutor(max_workers=8)
 
-# シングルトンマネージャーインスタンス（モジュールレベルで共有）
+# Singleton manager instances (shared at module level)
 _persona_manager = None
 _interview_manager = None
 _file_manager = None
 
 
 def get_persona_manager() -> PersonaManager:
-    """PersonaManagerのシングルトンインスタンスを取得"""
+    """Get the PersonaManager singleton instance."""
     global _persona_manager
     if _persona_manager is None:
         _persona_manager = PersonaManager()
@@ -131,7 +131,7 @@ def get_persona_manager() -> PersonaManager:
 
 
 def get_interview_manager() -> InterviewManager:
-    """InterviewManagerのシングルトンインスタンスを取得"""
+    """Get the InterviewManager singleton instance."""
     global _interview_manager
     if _interview_manager is None:
         _interview_manager = InterviewManager()
@@ -139,7 +139,7 @@ def get_interview_manager() -> InterviewManager:
 
 
 def get_file_manager() -> FileManager:
-    """FileManagerのシングルトンインスタンスを取得"""
+    """Get the FileManager singleton instance."""
     global _file_manager
     if _file_manager is None:
         _file_manager = FileManager()
@@ -147,7 +147,7 @@ def get_file_manager() -> FileManager:
 
 
 def _principal(request: Request) -> Principal:
-    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    """The signed-in user that ``AuthMiddleware`` put on the request."""
     principal: Principal = request.state.principal
     return principal
 
@@ -169,7 +169,7 @@ def _sse_error(message: str, error_type: str) -> str:
 async def _upload_attachments(
     principal: Principal, files: Optional[List[UploadFile]]
 ) -> list[str]:
-    """Place the attached files first and return their IDs (BR3.6, NFR1.54).
+    """Place the attached files first and return their IDs.
 
     Raises:
         FileUploadError: The kind or size is not accepted.
@@ -200,7 +200,7 @@ async def create_interview_session(
     enable_dataset: bool = Form(False),
     enable_kb: bool = Form(False),
 ) -> Any:
-    """インタビューセッション作成エンドポイント（BR3.1）"""
+    """Interview session creation endpoint."""
     principal = _principal(request)
     try:
         personas = await _run(
@@ -278,7 +278,7 @@ async def create_interview_session(
 
 @router.get("/chat/{session_id}", response_class=HTMLResponse)
 async def interview_chat_page(request: Request, session_id: str) -> Any:
-    """インタビューチャットページ（持ち主だけ、BR3.2）"""
+    """Interview chat page (owner only)."""
     principal = _principal(request)
     try:
         view = await _run(
@@ -309,7 +309,7 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
             get_persona_manager().get_personas_for_use, principal, view.persona_ids
         )
     except ParticipantNotFoundError:
-        # M12: 参加者を読めない。会話は表示するが、続けられない
+        # A participant cannot be read. The conversation is shown but cannot continue
         stopped = True
     except CodedError:
         logger.warning("Interview participants not read", exc_info=True)
@@ -336,7 +336,7 @@ async def send_message_stream(
     message: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
 ) -> Any:
-    """メッセージ送信ストリーミングエンドポイント（トークン単位SSE、BR3.3）"""
+    """Message-send streaming endpoint (token-level SSE)."""
     principal = _principal(request)
 
     def single(event: str) -> StreamingResponse:
@@ -442,7 +442,7 @@ async def send_message(
     message: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
 ) -> Any:
-    """メッセージ送信エンドポイント（マルチモーダル対応、BR3.3）"""
+    """Message-send endpoint (multimodal supported)."""
     principal = _principal(request)
     try:
         document_ids = await _upload_attachments(principal, files)
@@ -493,7 +493,7 @@ async def send_message(
 
 @router.get("/{session_id}/messages", response_class=JSONResponse)
 async def get_messages(request: Request, session_id: str) -> Any:
-    """メッセージ履歴取得エンドポイント（持ち主だけ）"""
+    """Message history endpoint (owner only)."""
     try:
         view = await _run(
             get_interview_manager().get_interview_session,
@@ -527,10 +527,10 @@ async def get_messages(request: Request, session_id: str) -> Any:
     )
 
 
-# 受け身の要求（BR1.9）: 状態の確認。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
+# Passive request: status check. Listed in PASSIVE_REQUESTS of web/auth_middleware.py
 @router.get("/{session_id}/status", response_class=JSONResponse)
 async def get_session_status(request: Request, session_id: str) -> Any:
-    """インタビューセッション状態取得エンドポイント（持ち主だけ）"""
+    """Interview session status endpoint (owner only)."""
     try:
         status = await _run(
             get_interview_manager().get_session_status,
@@ -553,7 +553,7 @@ async def get_session_status(request: Request, session_id: str) -> Any:
 async def save_interview_session(
     request: Request, session_id: str, session_name: str = Form(...)
 ) -> Any:
-    """インタビューを議論として保存する（2 回目以降は同じ議論に書き足す、BR3.7、BR3.8）"""
+    """Save the interview as a discussion (from the second time on, append to the same discussion)."""
     name = (session_name or "").strip()
     if not name:
         return JSONResponse(
@@ -616,7 +616,7 @@ async def save_interview_session(
 
 @router.delete("/{session_id}", response_class=JSONResponse)
 async def end_interview_session(request: Request, session_id: str) -> Any:
-    """インタビューセッション終了エンドポイント（持ち主だけ）"""
+    """Interview session end endpoint (owner only)."""
     try:
         await _run(
             get_interview_manager().end_interview_session,
@@ -645,14 +645,14 @@ async def end_interview_session(request: Request, session_id: str) -> Any:
 _STREAM_KEEPALIVE_SECONDS = 30
 
 
-# リアルタイムメッセージ送受信のためのSSEエンドポイント
-# 受け身の要求（BR1.9）: SSE。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
+# SSE endpoint for real-time message exchange
+# Passive request: SSE. Listed in PASSIVE_REQUESTS of web/auth_middleware.py
 @router.get("/{session_id}/stream")
 async def stream_interview_messages(request: Request, session_id: str) -> Any:
-    """インタビューメッセージのストリーミング（SSE、持ち主だけ）。
+    """Interview message streaming (SSE, owner only).
 
-    接続時に持ち主と期限を照合し（BR3.2）、keepalive のたびにセッションを読み直して
-    期限が来たら ``stopped`` を送って切る（security-design.md §2）。
+    On connect the owner and expiry are checked, and on every keepalive the session is
+    re-read; when it expires, ``stopped`` is sent and the stream is closed.
     """
     principal = _principal(request)
     interview_manager = get_interview_manager()
@@ -711,7 +711,7 @@ async def stream_interview_messages(request: Request, session_id: str) -> Any:
 
 @router.get("/stats", response_class=JSONResponse)
 async def get_interview_stats(request: Request) -> Any:
-    """この台が手元に持つインタビューの数（全体の件数は数えない、BR3.5）"""
+    """The number of interviews this instance holds locally (the global count is not counted)."""
     try:
         active_count = await _run(get_interview_manager().get_active_sessions_count)
     except Exception as e:

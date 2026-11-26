@@ -1,7 +1,7 @@
-"""model_registry の単体テスト。
+"""Unit tests for model_registry.
 
-推論の範囲（閉域対応 U5、BR4.1・BR4.2・BR4.4〜BR4.6）ごとの表と一覧、呼ぶモデルを決める
-resolve_model_spec（読み替え）、display_name_for（例外を投げない）、resolve_call_region を検証する。
+Checks the table and list per inference scope, resolve_model_spec (which decides the
+model to call, with remapping), display_name_for (never raises) and resolve_call_region.
 """
 
 import pytest
@@ -21,8 +21,8 @@ from src.models.model_registry import (
     resolve_model_spec,
 )
 
-# 範囲ごとの既定（BR1.6 と計画の「設計からの変更」）。cdk/test/deployment-profile.test.ts にも
-# 同じ値を書く（BR4.6）。どちらかを変えたら両方のテストが落ちる
+# Per-scope defaults. The same values are written in cdk/test/deployment-profile.test.ts;
+# changing either one makes both tests fail.
 GLOBAL_HAIKU_5_5 = "global.anthropic.claude-haiku-5-5"
 GLOBAL_HAIKU_4_5 = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 GLOBAL_SONNET_5 = "global.anthropic.claude-sonnet-5"
@@ -36,7 +36,7 @@ MANTLE_MODEL_IDS = {TERRA, LUNA, GEMMA}
 
 
 class TestScopeDefaults:
-    """BR1.6・BR4.6: 範囲ごとの既定のモデル ID 3 つ（CDK の ScopeDefaults と同じ値）。"""
+    """The three default model IDs per scope (same values as ScopeDefaults in CDK)."""
 
     def test_global_defaults(self):
         defaults = SCOPE_DEFAULTS[InferenceScope.GLOBAL]
@@ -55,7 +55,7 @@ class TestScopeDefaults:
         assert [scope.value for scope in InferenceScope] == ["global", "jp"]
 
     def test_config_class_default_is_the_global_agent_model(self):
-        """環境変数のないクラスの属性の既定は SCOPE_DEFAULTS の global（BR3.4）。"""
+        """The class attribute default without an environment variable is the global entry of SCOPE_DEFAULTS."""
         defaults = SCOPE_DEFAULTS[InferenceScope.GLOBAL]
         assert Config.AGENT_MODEL_ID == defaults.agent_model_id
         assert Config.BEDROCK_MODEL_ID == defaults.bedrock_model_id
@@ -63,7 +63,7 @@ class TestScopeDefaults:
 
 
 class TestScopeTables:
-    """BR4.1: 範囲と baseModel を持つ表。"""
+    """A table with scope and baseModel."""
 
     def test_global_has_seven_models(self):
         ids = [spec.model_id for spec in models_in_scope(InferenceScope.GLOBAL)]
@@ -99,7 +99,7 @@ class TestScopeTables:
         assert SUPPORTED_MODELS[GLOBAL_HAIKU_5_5].display_name == "Claude Haiku 5.5"
 
     def test_mantle_ids_match_the_cdk_additional_model_ids(self):
-        """BR4.6: CDK の追加のモデルの ID（deployment-profile.ts）と同じ 3 つ。"""
+        """The same three as the extra model IDs in CDK (deployment-profile.ts)."""
         mantle = {
             spec.model_id for spec in SUPPORTED_MODELS.values() if spec.requires_mantle
         }
@@ -115,7 +115,7 @@ class TestScopeTables:
 
 
 class TestListSelectableModels:
-    """BR4.2: 範囲に属するモデルだけ。Mantle 系は有効なときだけ。"""
+    """Only models belonging to the scope. Mantle models only when enabled."""
 
     def test_global_disabled_lists_haiku_5_5_first_without_mantle(self):
         ids = [
@@ -152,7 +152,7 @@ class TestListSelectableModels:
 
 
 class TestDefaultSelectableModelId:
-    """BR5.1: 設定画面の既定の選択。"""
+    """The default selection on the settings screen."""
 
     def test_agent_model_in_list_is_selected(self):
         models = list_selectable_models(False, "global")
@@ -168,15 +168,21 @@ class TestDefaultSelectableModelId:
 
 
 class TestResolveModelSpec:
-    """BR4.4・BR4.5: 呼ぶモデルの仕様を 1 つの関数で決める（functional-spec 4.6）。"""
+    """A single function decides the spec of the model to call."""
 
     @pytest.mark.parametrize(
         ("stored", "expected"),
         [
-            (GLOBAL_HAIKU_4_5, JP_HAIKU_4_5),  # 同じモデルに読み替え
-            (GLOBAL_SONNET_5, JP_HAIKU_5_5),  # 国内に同じモデルがないので既定
-            (GEMMA, JP_HAIKU_5_5),  # Mantle 系は既定
-            ("unknown.model-id", JP_HAIKU_5_5),  # 表にない ID は既定
+            (GLOBAL_HAIKU_4_5, JP_HAIKU_4_5),  # remapped to the same model
+            (
+                GLOBAL_SONNET_5,
+                JP_HAIKU_5_5,
+            ),  # no equivalent in the domestic scope, so the default
+            (GEMMA, JP_HAIKU_5_5),  # Mantle models get the default
+            (
+                "unknown.model-id",
+                JP_HAIKU_5_5,
+            ),  # an ID not in the table gets the default
         ],
     )
     def test_functional_spec_examples_in_jp(self, stored, expected):
@@ -184,7 +190,7 @@ class TestResolveModelSpec:
         assert spec.model_id == expected
 
     def test_gemma_in_jp_has_no_request_limit(self):
-        """読み替え後の仕様でサイズを判定する（Gemma の 3.5 MB を使わない）。"""
+        """Size is judged with the spec after remapping (Gemma's 3.5 MB is not used)."""
         assert resolve_model_spec(GEMMA, "jp", JP_HAIKU_5_5).max_request_bytes is None
 
     @pytest.mark.parametrize(
@@ -209,7 +215,7 @@ class TestResolveModelSpec:
         assert resolve_model_spec(empty, "jp", JP_HAIKU_5_5).model_id == JP_HAIKU_5_5
 
     def test_unknown_id_in_global_goes_to_agent_model_id(self):
-        """global でも、表にない ID の行き先は AGENT_MODEL_ID（BR4.5）。"""
+        """Even for global, an ID not in the table goes to AGENT_MODEL_ID."""
         spec = resolve_model_spec("unknown.model-id", "global", GLOBAL_HAIKU_5_5)
         assert spec.model_id == GLOBAL_HAIKU_5_5
 
@@ -219,7 +225,7 @@ class TestResolveModelSpec:
         assert spec.requires_mantle is True
 
     def test_default_from_another_scope_is_used_as_is(self):
-        """AGENT_MODEL_ID が別の範囲の ID でも、その仕様で呼ぶ（BR4.5）。"""
+        """Even if AGENT_MODEL_ID is an ID of another scope, it is called with that spec."""
         spec = resolve_model_spec(None, "jp", GLOBAL_SONNET_5)
         assert spec.model_id == GLOBAL_SONNET_5
         assert spec.scope == InferenceScope.GLOBAL
@@ -243,7 +249,7 @@ class TestResolveModelSpec:
 
 
 class TestDisplayNameFor:
-    """BR5.2: 表示名は保存された ID で出す（今のまま）。"""
+    """The display name uses the stored ID (unchanged)."""
 
     def test_none_falls_back_to_default_display_name(self):
         assert display_name_for(None) == "Claude Haiku 5.5"
@@ -270,22 +276,22 @@ class TestGemma4RequestSizeLimit:
 
 class TestResolveCallRegion:
     def test_bedrock_model_follows_deploy_region(self):
-        """Claude系(BEDROCK)はMantle制約がないためデプロイ先にそのまま追従する。"""
+        """Claude (BEDROCK) has no Mantle constraint and follows the deployment region as is."""
         spec = SUPPORTED_MODELS[GLOBAL_HAIKU_4_5]
         assert resolve_call_region(spec, "ap-northeast-1") == "ap-northeast-1"
 
     def test_mantle_model_follows_deploy_region_when_supported(self):
-        """デプロイ先がMantle対応リージョン(us-west-2)ならそのまま使う。"""
+        """If the deployment region supports Mantle (us-west-2), it is used as is."""
         spec = SUPPORTED_MODELS[TERRA]
         assert resolve_call_region(spec, "us-west-2") == "us-west-2"
 
     def test_mantle_model_falls_back_when_deploy_region_unsupported(self):
-        """デプロイ先がMantle非対応リージョン(東京)ならフォールバックする。"""
+        """If the deployment region does not support Mantle (Tokyo), it falls back."""
         spec = SUPPORTED_MODELS[GEMMA]
         assert resolve_call_region(spec, "ap-northeast-1") == MANTLE_FALLBACK_REGION
 
     def test_mantle_fallback_region_is_itself_supported(self):
-        """フォールバック先がMantle対応リージョンでなければ無限に非対応になる。"""
+        """If the fallback region does not support Mantle, it would be unsupported forever."""
         from src.models.model_registry import MANTLE_SUPPORTED_REGIONS
 
         assert MANTLE_FALLBACK_REGION in MANTLE_SUPPORTED_REGIONS

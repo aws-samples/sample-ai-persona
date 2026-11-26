@@ -1,15 +1,15 @@
-"""紐付けの呼び出しと読み先の付け替え（U5、Step 23。U6 で議論の保存を付け替え）。
+"""Attachment calls and the switched read source.
 
-- 議論の保存（クラシック・エージェント）が、資料のファイル ID で
-  ``FileAttachments.attach_all`` を呼び、親の保存の失敗で ``detach`` する。
-  U6 からは両 Manager とも ``DiscussionRecords.save_new`` を通る
-  （reliability-design.md §3、BR5.3、NFR1.27、NFR1.38、AC2.2.2）
-- テンプレートの作成・更新が画像のファイル ID で ``attach_all`` を呼ぶ
-- 議論の開始・実行の資料の読み込みが ``attachable_file`` を通る（他人の資料は読まない）
-- ``PersonaAgentIntegration`` は紐付けを ``PersonaBindingStore`` から読み、
-  ``AgentService.get_kb_tools`` は KB の紐付けを引数で受け取る
+- Saving a discussion (classic and agent) calls ``FileAttachments.attach_all``
+  with the document file IDs, and calls ``detach`` when saving the parent fails.
+  Both Managers go through ``DiscussionRecords.save_new``.
+- Creating and updating a template calls ``attach_all`` with the image file IDs
+- Loading documents when starting and running a discussion goes through
+  ``attachable_file`` (other users' documents are not read)
+- ``PersonaAgentIntegration`` reads attachments from ``PersonaBindingStore``, and
+  ``AgentService.get_kb_tools`` receives the KB attachments as an argument
 
-security-design.md §7「紐付けの呼び出しの漏れの検査」。
+Guards against a missed attachment call.
 """
 
 from datetime import datetime, timezone
@@ -65,7 +65,7 @@ def _messages(world: World) -> list[Message]:
 
 
 # =============================================================================
-# 議論の保存（クラシック）
+# Saving a discussion (classic)
 # =============================================================================
 
 
@@ -165,7 +165,7 @@ class TestClassicDiscussionSave:
 
 
 # =============================================================================
-# 議論の保存（エージェント）
+# Saving a discussion (agent)
 # =============================================================================
 
 
@@ -268,12 +268,12 @@ class TestAgentDiscussionSave:
             )
 
 
-# テンプレートの作成・更新の画像の紐付けは U7 で本体を先に書く順に変わったため、
-# tests/unit/test_survey_template_manager.py（TestCreateTemplate・TestUpdateTemplate）で確かめる。
+# Template image attachment on create/update now writes the body first, so it is
+# verified in tests/unit/test_survey_template_manager.py (TestCreateTemplate, TestUpdateTemplate).
 
 
 # =============================================================================
-# R-02: 議論の資料の読み取りは、保存時の紐付けと同じ条件（本人・期限内・未紐付け）
+# Reading discussion documents uses the same conditions as attaching at save time (owner, unexpired, unattached)
 # =============================================================================
 
 
@@ -318,12 +318,11 @@ def _attached_elsewhere_files():
 
 
 class TestDocumentsAttachedElsewhere:
-    """A document attached to another discussion stops before the AI runs (R-02).
+    """A document attached to another discussion stops before the AI runs.
 
-    functional-spec.md WF6 step 5, BR5.3, BR5.4, AC2.2.2: the four start paths
-    (classic / agent, plain / streaming) read only the user's unexpired,
-    unattached uploads, so the failure comes before the discussion, not at
-    the save.
+    The four start paths (classic / agent, plain / streaming) read only the
+    user's unexpired, unattached uploads, so the failure comes before the
+    discussion, not at the save.
     """
 
     def _classic(self):
@@ -417,7 +416,7 @@ class TestDocumentsAttachedElsewhere:
 
 
 # =============================================================================
-# 読み先の付け替え（PersonaAgentIntegration、AgentService.get_kb_tools）
+# Switched read source (PersonaAgentIntegration, AgentService.get_kb_tools)
 # =============================================================================
 
 

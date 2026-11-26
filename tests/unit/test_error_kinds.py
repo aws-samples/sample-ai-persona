@@ -1,10 +1,10 @@
-"""ErrorCode の分類（ErrorKind）の契約テスト（Issue #117 ステップ1）。
+"""Contract tests for the ErrorCode classification (ErrorKind).
 
-`ErrorKind` は「ユーザーが次に何をすればよいか」を表し、表示方法を決める。
-表示層はHTTPステータスや個別コードではなく kind で分岐する。
+`ErrorKind` says what the user should do next and decides how the error is shown.
+The display layer branches on kind, not on HTTP status or individual codes.
 
-本テストは分類の一貫性を検査する。文言と違い分類は機械的な検証が効くため、
-「新しいコードを追加したが分類を考えていない」状態を検出できる。
+These tests check classification consistency. Unlike wording, classification can be
+verified mechanically, so a new code added without thinking about its kind is caught.
 """
 
 import json
@@ -16,28 +16,28 @@ from web.error_messages import is_transient, toast_response, user_message_for
 
 
 class TestKindAssignment:
-    """全コードが分類を持つこと。"""
+    """Every code has a classification."""
 
     def test_every_code_has_a_kind(self):
         for code in ErrorCode:
             assert isinstance(code.kind, ErrorKind), f"{code.name} に kind がない"
 
     def test_unknown_is_transient(self):
-        """未分類の失敗が「入力を直せば解決する」ように見えてはならない。"""
+        """An unclassified failure must not look fixable by correcting input."""
         assert ErrorCode.UNKNOWN.kind is ErrorKind.TRANSIENT
 
     def test_every_kind_is_used(self):
-        """使われていない分類が定義に残っていないこと。"""
+        """No unused classification is left in the definition."""
         used = {code.kind for code in ErrorCode}
         unused = [kind.name for kind in ErrorKind if kind not in used]
         assert not unused, f"未使用の ErrorKind: {unused}"
 
 
 class TestStrEnumSemanticsPreserved:
-    """kind の追加で StrEnum としての振る舞いが壊れていないこと。
+    """Adding a kind does not break StrEnum behavior.
 
-    `__new__` を定義しているため、値・逆引き・辞書キーとしての同一性が
-    保たれることを明示的に確認する（カタログは ErrorCode をキーに持つ）。
+    Because `__new__` is defined, identity of values, reverse lookup and use as dict keys is
+    checked explicitly (the catalog is keyed by ErrorCode).
     """
 
     def test_value_is_the_string(self):
@@ -58,11 +58,11 @@ class TestStrEnumSemanticsPreserved:
 
 
 class TestKindConsistency:
-    """命名と分類が矛盾していないこと。
+    """Naming and classification do not contradict each other.
 
-    命名規則だけでは分類できないケース（例: SEGMENT_CSV_URL_MISSING は
-    "MISSING" だが内部要因なので TRANSIENT）があるため、
-    「この語を含むなら必ずこの分類」と言える範囲だけを検査する。
+    Naming alone cannot classify some cases (e.g. SEGMENT_CSV_URL_MISSING contains
+    "MISSING" but is an internal cause, so TRANSIENT), so only cases where "a name
+    containing this word always has this kind" are checked.
     """
 
     @pytest.mark.parametrize(
@@ -70,7 +70,7 @@ class TestKindConsistency:
         [c for c in ErrorCode if c.name.endswith("_OPERATION_FAILED")],
     )
     def test_operation_failed_is_transient(self, code):
-        """`*_OPERATION_FAILED` は内部要因の総称コードなので TRANSIENT。"""
+        """`*_OPERATION_FAILED` is a generic code for internal causes, so TRANSIENT."""
         assert code.kind is ErrorKind.TRANSIENT
 
     @pytest.mark.parametrize(
@@ -83,13 +83,13 @@ class TestKindConsistency:
         "code", [c for c in ErrorCode if c.name.endswith("_NOT_CONFIGURED")]
     )
     def test_not_configured_is_config(self, code):
-        """設定不備は運用者の対応が必要なので CONFIG。"""
+        """A configuration fault needs operator action, so CONFIG."""
         assert code.kind is ErrorKind.CONFIG
 
     def test_validation_is_the_majority(self):
-        """入力バリデーションが最多であること（分類の妥当性の目安）。
+        """Input validation is the largest kind (a sanity check on the classification).
 
-        大半が TRANSIENT に倒れているなら分類を見直すべきサイン。
+        If most codes fall to TRANSIENT, the classification should be revisited.
         """
         counts: dict[ErrorKind, int] = {}
         for code in ErrorCode:
@@ -98,7 +98,7 @@ class TestKindConsistency:
 
 
 class TestAuthCodes:
-    """v1.0.0 U1 のログインのコード（約束 C5 のうち U1 が使うもの）。"""
+    """Login codes."""
 
     @pytest.mark.parametrize(
         "code",
@@ -136,7 +136,7 @@ class TestAuthCodes:
 
 
 class TestAuthzCodes:
-    """v1.0.0 U2 の認可のコード（約束 C5 の残り）。"""
+    """Authorization codes."""
 
     @pytest.mark.parametrize("code", [ErrorCode.ROLE_REQUIRED, ErrorCode.ACCESS_DENIED])
     def test_denials_are_forbidden(self, code):
@@ -158,7 +158,7 @@ class TestAuthzCodes:
 
 
 class TestPersonaU5Codes:
-    """U5 のコード（rules.md BR1.6、BR2.5、BR5.3、security-design.md §5）。"""
+    """Codes for upload files and knowledge base bindings."""
 
     @pytest.mark.parametrize(
         "code",
@@ -175,14 +175,14 @@ class TestPersonaU5Codes:
 
 
 class TestCodedErrorExposesKind:
-    """例外インスタンスから分類を辿れること（表示層が使う経路）。"""
+    """The kind can be traced from an exception instance (the path the display layer uses)."""
 
     def test_kind_via_exception_instance(self):
         exc = CodedError("diag", code=ErrorCode.FILE_EMPTY)
         assert exc.code.kind is ErrorKind.VALIDATION
 
     def test_default_code_is_transient(self):
-        """コード未指定の例外は TRANSIENT として扱われる。"""
+        """An exception without a code is treated as TRANSIENT."""
         assert CodedError("diag").code.kind is ErrorKind.TRANSIENT
 
     def test_subclass_default_kind(self):
@@ -193,15 +193,15 @@ class TestCodedErrorExposesKind:
 
 
 class TestToastResponse:
-    """TRANSIENT エラーをトーストで通知する経路の契約テスト（#117 ステップ2）。
+    """Contract tests for notifying TRANSIENT errors by toast.
 
-    再試行で解決しうるエラーは画面を書き換えずトーストで通知する。これにより
-    ユーザーの入力が保持され、かつ htmx 1.9.10 が4xx本文をスワップしない制約も
-    回避できる（HX-Trigger はスワップ判定より前に処理されるため）。
+    An error that a retry may resolve is shown as a toast without rewriting the screen. This
+    keeps the user input and works around htmx 1.9.10 not swapping 4xx bodies (HX-Trigger is
+    processed before the swap decision).
     """
 
     def test_body_is_empty(self):
-        """本文を返さない（スワップされても画面を壊さない）。"""
+        """No body is returned (a swap would not break the screen)."""
         response = toast_response(
             CodedError("diag", code=ErrorCode.PERSONA_OPERATION_FAILED)
         )
@@ -218,22 +218,22 @@ class TestToastResponse:
         )
 
     def test_header_is_latin1_encodable(self):
-        """HTTPヘッダーは latin-1 のみ。日本語文言は \\uXXXX にエスケープする。
+        """HTTP headers are latin-1 only. Japanese text is escaped as \\uXXXX.
 
-        ensure_ascii=False にすると Starlette が UnicodeEncodeError を投げる。
+        With ensure_ascii=False, Starlette raises UnicodeEncodeError.
         """
         response = toast_response(
             CodedError("diag", code=ErrorCode.MEMORY_OPERATION_FAILED)
         )
         header = response.headers["HX-Trigger"]
-        header.encode("latin-1")  # 例外が出なければ送信可能
+        header.encode("latin-1")  # sendable if no exception is raised
         assert "\\u" in json.dumps(json.loads(header), ensure_ascii=True)
 
     def test_does_not_leak_the_exception_message(self):
-        """例外メッセージがヘッダーに転写されないこと。
+        """The exception message is not copied into the header.
 
-        `toast_response` は AST検査（tests/api/test_error_exposure.py）の
-        許可リストに入っているため、漏出しないことを直接検証する。
+        `toast_response` is in the allowlist of the AST check (tests/api/test_error_exposure.py),
+        so leakage is verified directly.
         """
         secret = "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret/key"
         response = toast_response(
@@ -242,7 +242,7 @@ class TestToastResponse:
         assert secret not in response.headers["HX-Trigger"]
 
     def test_status_code_stays_4xx_by_default(self):
-        """htmx:responseError の意味論とログの正確さを保つため既定は4xx。"""
+        """The default is 4xx to keep htmx:responseError semantics and logging accurate."""
         response = toast_response(CodedError("diag", code=ErrorCode.UNKNOWN))
         assert 400 <= response.status_code < 500
 
@@ -253,7 +253,7 @@ class TestToastResponse:
 
 
 class TestIsTransient:
-    """Router が表示方法を判断するためのヘルパー。"""
+    """Helpers the Router uses to decide how to display."""
 
     def test_true_for_transient_codes(self):
         assert is_transient(CodedError("d", code=ErrorCode.PERSONA_OPERATION_FAILED))
@@ -265,7 +265,7 @@ class TestIsTransient:
         assert not is_transient(CodedError("d", code=ErrorCode.PERSONA_NOT_FOUND))
 
     def test_true_for_uncoded_exception(self):
-        """分類できない失敗は入力修正で直るように見せない。"""
+        """An unclassifiable failure is not shown as fixable by correcting input."""
         assert is_transient(RuntimeError("boom"))
 
     def test_true_for_connection_errors(self):
@@ -273,7 +273,7 @@ class TestIsTransient:
 
 
 class TestSharingCodes:
-    """共有のコード（U4、functional-spec.md §5）の分類。"""
+    """Classification of the shared codes."""
 
     @pytest.mark.parametrize(
         "name",
@@ -298,7 +298,7 @@ class TestSharingCodes:
 
 
 class TestDiscussionInterviewCodes:
-    """U6 のコード（rules.md BR2.7、reliability-requirements.md「機能設計への追加」）。"""
+    """Codes for discussions and interview sessions."""
 
     def test_too_large_is_capacity(self):
         assert ErrorCode["DISCUSSION_TOO_LARGE"].kind is ErrorKind.CAPACITY
@@ -321,12 +321,12 @@ class TestDiscussionInterviewCodes:
         assert is_transient(ConcurrentUpdateError("busy"))
 
     def test_no_interview_message_conflict_code(self):
-        """衝突は約束 C5 の CONCURRENT_UPDATE だけ（409 のコードを足さない）。"""
+        """The only conflict code is CONCURRENT_UPDATE (no 409 code is added)."""
         assert "INTERVIEW_MESSAGE_CONFLICT" not in ErrorCode.__members__
 
 
 class TestSurveyOrgAssetCodes:
-    """U7 のコード（rules.md BR3.1、BR4.2〜BR4.4、BR2.2、NFR2.25）。"""
+    """Codes for custom persona data and settings."""
 
     @pytest.mark.parametrize(
         ("name", "kind"),
@@ -351,10 +351,10 @@ class TestSurveyOrgAssetCodes:
 
 
 class TestClosedNetworkLoginCodes:
-    """U8 の閉域構成のログインのコード（functional-spec.md、約束 C5）。
+    """Login codes for the closed-network setup.
 
-    M2・M3 はフルページのフォームで、VALIDATION と TRANSIENT のどちらも画面の中に
-    文言を出す。時間切れだけはログイン画面からやり直す（UNAUTHORIZED）。
+    The two forms are full-page forms, and both VALIDATION and TRANSIENT show text inside the
+    screen. Only a timeout restarts from the login screen (UNAUTHORIZED).
     """
 
     @pytest.mark.parametrize(
@@ -384,7 +384,7 @@ class TestClosedNetworkLoginCodes:
 
 
 class TestSurveyOnDemandCodes:
-    """アンケートのオンデマンド推論のコード（functional-spec.md 3 章、NFR4.9a）。"""
+    """Codes for on-demand survey inference."""
 
     @pytest.mark.parametrize(
         ("name", "kind"),
@@ -409,5 +409,5 @@ class TestSurveyOnDemandCodes:
         ],
     )
     def test_codes_stored_before_the_switch_still_parse(self, value):
-        """Records written by batch inference keep their code (FR11.2)."""
+        """Records written by batch inference keep their code."""
         assert ErrorCode.parse(value) is not None

@@ -1,13 +1,12 @@
 {#
-  会話を続けられなくなったときの枠（M12、U6 BR7.5）。インタビューと議論の両方で使う。
-  理由（読めない・削除された・共有が外れた）は出さない（NFR1.56）。見出しは「続けられません」にする
-  （画面は開いたままなので「ページが見つかりません」は使わない）。
-  見出しに tabindex="-1" を付け、差し込んだあと app.js がフォーカスを移す。
+  Frame shown when a conversation can no longer continue. Used by both interview and discussion.
+  The reason (unreadable, deleted, sharing removed) is not shown. The heading is "続けられません" (the screen stays open, so "ページが見つかりません" is not used).
+  The heading has tabindex="-1" and app.js moves focus to it after insertion.
 
-  引数:
+  Arguments:
     kind       ... "interview" / "discussion"
-    back_url   ... 戻り先
-    back_label ... 戻るボタンの文字
+    back_url   ... where to go back to
+    back_label ... label of the back button
 #}
 <div data-conversation-stopped role="alert"
      class="bg-red-50 border border-red-300 rounded-lg p-4 my-4">

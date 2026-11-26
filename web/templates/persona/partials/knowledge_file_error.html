@@ -1,10 +1,8 @@
 {% from "components/error_body.html" import error_body %}
 {#
-  知識ファイルアップロードエラーパーシャル。
+  Partial for knowledge file upload errors.
 
-  閉じるボタンは #file-upload-preview-area の中身を空にする契約を持つため、
-  共通テンプレートに寄せずここで持つ（Issue #117 ステップ5）。
-  見た目は error_body に統一。
+  The close button empties #file-upload-preview-area, so this is kept here rather than moved into a shared template (Issue #117). The look matches error_body.
 #}
 <div class="bg-red-50 border border-red-200 rounded-lg p-4" role="alert">
     {{ error_body(

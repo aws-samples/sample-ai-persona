@@ -1,6 +1,6 @@
 """
-AI サービス
-Amazon Bedrock を使用した AI 機能を提供する
+AI service
+Provides AI features using Amazon Bedrock
 """
 
 import json
@@ -12,7 +12,7 @@ try:
     import boto3
     from botocore.exceptions import ClientError, BotoCoreError
 except ImportError:
-    # テスト環境やboto3がインストールされていない場合のフォールバック
+    # Fallback for test environments or when boto3 is not installed
     boto3 = None
     ClientError = Exception
     BotoCoreError = Exception
@@ -25,38 +25,38 @@ from ..models.insight_category import InsightCategory
 
 
 class AIServiceError(CodedError):
-    """AI サービス関連のエラー"""
+    """Errors raised by the AI service."""
 
     pass
 
 
 class BedrockConnectionError(AIServiceError):
-    """Bedrock 接続エラー"""
+    """Bedrock connection error."""
 
     pass
 
 
 class BedrockAPIError(AIServiceError):
-    """Bedrock API エラー"""
+    """Bedrock API error."""
 
     pass
 
 
 class AIService:
-    """Amazon Bedrock を使用した AI サービス"""
+    """AI service using Amazon Bedrock."""
 
     def __init__(self, bedrock_client: Any = None) -> None:
         """
-        AI サービスの初期化
+        Initialize the AI service
 
         Args:
-            bedrock_client: Bedrock クライアント（テスト用）
+            bedrock_client: Bedrock client (for tests)
         """
         self.logger = logging.getLogger(__name__)
         self.model_id = config.BEDROCK_MODEL_ID
         self.max_tokens = config.MAX_TOKENS
 
-        # リトライ設定
+        # Retry settings
         self.max_retries = 3
         self.base_delay = 1.0
         self.max_delay = 60.0
@@ -67,7 +67,7 @@ class AIService:
             self.bedrock_client = self._create_bedrock_client()
 
     def _create_bedrock_client(self) -> Any:
-        """Bedrock クライアントを作成"""
+        """Create the Bedrock client."""
         if not boto3:
             raise BedrockConnectionError(
                 "boto3 package is not installed",
@@ -77,22 +77,22 @@ class AIService:
         try:
             from botocore.config import Config as BotoConfig
 
-            # AWS 認証情報を取得
+            # Get AWS credentials
             credentials = config.get_aws_credentials()
 
-            # None の値を除去
+            # Drop None values
             filtered_credentials = {
                 k: v for k, v in credentials.items() if v is not None
             }
 
-            # タイムアウト設定を追加（ペルソナ生成は時間がかかるため長めに設定）
+            # Add a timeout (persona generation is slow, so it is long)
             boto_config = BotoConfig(
                 connect_timeout=30,
-                read_timeout=300,  # 5分（ペルソナ生成・議論に十分な時間）
-                retries={"max_attempts": 0},  # リトライは自前で制御
+                read_timeout=300,  # 5 minutes (enough for persona generation and discussions)
+                retries={"max_attempts": 0},  # Retries are controlled by our own code
             )
 
-            # Bedrock Runtime クライアントを作成
+            # Create the Bedrock Runtime client
             client = boto3.client(
                 "bedrock-runtime", config=boto_config, **filtered_credentials
             )
@@ -109,7 +109,7 @@ class AIService:
 
     def _retry_with_backoff(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """
-        指数バックオフでリトライを実行
+        Run with exponential-backoff retries
         """
         last_exception = None
 
@@ -139,7 +139,7 @@ class AIService:
         ) from last_exception
 
     def _is_retryable_error(self, error: Exception) -> bool:
-        """リトライ可能なエラーかどうかを判定"""
+        """Decide whether the error is retryable."""
         if isinstance(error, ClientError):
             error_code = error.response.get("Error", {}).get("Code", "")
             retryable_codes = [
@@ -154,11 +154,11 @@ class AIService:
 
     @staticmethod
     def _extract_first_converse_text_block(content_blocks: List[Dict[str, Any]]) -> str:
-        """Converse APIのcontent配列から最初のテキストブロックを抽出する。
+        """Extract the first text block from the Converse API content array.
 
-        Converse API形式のテキストブロックは {"text": "..."} でtypeフィールドを
-        持たないため、thinkingブロック {"reasoningContent": {...}} を除外する
-        ことで判定する。
+        A Converse API text block is {"text": "..."} with no type field, so
+        it is identified by excluding thinking blocks {"reasoningContent": {...}}.
+
         """
         for block in content_blocks:
             if (
@@ -173,11 +173,11 @@ class AIService:
         )
 
     def invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
-        """Bedrock モデルを呼び出し（Converse API経由）
+        """Call a Bedrock model (via the Converse API)
 
         Args:
-            prompt: プロンプト文字列
-            max_tokens: 最大トークン数（Noneの場合はデフォルト値を使用）
+            prompt: Prompt string
+            max_tokens: Maximum tokens (the default is used if None)
         """
         messages = [{"role": "user", "content": [{"text": prompt}]}]
         return self._invoke_converse_api(messages, max_tokens=max_tokens)
@@ -189,17 +189,17 @@ class AIService:
         max_tokens: Optional[int] = None,
     ) -> str:
         """
-        Bedrock Converse APIを呼び出し（マルチモーダル対応）
+        Call the Bedrock Converse API (multimodal supported)
 
         Args:
-            messages: メッセージリスト（content配列形式）
-            system_prompts: システムプロンプト（オプション）
+            messages: Message list (content-array format)
+            system_prompts: System prompts (optional)
 
         Returns:
-            str: モデルからの応答テキスト
+            str: Response text from the model
 
         Raises:
-            BedrockAPIError: API呼び出しエラー
+            BedrockAPIError: API call error
         """
         try:
             request_params = {
@@ -215,7 +215,7 @@ class AIService:
 
             response = self.bedrock_client.converse(**request_params)
 
-            # レスポンスから応答テキストを抽出
+            # Extract the response text from the response
             if "output" in response and "message" in response["output"]:
                 message = response["output"]["message"]
                 if "content" in message and len(message["content"]) > 0:
@@ -234,7 +234,7 @@ class AIService:
                 code=ErrorCode.AI_BEDROCK_API_FAILED,
             ) from e
         except BotoCoreError:
-            # 接続エラー等はそのまま re-raise して _retry_with_backoff でリトライさせる
+            # Re-raise connection errors etc. as is so _retry_with_backoff retries them
             raise
         except Exception as e:
             if isinstance(e, BedrockAPIError):
@@ -248,20 +248,20 @@ class AIService:
         self, documents: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        ドキュメントをConverse API用のcontent形式に変換
+        Convert documents to the content format for the Converse API
 
         Args:
-            documents: ドキュメントメタデータのリスト
-                各辞書は以下のキーを含む:
-                - file_path: ファイルパス（ローカルまたはs3://）
-                - mime_type: MIMEタイプ
-                - original_filename: 元のファイル名
+            documents: List of document metadata
+                Each dict has the following keys:
+                - file_path: File path (local or s3://)
+                - mime_type: MIME type
+                - original_filename: Original file name
 
         Returns:
-            List[Dict[str, Any]]: Converse API用のcontentリスト
+            List[Dict[str, Any]]: Content list for the Converse API
 
         Raises:
-            AIServiceError: ドキュメント処理エラー
+            AIServiceError: Document processing error
         """
         content_list = []
 
@@ -271,23 +271,23 @@ class AIService:
                 mime_type = doc.get("mime_type", "")
                 filename = doc.get("original_filename", "document")
 
-                # ファイルを読み込み（S3またはローカル）
+                # Read the file (S3 or local)
                 if file_path.startswith("s3://"):
-                    # S3から読み込み
+                    # Read from S3
                     from .service_factory import service_factory
 
                     s3_service = service_factory.get_s3_service()
 
-                    # S3パス全体を渡す
+                    # Pass the whole S3 path
                     file_bytes = s3_service.download_file(file_path)
                 else:
-                    # ローカルファイルから読み込み
+                    # Read from a local file
                     with open(file_path, "rb") as f:
                         file_bytes = f.read()
 
-                # MIMEタイプに応じてcontent形式を決定
+                # Decide the content format by MIME type
                 if mime_type.startswith("image/"):
-                    # 画像の場合（生のバイトデータを渡す）
+                    # For images (pass the raw bytes)
                     image_format = mime_type.split("/")[-1]  # 'png', 'jpeg'
                     content_list.append(
                         {
@@ -298,7 +298,7 @@ class AIService:
                         }
                     )
                 elif mime_type == "application/pdf":
-                    # PDFの場合（生のバイトデータを渡す）
+                    # For PDFs (pass the raw bytes)
                     content_list.append(
                         {
                             "document": {
@@ -330,34 +330,34 @@ class AIService:
         self, personas: List[Persona], topic: str, documents: List[Dict[str, Any]]
     ) -> List[Message]:
         """
-        ドキュメント付き議論を進行（Converse API使用）
+        Run a discussion with documents (using the Converse API)
 
         Args:
-            personas: 議論参加ペルソナのリスト
-            topic: 議論トピック
-            documents: 添付ドキュメントのリスト
+            personas: List of personas in the discussion
+            topic: Discussion topic
+            documents: List of attached documents
 
         Returns:
-            List[Message]: 議論メッセージのリスト
+            List[Message]: List of discussion messages
 
         Raises:
-            AIServiceError: 議論進行エラー
+            AIServiceError: Discussion error
         """
-        # ドキュメントをcontent形式に変換
+        # Convert the documents to content format
         document_contents = self._prepare_document_content(documents)
 
-        # 議論プロンプトを作成
+        # Build the discussion prompt
         discussion_prompt = self._create_discussion_prompt(personas, topic)
 
-        # メッセージを構築（テキスト + ドキュメント）
+        # Build the message (text + documents)
         content = [{"text": discussion_prompt}] + document_contents
 
         messages = [{"role": "user", "content": content}]
 
-        # Converse APIを呼び出し
+        # Call the Converse API
         response = self._retry_with_backoff(self._invoke_converse_api, messages)
 
-        # レスポンスをパース
+        # Parse the response
         parsed_messages = self._parse_discussion_response(response, personas)
 
         return parsed_messages
@@ -366,25 +366,25 @@ class AIService:
         self, response: str, prefer_array: bool = False
     ) -> str:
         """
-        レスポンスから JSON 部分を抽出
+        Extract the JSON part from a response
 
         Args:
-            response: AI からのレスポンス文字列
+            response: Response string from the AI
 
         Returns:
-            str: 抽出された JSON 文字列
+            str: The extracted JSON string
 
         Raises:
-            AIServiceError: JSON が見つからない場合
+            AIServiceError: If no JSON is found
         """
-        # レスポンスをクリーンアップ
+        # Clean up the response
         response = response.strip()
 
         if prefer_array:
-            # 配列形式を優先（インサイト抽出用）
+            # Prefer array form (for insight extraction)
             array_start = response.find("[")
             if array_start != -1:
-                # 対応する閉じ括弧を探す
+                # Find the matching closing bracket
                 bracket_count = 0
                 end_idx = -1
 
@@ -399,7 +399,7 @@ class AIService:
 
                 if end_idx != -1:
                     json_candidate = response[array_start : end_idx + 1]
-                    # 抽出したJSONが有効かテスト
+                    # Test whether the extracted JSON is valid
                     try:
                         json.loads(json_candidate)
                         return json_candidate
@@ -408,10 +408,10 @@ class AIService:
                             f"Array JSON candidate is invalid: {json_candidate[:100]}..."
                         )
 
-            # 配列が見つからない場合はオブジェクトを探す
+            # If no array is found, look for an object
             start_idx = response.find("{")
             if start_idx != -1:
-                # 対応する閉じ括弧を探す
+                # Find the matching closing bracket
                 brace_count = 0
                 end_idx = -1
 
@@ -426,7 +426,7 @@ class AIService:
 
                 if end_idx != -1:
                     json_candidate = response[start_idx : end_idx + 1]
-                    # 抽出したJSONが有効かテスト
+                    # Test whether the extracted JSON is valid
                     try:
                         json.loads(json_candidate)
                         return json_candidate
@@ -435,10 +435,10 @@ class AIService:
                             f"Object JSON candidate is invalid: {json_candidate[:100]}..."
                         )
         else:
-            # オブジェクト形式を優先（ペルソナ生成用）
+            # Prefer object form (for persona generation)
             start_idx = response.find("{")
             if start_idx != -1:
-                # 対応する閉じ括弧を探す
+                # Find the matching closing bracket
                 brace_count = 0
                 end_idx = -1
 
@@ -453,7 +453,7 @@ class AIService:
 
                 if end_idx != -1:
                     json_candidate = response[start_idx : end_idx + 1]
-                    # 抽出したJSONが有効かテスト
+                    # Test whether the extracted JSON is valid
                     try:
                         json.loads(json_candidate)
                         return json_candidate
@@ -462,10 +462,10 @@ class AIService:
                             f"Object JSON candidate is invalid: {json_candidate[:100]}..."
                         )
 
-            # オブジェクトが見つからない場合は配列を探す
+            # If no object is found, look for an array
             array_start = response.find("[")
             if array_start != -1:
-                # 対応する閉じ括弧を探す
+                # Find the matching closing bracket
                 bracket_count = 0
                 end_idx = -1
 
@@ -480,7 +480,7 @@ class AIService:
 
                 if end_idx != -1:
                     json_candidate = response[array_start : end_idx + 1]
-                    # 抽出したJSONが有効かテスト
+                    # Test whether the extracted JSON is valid
                     try:
                         json.loads(json_candidate)
                         return json_candidate
@@ -489,7 +489,7 @@ class AIService:
                             f"Array JSON candidate is invalid: {json_candidate[:100]}..."
                         )
 
-        # JSONブロック（```json ... ```）を探す
+        # Look for a JSON block (```json ... ```)
         json_block_start = response.find("```json")
         if json_block_start != -1:
             json_content_start = response.find("\n", json_block_start) + 1
@@ -504,14 +504,14 @@ class AIService:
                         f"JSON block candidate is invalid: {json_candidate[:100]}..."
                     )
 
-        # 最後の手段：レスポンス全体がJSONかチェック
+        # Last resort: check whether the whole response is JSON
         try:
             json.loads(response)
             return response
         except json.JSONDecodeError:
             pass
 
-        # すべて失敗した場合
+        # If everything failed
         self.logger.error(f"JSON extraction failed - full response: {response}")
         raise AIServiceError(
             "could not extract valid JSON from response",
@@ -525,24 +525,24 @@ class AIService:
         documents: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Message]:
         """
-        ペルソナ同士の議論を進行
+        Run a discussion between personas
 
         Args:
-            personas: 議論参加ペルソナのリスト
-            topic: 議論トピック
-            documents: 添付ドキュメントのリスト（オプション）
+            personas: List of personas in the discussion
+            topic: Discussion topic
+            documents: List of attached documents (optional)
 
         Returns:
-            List[Message]: 議論メッセージのリスト
+            List[Message]: List of discussion messages
 
         Raises:
-            AIServiceError: 議論進行エラー
+            AIServiceError: Discussion error
         """
         self.logger.info(
             f"Starting discussion (participants: {len(personas)}, topic: {topic[:50]}..., documents: {len(documents) if documents else 0})"
         )
 
-        # ドキュメントがある場合はConverse APIを使用
+        # Use the Converse API when there are documents
         if documents:
             try:
                 messages = self._facilitate_discussion_with_documents(
@@ -563,7 +563,7 @@ class AIService:
                     code=ErrorCode.AI_OPERATION_FAILED,
                 ) from e
 
-        # ドキュメントがない場合は従来のメソッドを使用
+        # Without documents, use the legacy method
         prompt = self._create_discussion_prompt(personas, topic)
 
         try:
@@ -574,7 +574,7 @@ class AIService:
             return messages
 
         except AIServiceError:
-            # AIServiceError は再発生
+            # Re-raise AIServiceError
             raise
         except Exception as e:
             error_msg = f"Error during discussion facilitation: {e}"
@@ -591,19 +591,19 @@ class AIService:
         documents: Optional[List[Dict[str, Any]]] = None,
     ) -> Any:
         """
-        ペルソナ同士の議論を進行（ストリーミング版）
-        各発言をyieldで返す
+        Run a discussion between personas (streaming version)
+        Yields each statement
 
         Args:
-            personas: 議論参加ペルソナのリスト
-            topic: 議論トピック
-            documents: オプションのドキュメントリスト（file_path, mime_typeを含む）
+            personas: List of personas in the discussion
+            topic: Discussion topic
+            documents: Optional document list (includes file_path, mime_type)
 
         Yields:
-            Message: 各発言メッセージ
+            Message: Each statement message
 
         Raises:
-            AIServiceError: 議論進行エラー
+            AIServiceError: Discussion error
         """
         self.logger.info(
             f"Starting streaming discussion (participants: {len(personas)})"
@@ -613,7 +613,7 @@ class AIService:
         persona_map = {persona.name: persona.id for persona in personas}
 
         try:
-            # メッセージコンテンツを構築（ドキュメントがある場合は添付を追加）
+            # Build the message content (add attachments when there are documents)
             message_content: List[Dict[str, Any]] = [{"text": prompt}]
             if documents:
                 message_content += self._prepare_document_content(documents)
@@ -627,10 +627,10 @@ class AIService:
                     },
                 )
 
-            # 一過性の接続エラー対策として指数バックオフでリトライ
+            # Retry with exponential backoff against transient connection errors
             response = self._retry_with_backoff(_call_converse_stream)
 
-            # ストリーミングレスポンスを処理
+            # Process the streaming response
             accumulated_text = ""
             yielded_messages = set()
 
@@ -640,9 +640,9 @@ class AIService:
                     if "reasoningContent" not in delta and "text" in delta:
                         accumulated_text += delta["text"]
 
-                        # 完成したメッセージを検出してyield
+                        # Detect completed messages and yield them
                         lines = accumulated_text.split("\n")
-                        for line in lines[:-1]:  # 最後の行は未完成の可能性
+                        for line in lines[:-1]:  # The last line may be incomplete
                             line = line.strip()
                             if line.startswith("[") and "]:" in line:
                                 try:
@@ -683,23 +683,23 @@ class AIService:
         topic: str = "",
     ) -> List[Dict[str, Any]]:
         """
-        議論メッセージからインサイトを抽出
+        Extract insights from discussion messages
 
         Args:
-            discussion_messages: 議論メッセージのリスト
-            categories: インサイトカテゴリーのリスト（Noneの場合はデフォルトを使用）
+            discussion_messages: List of discussion messages
+            categories: List of insight categories (defaults are used if None)
 
         Returns:
-            List[Dict[str, Any]]: 抽出されたインサイトの構造化データ
-                各辞書は以下のキーを含む:
-                - category: str (カテゴリー)
-                - description: str (説明)
-                - confidence_score: float (信頼度スコア 0.0-1.0)
+            List[Dict[str, Any]]: Structured data of the extracted insights
+                Each dict has the following keys:
+                - category: str (category)
+                - description: str (description)
+                - confidence_score: float (confidence score 0.0-1.0)
 
         Raises:
-            AIServiceError: インサイト抽出エラー
+            AIServiceError: Insight extraction error
         """
-        # カテゴリーが指定されていない場合はデフォルトを使用
+        # Use the defaults when no categories are given
         if categories is None:
             categories = config.get_default_insight_categories()
 
@@ -733,7 +733,7 @@ class AIService:
             ) from e
 
     def _create_discussion_prompt(self, personas: List[Persona], topic: str) -> str:
-        """議論進行用のプロンプトを作成"""
+        """Build the prompt for running a discussion."""
         from ..prompts.discussion_interview_prompts import build_discussion_prompt
 
         return build_discussion_prompt(personas, topic)
@@ -744,7 +744,7 @@ class AIService:
         categories: Optional[List[InsightCategory]],
         topic: str = "",
     ) -> str:
-        """インサイト抽出用のプロンプトを作成"""
+        """Build the prompt for insight extraction."""
         from ..prompts.insight_prompts import build_insight_extraction_prompt
 
         return build_insight_extraction_prompt(messages, categories, topic)
@@ -752,11 +752,11 @@ class AIService:
     def _parse_discussion_response(
         self, response: str, personas: List[Persona]
     ) -> List[Message]:
-        """議論レスポンスをメッセージリストに解析"""
+        """Parse the discussion response into a message list."""
         messages = []
         lines = response.strip().split("\n")
 
-        # ペルソナ名のマッピングを作成
+        # Build the persona name mapping
         persona_map = {persona.name: persona.id for persona in personas}
 
         for line in lines:
@@ -764,7 +764,7 @@ class AIService:
             if not line:
                 continue
 
-            # [ペルソナ名]: 発言内容 の形式を解析
+            # Parse the "[persona name]: statement" format
             if line.startswith("[") and "]:" in line:
                 try:
                     end_bracket = line.index("]:")
@@ -779,13 +779,13 @@ class AIService:
                         )
                         messages.append(message)
                 except (ValueError, IndexError):
-                    # 解析に失敗した行はスキップ
+                    # Skip lines that fail to parse
                     self.logger.warning(
                         f"Skipping line that failed to parse in discussion response: {line}"
                     )
                     continue
 
-        # 最低限のメッセージ数をチェック
+        # Check the minimum message count
         if len(messages) < 2:
             self.logger.warning(f"Parsed message count is too low: {len(messages)}")
             raise AIServiceError(
@@ -799,23 +799,23 @@ class AIService:
         self, response: str, categories: List[InsightCategory]
     ) -> List[Dict[str, Any]]:
         """
-        構造化されたインサイトレスポンスを解析
+        Parse a structured insight response
 
         Args:
-            response: AI からのレスポンス文字列（JSON形式）
-            categories: 有効なインサイトカテゴリーのリスト
+            response: Response string from the AI (JSON format)
+            categories: List of valid insight categories
 
         Returns:
-            List[Dict[str, Any]]: 解析されたインサイトの構造化データ
+            List[Dict[str, Any]]: Structured data of the parsed insights
 
         Raises:
-            AIServiceError: 解析エラー
+            AIServiceError: Parse error
         """
         try:
-            # JSON 部分を抽出（インサイト抽出では配列形式を優先）
+            # Extract the JSON part (array form preferred for insight extraction)
             json_str = self._extract_json_from_response(response, prefer_array=True)
 
-            # JSON をパース
+            # Parse the JSON
             insights_data = json.loads(json_str)
 
             if not isinstance(insights_data, list):
@@ -824,7 +824,7 @@ class AIService:
                     code=ErrorCode.AI_OPERATION_FAILED,
                 )
 
-            # 各インサイトを検証・正規化
+            # Validate and normalize each insight
             validated_insights = []
             for i, insight in enumerate(insights_data):
                 try:
@@ -848,20 +848,20 @@ class AIService:
             self.logger.warning(
                 f"JSON parsing failed, falling back to text parsing: {e}"
             )
-            # フォールバック: 従来の文字列解析を使用
+            # Fallback: use the legacy string parsing
             return self._fallback_to_text_parsing(response)
         except Exception as e:
             self.logger.error(f"Structured insight parsing error: {e}")
-            # フォールバック: 従来の文字列解析を使用
+            # Fallback: use the legacy string parsing
             return self._fallback_to_text_parsing(response)
 
     def _validate_and_normalize_insight(
         self, insight: Dict[str, Any], index: int, categories: List[InsightCategory]
     ) -> Dict[str, Any]:
-        """AIレスポンスから抽出したインサイトの必須フィールドを検証し型変換する。
+        """Validate required fields of insights extracted from an AI response and convert types.
 
-        ビジネスルール（カテゴリ正規化、confidence clamp、重複除去）は
-        Manager層(shared/insight_utils)で実行する。
+        Business rules (category normalization, confidence clamp, deduplication) are
+        applied in the Manager layer (shared/insight_utils).
         """
         if not isinstance(insight, dict):
             raise AIServiceError(
@@ -897,26 +897,26 @@ class AIService:
 
     def _fallback_to_text_parsing(self, response: str) -> List[Dict[str, Any]]:
         """
-        フォールバック: 従来のテキスト解析を使用してインサイトを抽出
+        Fallback: extract insights using legacy text parsing
 
         Args:
-            response: AI からのレスポンス文字列
+            response: Response string from the AI
 
         Returns:
-            List[Dict[str, Any]]: 解析されたインサイトの構造化データ
+            List[Dict[str, Any]]: Structured data of the parsed insights
         """
         self.logger.info("Fallback: extracting insights using text parsing")
 
-        # 従来のメソッドを使用
+        # Use the legacy method
         text_insights = self._parse_insights_response(response)
 
-        # テキストインサイトを構造化データに変換
+        # Convert text insights into structured data
         structured_insights = []
         for insight_text in text_insights:
             category, description = self._extract_category_and_description(insight_text)
 
-            # デフォルトの信頼度スコアを設定（議論の長さに基づいて調整）
-            default_confidence = 0.6  # 中程度の信頼度
+            # Set a default confidence score (adjusted by discussion length)
+            default_confidence = 0.6  # Medium confidence
 
             structured_insights.append(
                 {
@@ -941,7 +941,7 @@ class AIService:
         Returns:
             tuple: (category, description)
         """
-        # Look for category pattern: [カテゴリー] 内容
+        # Look for category pattern: [category] content
         if text.startswith("[") and "]" in text:
             end_bracket = text.index("]")
             category = text[1:end_bracket].strip()
@@ -957,14 +957,14 @@ class AIService:
             return "その他", text.strip()
 
     def _parse_insights_response(self, response: str) -> List[str]:
-        """インサイトレスポンスを解析
+        """Parse an insight response.
 
-        対応形式:
-        - 箇条書き: `- [カテゴリー] 内容` または `- 内容`
-        - 番号付き: `1. [カテゴリー] 内容` または `1. 内容`
-        - 太字カテゴリ（Claude形式）: `**[カテゴリー]** 内容` または `**カテゴリー**: 内容`
-        - カテゴリのみ: `[カテゴリー] 内容`
-        - 見出し形式: `## カテゴリー` の後に内容
+        Supported formats:
+        - Bullets: `- [category] content` or `- content`
+        - Numbered: `1. [category] content` or `1. content`
+        - Bold category (Claude style): `**[category]** content` or `**category**: content`
+        - Category only: `[category] content`
+        - Heading style: content after `## category`
         """
         insights = []
         lines = response.strip().split("\n")
@@ -977,47 +977,47 @@ class AIService:
 
             insight = None
 
-            # 見出し形式のカテゴリを検出 (## や ### で始まる行)
+            # Detect heading-style categories (lines starting with ## or ###)
             if line.startswith("#"):
-                # カテゴリ名を抽出して保存
+                # Extract and store the category name
                 current_category = line.lstrip("#").strip()
                 continue
 
-            # 1. 箇条書きの記号を除去
+            # 1. Strip the bullet marker
             if line.startswith(("- ", "• ", "* ", "・")):
                 content = line[2:].strip()
                 if content:
                     insight = content
-            # 2. 番号付きリストの場合
+            # 2. Numbered list
             elif line.startswith(
                 tuple(f"{i}." for i in range(1, 10))
             ) or line.startswith(tuple(f"{i})" for i in range(1, 10))):
                 parts = line.split(".", 1) if "." in line[:3] else line.split(")", 1)
                 if len(parts) > 1:
                     insight = parts[1].strip()
-            # 3. Claude形式: **[カテゴリー]** で始まる場合
+            # 3. Claude style: starts with **[category]**
             elif line.startswith("**[") and "]**" in line:
                 insight = line.replace("**[", "[").replace("]**", "]")
-            # 4. Claude形式: **カテゴリー**: 内容
+            # 4. Claude style: **category**: content
             elif line.startswith("**") and "**:" in line:
-                # **カテゴリー**: 内容 → [カテゴリー] 内容
+                # **category**: content -> [category] content
                 parts = line.split("**:", 1)
                 if len(parts) == 2:
                     category = parts[0].replace("**", "").strip()
                     content = parts[1].strip()
                     if content:
                         insight = f"[{category}] {content}"
-            # 5. [カテゴリー] で始まる場合（箇条書き記号なし）
+            # 5. Starts with [category] (no bullet marker)
             elif line.startswith("[") and "]" in line:
                 insight = line
-            # 6. 太字で始まる行（カテゴリなしの場合）
+            # 6. Line starting with bold (no category)
             elif line.startswith("**") and line.endswith("**"):
-                # 見出しとして扱う
+                # Treat as a heading
                 current_category = line.strip("*").strip()
                 continue
-            # 7. 通常のテキスト行（十分な長さがあれば）
+            # 7. Plain text line (if long enough)
             elif len(line) > 20 and not line.startswith(("#", "---", "===", "```")):
-                # カテゴリがあれば付与
+                # Attach the category if there is one
                 if current_category:
                     insight = f"[{current_category}] {line}"
                 else:
@@ -1033,17 +1033,17 @@ class AIService:
         system_prompt: str,
         converse_messages: List[Dict[str, Any]],
     ) -> Any:
-        """Bedrock converse_streamを使った標準レポートストリーミング生成。
+        """Standard report streaming generation using Bedrock converse_stream.
 
-        テンプレートルーティングやコンテキスト構築は呼び出し元(ReportManager)が担当。
-        本メソッドは純粋なBedrock API呼び出しのみ行う。
+        Template routing and context building are the caller's job (ReportManager).
+        This method only makes the Bedrock API call.
 
         Args:
-            system_prompt: システムプロンプト
-            converse_messages: Converse API形式のメッセージリスト
+            system_prompt: System prompt
+            converse_messages: Message list in Converse API format
 
         Yields:
-            str: テキストチャンク
+            str: Text chunk
         """
 
         def _call_stream() -> Any:
@@ -1067,7 +1067,7 @@ class AIService:
                     yield delta["text"]
 
     # =========================================================================
-    # アンケートAI生成（Issue #23）
+    # AI survey generation
     # =========================================================================
 
     _SURVEY_CHAT_SYSTEM_PROMPT = (
@@ -1112,7 +1112,7 @@ class AIService:
 
     @staticmethod
     def _to_converse_messages(messages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-        """[{role, content}] -> Converse API用のメッセージ配列に変換"""
+        """Convert [{role, content}] into a message array for the Converse API."""
         converted: List[Dict[str, Any]] = []
         for m in messages:
             role = m.get("role", "user")
@@ -1125,15 +1125,15 @@ class AIService:
     def chat_for_survey(
         self, messages: List[Dict[str, str]], system_prompt: str = ""
     ) -> str:
-        """アンケートヒアリング用のマルチターン会話。
+        """Multi-turn conversation for survey hearing.
 
         Args:
-            messages: [{"role": "user"|"assistant", "content": "..."}, ...] の会話履歴
-                     （最後のメッセージは user 発言であることを想定）
-            system_prompt: システムプロンプト
+            messages: Conversation history [{"role": "user"|"assistant", "content": "..."}, ...]
+                     (the last message is expected to be a user turn)
+            system_prompt: System prompt
 
         Returns:
-            assistantの返答テキスト
+            The assistant's reply text
         """
         if not messages:
             raise AIServiceError(
@@ -1174,11 +1174,11 @@ class AIService:
     def generate_survey_questions_draft(
         self, messages: List[Dict[str, str]], system_prompt: str = ""
     ) -> Dict[str, Any]:
-        """会話履歴から設問ドラフトを生成して JSON 辞書を返す。
+        """Generate a question draft from the conversation history and return a JSON dict.
 
         Args:
-            messages: 会話履歴
-            system_prompt: システムプロンプト
+            messages: Conversation history
+            system_prompt: System prompt
 
         Returns:
             {"summary": str, "questions": [ {question_type, text, options, allow_multiple, max_selections}, ... ]}
@@ -1189,7 +1189,7 @@ class AIService:
                 code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
             )
 
-        # 会話履歴 + 「ドラフト生成指示」を最後に追加
+        # Append the "draft generation instruction" after the conversation history
         converse_messages = self._to_converse_messages(messages)
         converse_messages.append(
             {

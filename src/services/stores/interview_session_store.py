@@ -1,11 +1,10 @@
-"""DynamoDB reads and writes of running interviews (U6, ADR-004).
+"""DynamoDB reads and writes of running interviews.
 
 ``InterviewSessions`` (PK ``id``, TTL ``expires_at``) and ``InterviewMessages``
 (PK ``session_id``, SK ``seq`` N, TTL ``expires_at``). Reads are strongly
-consistent so every task sees the same ``last_seq`` and reply mark
-(NFR9.31). Who may use a session and when it expired are decided by
-``InterviewManager``; this service runs the conditional transactions of a send
-(``reliability-design.md`` §3):
+consistent so every task sees the same ``last_seq`` and reply mark.
+Who may use a session and when it expired are decided by
+``InterviewManager``; this service runs the conditional transactions of a send:
 
 - (a) :meth:`append_user_message`: the user's message (``seq = n + 1``) and the
   session (``last_seq``, reply mark, last action) in one transaction,
@@ -46,7 +45,7 @@ _SEQ = "seq"
 #: The mark is absent, or older than five minutes (a crashed task's mark).
 _NO_LIVE_MARK = "(attribute_not_exists(#token) OR #started < :stale)"
 
-#: 初回の保存の印（同じセッションの初回の保存を 1 つの要求だけが行う）
+#: Marker for the first save (only one request performs the first save of a session)
 _SAVE_TOKEN = "save_token"
 _SAVE_STARTED = "save_started_at"
 
@@ -99,7 +98,7 @@ class InterviewSessionStore:
     # --- sessions ------------------------------------------------------------------
 
     def create(self, session: InterviewSession) -> None:
-        """Write a new session (BR3.1).
+        """Write a new session.
 
         Raises:
             InterviewSessionStoreError: The ID exists or DynamoDB failed.
@@ -124,7 +123,7 @@ class InterviewSessionStore:
         return InterviewSession.from_dict(self._plain(item)) if item else None
 
     def extend(self, session: InterviewSession) -> None:
-        """Write the session's last action and expiry (BR3.5)."""
+        """Write the session's last action and expiry."""
         self._call(
             "update_item",
             TableName=self.sessions_table,
@@ -153,7 +152,7 @@ class InterviewSessionStore:
         )
 
     def mark_saved(self, session_id: str, discussion_id: str, *, now: datetime) -> None:
-        """Record the saved discussion, unless a reply is in progress (NFR1.60).
+        """Record the saved discussion, unless a reply is in progress.
 
         Raises:
             InterviewConflict: A reply mark younger than five minutes.
@@ -192,7 +191,7 @@ class InterviewSessionStore:
         token: str,
         now: datetime,
     ) -> InterviewSession:
-        """(a) Write the user's message and put the reply mark (BR3.3).
+        """(a) Write the user's message and put the reply mark.
 
         ``session`` is the session as read (its ``last_seq`` is the condition)
         with the attachments of this send already added. ``message.seq`` must
@@ -260,7 +259,7 @@ class InterviewSessionStore:
         now: datetime,
         last: bool,
     ) -> None:
-        """(b) Write one persona's reply (BR3.3, NFR1.59).
+        """(b) Write one persona's reply.
 
         Args:
             expected_seq: ``last_seq`` before this reply.
@@ -402,7 +401,7 @@ class InterviewSessionStore:
     # --- messages ------------------------------------------------------------------
 
     def query_messages(self, session_id: str, *, up_to: int) -> list[InterviewMessage]:
-        """Messages ``1 .. up_to`` in order, through every page (BR3.4)."""
+        """Messages ``1 .. up_to`` in order, through every page."""
         params: dict[str, Any] = {
             "TableName": self.messages_table,
             "KeyConditionExpression": "#s = :s AND #q <= :n",

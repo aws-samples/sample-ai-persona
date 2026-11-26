@@ -1,4 +1,4 @@
-"""AnalysisRecordArchive: the analysis record in S3 (BR9.1〜BR9.4, contract C7).
+"""AnalysisRecordArchive: the analysis record in S3.
 
 Deposited with ``pending=true`` (the lifecycle removes it), copied without
 tags per saved persona, never readable 24 hours after the generation ended,

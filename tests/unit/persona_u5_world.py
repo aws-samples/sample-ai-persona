@@ -1,11 +1,11 @@
-"""U5 の PersonaManager のテストで共有する偽物（unit-test-instructions.md「テストのデータ」）。
+"""Fakes shared by the PersonaManager tests (bindings, sharing, candidates).
 
-- 部署は sales と plan。member A は sales、``SALES_PEER``（共有された人）も sales、
-  member C は plan、admin は所属なし
-- ペルソナは member A の 2 件（共有なし、sales に共有）、member C の 1 件、
-  ``owner_sub`` のない旧データ 1 件
-- 紐付けの Store は辞書の偽物、ResourceLookup は本物（読み手だけ偽物）、
-  AccessPolicy は本物
+- Departments are sales and plan. Member A is in sales, ``SALES_PEER`` (a share
+    recipient) is also in sales, member C is in plan, and the admin has no department.
+- Personas: two of member A's (one unshared, one shared with sales), one of
+    member C's, and one legacy item without ``owner_sub``.
+- Binding stores are dict fakes, ResourceLookup is real (only the reader is
+    fake), and AccessPolicy is real.
 """
 
 from dataclasses import replace
@@ -124,7 +124,7 @@ class World:
         self.personas: dict[str, Persona] = {}
         self.datasets: dict[str, Dataset] = {}
         self.kbs: dict[str, KnowledgeBase] = {}
-        #: Usage scope of organization assets (U7 adds the column).
+        #: Usage scope of organization assets.
         self.scopes: dict[str, frozenset[str]] = {}
         self.bindings = FakeBindingStore()
         self.persona_store = Mock(spec=PersonaStore)
@@ -160,7 +160,7 @@ class World:
         )
         self.preview = Mock()
         self.preview.execute_dataset_preview.return_value = (1, ["user_id"], [["U1"]])
-        #: Every hold is still the request's (R-04); tests that take one over
+        #: Every hold is still the request's; tests that take one over
         #: pass a real-condition fake instead.
         self.candidates = Mock()
         self.candidates.confirm_claim.return_value = True

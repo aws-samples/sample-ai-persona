@@ -1,4 +1,4 @@
-"""AnalysisVerifier: the result is checked against the tool outputs (BR8.1〜BR8.3).
+"""AnalysisVerifier: the result is checked against the tool outputs.
 
 Values not seen in a tool output are marked unverified (the generation goes
 on); non-overlapping sizes over the population, a cluster that does not add
@@ -286,7 +286,7 @@ DOCUMENT_EVIDENCE = [
 
 
 class TestVerifyDocuments:
-    """U4 BR27.2, AC6.1.3: value, pain and goal for every document-only persona."""
+    """Value, pain and goal are required for every document-only persona."""
 
     def test_every_key_item_backed_passes(self) -> None:
         result = AnalysisVerifier.verify_documents(
@@ -329,7 +329,7 @@ class TestVerifyDocuments:
         assert not result.passed
 
 
-# --- U6: populations per table and run_code segments (BR36.3, BR37.5) -------
+# --- populations per table and run_code segments ----------------------------
 
 _EMITTED = EmittedResult(
     population=50,

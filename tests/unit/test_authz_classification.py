@@ -1,20 +1,22 @@
-"""判定を通らない取得経路の機械検査（BR2.15、NFR1.2、NFR1.8、NFR Design R-05）。
+"""Mechanical check for retrieval paths that bypass the access decision.
 
-``src/managers/*_manager.py`` と Manager のパッケージの ``src/managers/<package>/manager.py``
-（例: ``advanced_generation/manager.py``）の Manager の公開メソッドを ``ast`` で列挙し、
-``tests/unit/authz_classification.py`` の分類の一覧と突き合わせる。
+Lists the public methods of Managers (``src/managers/*_manager.py`` and
+``src/managers/<package>/manager.py`` for Manager packages such as
+``advanced_generation/manager.py``) with ``ast`` and compares them against the
+classification in ``tests/unit/authz_classification.py``.
 
-- 一覧にないメソッド、一覧にあるがもうないメソッドがあれば失敗（ラチェット）
-- ``checks`` のメソッドは、本体（と同じクラスの非公開メソッドを 1 段だけ）で判定
-  （``AccessPolicy`` の判定、または判定する口として登録した部品のメソッド）を呼ぶ。
-  ``can_*`` の戻り値を捨てる文は失敗
-- ``exempt`` の理由は 3 種類の列挙値。``pending_unit`` には解消する Unit を書く
-- ``pending_unit`` の件数は Unit ごとの基準値と一致させる（減らすのは各 Unit）。
-  ``CURRENT_UNIT`` までの Unit の ``pending_unit`` は 0 件、``FINAL_UNIT``（U7）の
-  Build and Test では全体 0 件
+- A method missing from the list, or listed but gone, fails (ratchet)
+- A ``checks`` method calls a decision in its body (and in same-class private
+  methods, one level deep): an ``AccessPolicy`` decision or a method of a
+  component registered as a decision point. A statement that discards the
+  return value of ``can_*`` fails
+- ``exempt`` reasons are one of three enum values. ``pending_unit`` names the Unit that will resolve it
+- The ``pending_unit`` count must match the per-Unit baseline (each Unit reduces
+  it). Units up to ``CURRENT_UNIT`` have zero ``pending_unit``, and at
+  ``FINAL_UNIT`` the total is zero
 
-この検査が捕まえるのは「判定を呼んでいるか」まで。「正しい対象に当てているか」は
-判定表テストと各 Unit の A / B のテストが確かめる（NFR1.8）。
+This check only catches whether a decision is called, not whether it is applied
+to the right target; the decision-table tests and each Unit's A / B tests cover that.
 """
 
 import ast
@@ -49,7 +51,7 @@ _POLICY_RECEIVERS = ("accesspolicy", "access_policy", "policy")
 
 
 # =============================================================================
-# 検査の本体
+# The check itself
 # =============================================================================
 
 
@@ -152,7 +154,7 @@ def _private_helpers(
 
 
 def check_problems(directory: Path, classification: dict[str, Entry]) -> list[str]:
-    """Every rule violation of BR2.15 as a readable line (empty when clean)."""
+    """Every rule violation as a readable line (empty when clean)."""
     problems: list[str] = []
     methods = public_methods(directory)
     for key in sorted(set(methods) - set(classification)):
@@ -175,7 +177,7 @@ def check_problems(directory: Path, classification: dict[str, Entry]) -> list[st
 
 
 # =============================================================================
-# 本物のコードに対する検査
+# Checks against the real code
 # =============================================================================
 
 
@@ -221,7 +223,7 @@ def test_no_pending_is_left_for_units_already_built():
 
 def test_nothing_is_pending_after_the_final_unit():
     if UNIT_ORDER.index(CURRENT_UNIT) < UNIT_ORDER.index(FINAL_UNIT):
-        return  # U7 の Build and Test で CURRENT_UNIT を U7 にすると強制される
+        return  # enforced once CURRENT_UNIT is set to FINAL_UNIT
     assert sum(PENDING_BASELINE.values()) == 0
 
 
@@ -231,7 +233,7 @@ def test_the_final_unit_mark():
 
 
 # =============================================================================
-# 検査そのものが空振りしないこと（わざと違反させる）
+# The check itself does not pass vacuously (violations are introduced on purpose)
 # =============================================================================
 
 

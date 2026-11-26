@@ -1,21 +1,21 @@
-"""SandboxService: the analysis sandbox of advanced generation (contract C10).
+"""SandboxService: the analysis sandbox of advanced generation.
 
-One session per generation (BR6.1). The fixed library
+One session per generation. The fixed library
 ``sandbox/persona_analysis.py`` is written into the session and its functions
-are called by name with JSON arguments (contract C9). Two versions keep the
+are called by name with JSON arguments. Two versions keep the
 same contract:
 
 - :class:`CodeInterpreterSandbox` calls AgentCore Code Interpreter through the
-  boto3 ``bedrock-agentcore`` client directly (tech-stack-decisions.md).
+  boto3 ``bedrock-agentcore`` client directly.
   Transient failures are retried here, 3 times after 1, 2 and 4 seconds, and
-  botocore's own retry is off so they do not stack (NFR5.16).
+  botocore's own retry is off so they do not stack.
 - :class:`InProcessSandbox` runs the same library in this process (tests, and
-  U7 for environments without Code Interpreter).
+  environments without Code Interpreter).
 
 This Service never imports ``S3Service`` (no Service-to-Service imports): the
-Manager makes the short presigned GET URL and passes it as ``download_url``
-(BR6.2). The URL goes into the session's command only; it is never logged,
-returned or put in an exception (NFR3.6).
+Manager makes the short presigned GET URL and passes it as ``download_url``.
+The URL goes into the session's command only; it is never logged,
+returned or put in an exception.
 """
 
 from __future__ import annotations
@@ -42,14 +42,14 @@ from ..models.errors import CodedError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
-#: ``cause`` put in the error context when Code Interpreter fails (NFR5.16).
+#: ``cause`` put in the error context when Code Interpreter fails.
 CAUSE_CODE_INTERPRETER = "code_interpreter"
-#: Waits before each retry of a transient failure (reliability-design.md §3).
+#: Waits before each retry of a transient failure.
 RETRY_DELAYS_SECONDS: tuple[float, ...] = (1, 2, 4)
 #: Library file name inside the session, and the work folder (on disk).
 _LIBRARY_NAME = "persona_analysis.py"
 _WORKDIR = "work"
-#: Time limit of one download inside the session (security-design.md §3).
+#: Time limit of one download inside the session.
 _DOWNLOAD_TIMEOUT_SECONDS = 600
 _DONE_STATUSES = frozenset({"completed", "failed", "canceled", "cancelled"})
 _RETRYABLE_CODES = frozenset(
@@ -98,7 +98,7 @@ class SandboxSession:
 
 
 class SandboxService(Protocol):
-    """Contract C10. Both versions below satisfy it."""
+    """The sandbox contract. Both versions below satisfy it."""
 
     @property
     def library_sha256(self) -> str:
@@ -133,12 +133,12 @@ class SandboxService(Protocol):
         function: str,
         args: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """U6: run this app's own library isolated, sent inside one command.
+        """Run this app's own library isolated, sent inside one command.
 
-        The check after AI-written code (NFR3.35): the library the session
+        The check after AI-written code: the library the session
         holds may have been changed by that code, so the copy this process
         holds is sent compressed inside the command and run with ``python -I
-        -c`` (security review: nothing is written, so a process the code left
+        -c`` (nothing is written, so a process the code left
         cannot swap it between a write and the run). ``session_library`` (the
         session's own copy, to be hashed) is added to ``args``. A command
         longer than :data:`VERIFY_COMMAND_MAX_CHARS` is not sent; the result
@@ -149,7 +149,7 @@ class SandboxService(Protocol):
     def stop_session(self, session: SandboxSession) -> None: ...
 
     def stop_session_by_id(self, session_id: str) -> None:
-        """Stop a session known only by its ID (U5: a reader ends a generation)."""
+        """Stop a session known only by its ID (a reader ends a generation)."""
         ...
 
 
@@ -174,7 +174,7 @@ def _size(result: Mapping[str, Any]) -> int:
 
 
 def limit_output(result: dict[str, Any], max_chars: int) -> dict[str, Any]:
-    """Cut a C9 result to ``max_chars`` characters and say so (NFR5.10, NFR5.36).
+    """Cut a result to ``max_chars`` characters and say so.
 
     The longest list in the value (rows, columns, clusters) is halved until the
     result fits. When the value has no list left to halve, its longest string
@@ -355,7 +355,7 @@ class CodeInterpreterSandbox:
         self._sleep = sleep
         self._commands: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
-        # Read once: the hash is of the very bytes written and sent (U6).
+        # Read once: the hash is of the very bytes written and sent.
         with open(library_path, "rb") as f:
             self._library_source = f.read()
         self._library_sha256 = hashlib.sha256(self._library_source).hexdigest()
@@ -366,7 +366,7 @@ class CodeInterpreterSandbox:
         import boto3
         from botocore.config import Config as BotoConfig
 
-        # botocore's own retry is off; this class retries (NFR5.16).
+        # botocore's own retry is off; this class retries.
         return boto3.client(
             "bedrock-agentcore",
             region_name=region_name,
@@ -383,7 +383,7 @@ class CodeInterpreterSandbox:
 
     @property
     def kind(self) -> str:
-        """``code_interpreter``: AI-written code may run here (U6 ADR-004)."""
+        """``code_interpreter``: AI-written code may run here."""
         return "code_interpreter"
 
     # --- retries -----------------------------------------------------------
@@ -457,7 +457,7 @@ class CodeInterpreterSandbox:
             merged["stdout"] = "".join(stdout)
         return merged
 
-    # --- C10 ---------------------------------------------------------------
+    # --- Sandbox contract ---------------------------------------------------------------
 
     def start_session(
         self, generation_id: str, lifetime_seconds: int
@@ -495,7 +495,7 @@ class CodeInterpreterSandbox:
     def put_files(
         self, session: SandboxSession, files: Sequence[Mapping[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Bring each file in from its ``download_url`` (BR6.2).
+        """Bring each file in from its ``download_url``.
 
         Returns ``[{source_file_id, ok, bytes, http_status}]``; a refused or
         expired URL is ``ok=False`` with its status, for the Manager to make a
@@ -540,13 +540,13 @@ class CodeInterpreterSandbox:
         content = self._invoke(
             session, "executeCommand", {"command": _library_command(function, args)}
         )
-        # stderr is dropped: it may echo arguments (NFR3.6).
+        # stderr is dropped: it may echo arguments.
         return _parse_result(str(content.get("stdout", "")))
 
     def call(
         self, session: SandboxSession, function: str, args: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """Run one library function and return the C9 result (cut to the limit)."""
+        """Run one library function and return the result (cut to the limit)."""
         result = self._run_library(session, function, args)
         return limit_output(result, self.max_output_chars)
 
@@ -572,7 +572,7 @@ class CodeInterpreterSandbox:
         return task_id
 
     def poll_command(self, session: SandboxSession, command_id: str) -> dict[str, Any]:
-        """``{done, status, progress, result}`` of a started command (C10)."""
+        """``{done, status, progress, result}`` of a started command."""
         task_id = self._task_of(session, command_id)
         task = self._invoke(session, "getTask", {"taskId": task_id})
         status = str(task.get("taskStatus", "")).lower()
@@ -628,7 +628,7 @@ class CodeInterpreterSandbox:
         self.stop_session_by_id(session.session_id)
 
     def stop_session_by_id(self, session_id: str) -> None:
-        """Stop a session by its ID; raises after the retries (NFR5.48)."""
+        """Stop a session by its ID; raises after the retries."""
 
         def stop() -> Any:
             return self.client.stop_code_interpreter_session(
@@ -696,7 +696,7 @@ class _Command:
 
 
 class InProcessSandbox:
-    """SandboxService that runs the library in this process (tests, U7).
+    """SandboxService that runs the library in this process (tests, and environments without Code Interpreter).
 
     Each session gets its own folder under ``root_dir``. Files are read by
     their ``s3_key`` through ``read_object`` (or fetched from ``download_url``).
@@ -729,7 +729,7 @@ class InProcessSandbox:
 
     @property
     def kind(self) -> str:
-        """``in_process``: AI-written code is never given here (U6 NFR3.33)."""
+        """``in_process``: AI-written code is never given here."""
         return "in_process"
 
     def workdir_of(self, session: SandboxSession) -> str:
@@ -747,8 +747,8 @@ class InProcessSandbox:
         )
         workdir = os.path.join(self.root_dir, session.session_id)
         os.makedirs(workdir, exist_ok=False)
-        # U6: the session's own copy, as Code Interpreter holds one (the
-        # check hashes it, BR36.6); the functions here run from memory.
+        # The session's own copy, as Code Interpreter holds one (the
+        # check hashes it); the functions here run from memory.
         shutil.copyfile(self.library_path, os.path.join(workdir, _LIBRARY_NAME))
         with self._lock:
             self._workdirs[session.session_id] = workdir

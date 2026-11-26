@@ -1,14 +1,14 @@
 {#
-  計画のカード（U5 S7、BR29.2）。SSE の plan（C3）と、計画の POST の応答（受け付けたあと）。
-  計画の文はモデルの出力なので、自動のエスケープに任せる（safe は使わない。NFR3.28）。
-  引数:
-    generation_id ... 生成の ID
-    plan ... AnalysisPlan（受け付けたあとの応答では None）
-    purpose ... 今の指示（計画し直しの入力欄に入れる）
-    awaiting ... 計画の確認を待っているか（ボタンを出す）
-    accepted ... None、"approve"（承認した）、"replan"（計画し直している）
-    limits ... screen_limits()（plan_wait_minutes、purpose_max_chars）
-    reading ... TableReading の並び（データの解釈。ファイル名・列名は利用者のデータなので自動エスケープのまま出す）
+  Plan card. Used for the SSE plan event and for the response of the plan POST (after it is accepted).
+  The plan text is model output, so it relies on automatic escaping (the safe filter is not used).
+  Arguments:
+    generation_id ... generation ID
+    plan ... AnalysisPlan (None in the response after acceptance)
+    purpose ... current instructions (put into the replan input)
+    awaiting ... whether it is waiting for plan confirmation (shows the buttons)
+    accepted ... None, "approve" (approved), or "replan" (replanning)
+    limits ... screen_limits() (plan_wait_minutes, purpose_max_chars)
+    reading ... list of TableReading (interpretation of the data; file and column names are user data, so they stay auto-escaped)
 #}
 {% from "persona/partials/advanced_labels.html" import method_label, step_label %}
 <section data-testid="advanced-plan-card" aria-labelledby="advanced-plan-title"

@@ -1,8 +1,7 @@
-"""PersonaCandidateStore（生成候補の読み書き）の結合テスト。moto を使う。
+"""Integration tests for PersonaCandidateStore (reading and writing generated candidates), using moto.
 
-BR1.1（候補をまとめて書く）、BR1.3（押さえの条件）、BR1.6（項目の大きさ）、
-BR1.7（印が一致するときだけ片付ける）、NFR1.22、NFR2.12、NFR2.13、
-NFR9.27（強い整合性の読み）、NFR9.28（2 つの押さえのうち片方だけが通る）。
+Covers writing candidates in bulk, the claim condition, item size, cleanup only when
+the marker matches, strongly consistent reads, and only one of two claims winning.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -134,7 +133,7 @@ class TestWrite:
             generation_log=[{"type": "thinking", "content": "あ" * 130_000}],
         )
         assert 0 < PersonaCandidateStore.item_size(small) < 2_000
-        # 1 文字 3 バイト（UTF-8）なので 390,000 バイトを超える
+        # 3 bytes per character (UTF-8), so it exceeds 390,000 bytes
         assert PersonaCandidateStore.item_size(big) > MAX_CANDIDATE_ITEM_BYTES
 
 
@@ -148,7 +147,7 @@ def _sized(candidate: PersonaCandidate, size: int) -> PersonaCandidate:
         )
 
     base = PersonaCandidateStore.item_size(with_log(""))
-    padded = with_log("x" * (size - base))  # ASCII は 1 文字 1 バイト
+    padded = with_log("x" * (size - base))  # ASCII is 1 byte per character
     assert PersonaCandidateStore.item_size(padded) == size
     return padded
 
@@ -158,7 +157,7 @@ def _count(client: Any) -> int:
 
 
 class TestSizeBoundary:
-    """NFR2.12（BR1.6）: 直列にした大きさ 358,400 バイトちょうどは書け、1 バイト多いと書かない。"""
+    """A serialized size of exactly 358,400 bytes is written; one byte more is not."""
 
     def test_a_candidate_of_exactly_the_limit_is_written(self, store, client):
         candidate = _sized(_candidate(), MAX_CANDIDATE_ITEM_BYTES)
@@ -184,7 +183,7 @@ class TestSizeBoundary:
         from tests.conftest import MEMBER_A
         from tests.error_helpers import raises_code
 
-        # 生成で作られた候補を、ちょうど上限 + extra バイトにする（本番のコードは変えない）
+        # Make a generated candidate exactly the limit + extra bytes (production code is unchanged)
         original = PersonaCandidate.from_persona
         monkeypatch.setattr(
             PersonaCandidate,
@@ -329,7 +328,7 @@ class TestCleanup:
 
 
 class TestConfirmBeforeSave:
-    """R-04: each candidate's hold is checked right before it is saved."""
+    """Each candidate's hold is checked right before it is saved."""
 
     def test_the_holder_confirms_and_renews_the_hold(self, store):
         candidate = _candidate()
@@ -381,16 +380,16 @@ class TestConfirmBeforeSave:
 
 
 class TestConcurrentClaims:
-    """NFR9.28: 2 つの台が同じ候補を同時に押さえると、通るのはちょうど片方。"""
+    """When two hosts claim the same candidate at once, exactly one wins."""
 
     def test_only_one_of_two_simultaneous_claims_wins(self, store, client, monkeypatch):
         import threading
 
         from moto.dynamodb.models import DynamoDBBackend
 
-        # 本物の DynamoDB は 1 項目への条件付き書き込みを 1 つずつ行うが、moto の
-        # update_item は条件の確認と書き込みの間に別のスレッドが入りうる。本物と同じく
-        # 1 件ずつにして、どちらが通るかを条件だけで決めさせる（時間では待たない）
+        # Real DynamoDB applies conditional writes to one item one at a time, but with moto's
+        # update_item another thread can slip in between the condition check and the write.
+        # Serialize per item like the real thing so only the condition decides the winner (no waiting on time)
         serial = threading.Lock()
         original_update = DynamoDBBackend.update_item
 
@@ -402,7 +401,7 @@ class TestConcurrentClaims:
 
         candidate = _candidate()
         store.put_all([candidate])
-        # 台ごとに別の Store と client（同じ moto のテーブル）。実体のメモリを共有しない
+        # Each host has its own Store and client (same moto table); no in-memory state is shared
         hosts = [
             PersonaCandidateStore(
                 region=REGION,
@@ -421,7 +420,7 @@ class TestConcurrentClaims:
                 outcomes[token] = "claimed"
             except CandidateUnavailable:
                 outcomes[token] = "unavailable"
-            except Exception as e:  # noqa: BLE001 - 想定外の失敗も結果として見る
+            except Exception as e:  # noqa: BLE001 - unexpected failures are recorded as outcomes too
                 outcomes[token] = e
 
         threads = [

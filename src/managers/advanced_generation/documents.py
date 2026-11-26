@@ -1,17 +1,17 @@
-"""Pure helpers of the document part of the advanced generation (U4).
+"""Pure helpers of the document part of the advanced generation.
 
 Only ``AdvancedPersonaGenerationManager`` uses these, so they are a module of
 that Manager's package. Nothing here calls a Service or the model: the
 functions shape values only.
 
-- The progress wording of a prepared document and of the mode (BR24.5,
-  BR25.2), with the character count in ten thousands rounded up (BR22.3).
-- The full text joined from its chunks without the overlap (BR25.3).
+- The progress wording of a prepared document and of the mode, with the
+  character count in ten thousands rounded up.
+- The full text joined from its chunks without the overlap.
 - Document evidence with IDs, sources and locations set by the Manager, never
-  by the model (NFR4.4): ``ev-d<document>-<chunk>-<n>`` (chunk ``0`` for the
+  by the model: ``ev-d<document>-<chunk>-<n>`` (chunk ``0`` for the
   full text).
-- The assignment of evidence to known segments (BR28.1) and the trimming of
-  evidence no persona cites before the result is written (BR27.3, NFR5.38).
+- The assignment of evidence to known segments and the trimming of
+  evidence no persona cites before the result is written.
 """
 
 from __future__ import annotations
@@ -27,19 +27,19 @@ from .prompts import (
     SpeakerAttributeOutput,
 )
 
-#: Pages without text named one by one in the progress (BR24.3).
+# Pages without text named one by one in the progress.
 _PAGES_LISTED = 5
 _ATTRIBUTE_MAX_CHARS = 50
 _ATTRIBUTES_MAX = 10
 
 
 def man_chars(chars: int) -> int:
-    """Characters in ten thousands, rounded up (``約 N 万字``, BR22.3)."""
+    """Characters in ten thousands, rounded up (``約 N 万字``)."""
     return math.ceil(max(int(chars), 0) / 10_000)
 
 
 def prepared_message(position: int, report: DocumentReport) -> str:
-    """``n 件目の文書: N ページ・約 M 万字・分割 K 個`` (BR24.5) and left-out pages."""
+    """``n 件目の文書: N ページ・約 M 万字・分割 K 個`` and left-out pages."""
     parts = []
     if report.pages is not None:
         parts.append(f"{report.pages} ページ")
@@ -56,7 +56,7 @@ def prepared_message(position: int, report: DocumentReport) -> str:
 
 
 def mode_message(total_chars: int, chunks: int, full_text: bool) -> str:
-    """The mode decided right after the preparation (BR25.2)."""
+    """The mode decided right after the preparation."""
     how = "全文を使います" if full_text else "根拠を取り出します"
     return f"文書の合計 約 {man_chars(total_chars)} 万字・分割 {chunks} 個（{how}）"
 
@@ -106,7 +106,7 @@ def evidence_from_extraction(
     max_items: int,
     max_quote_chars: int,
 ) -> list[Evidence]:
-    """The evidence of one chunk, cut to the limits (BR26.1, NFR4.4)."""
+    """The evidence of one chunk, cut to the limits."""
     if output is None:
         return []
     evidence: list[Evidence] = []
@@ -135,7 +135,7 @@ def evidence_from_synthesis(
     segment_ids: set[str],
     max_quote_chars: int,
 ) -> tuple[list[Evidence], dict[str, str]]:
-    """Evidence the full-text synthesis quoted, with the Manager's IDs (BR25.3).
+    """Evidence the full-text synthesis quoted, with the Manager's IDs.
 
     Args:
         items: The synthesis output's ``document_evidence``.
@@ -181,7 +181,7 @@ def apply_assignments(
     *,
     segment_ids: set[str],
 ) -> list[Evidence]:
-    """Put the chosen segment on each evidence; unknown IDs are dropped (BR28.1)."""
+    """Put the chosen segment on each evidence; unknown IDs are dropped."""
     chosen = {
         a.evidence_id: a
         for a in assignments
@@ -212,7 +212,7 @@ def trim_evidence(
     """Drop document evidence no persona cites, from the end, until it fits.
 
     Table evidence and cited evidence are always kept; when that alone is over
-    ``budget``, the store's own check refuses the result (BR27.3).
+    ``budget``, the store's own check refuses the result.
     ``size_of`` gives the stored size of one evidence.
     """
     kept = list(evidence)

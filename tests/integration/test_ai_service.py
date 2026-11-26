@@ -1,6 +1,4 @@
-"""
-AI サービスの単体テスト
-"""
+"""Tests for AIService."""
 
 import pytest
 from unittest.mock import Mock, patch
@@ -18,15 +16,15 @@ from src.models.message import Message
 
 
 class TestAIService:
-    """AI サービスのテストクラス"""
+    """Tests for AIService."""
 
     def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
-        # モック Bedrock クライアントを作成
+        """Runs before each test method."""
+        # Mock Bedrock client
         self.mock_bedrock_client = Mock()
         self.ai_service = AIService(bedrock_client=self.mock_bedrock_client)
 
-        # テスト用ペルソナデータ
+        # Test persona data
         self.test_persona = Persona(
             id="test-persona-1",
             name="田中太郎",
@@ -54,14 +52,14 @@ class TestAIService:
         )
 
     def test_init_with_bedrock_client(self):
-        """Bedrock クライアントを指定した初期化のテスト"""
+        """Initialization with an explicit Bedrock client."""
         mock_client = Mock()
         service = AIService(bedrock_client=mock_client)
         assert service.bedrock_client == mock_client
 
     @patch("src.services.ai_service.boto3")
     def test_init_without_bedrock_client(self, mock_boto3):
-        """Bedrock クライアントを自動作成する初期化のテスト"""
+        """Initialization that creates the Bedrock client itself."""
         mock_client = Mock()
         mock_boto3.client.return_value = mock_client
 
@@ -72,13 +70,13 @@ class TestAIService:
 
     @patch("src.services.ai_service.boto3", None)
     def test_init_without_boto3(self):
-        """boto3 がインストールされていない場合のテスト"""
+        """Initialization fails when boto3 is not installed."""
         with pytest.raises(BedrockConnectionError) as exc_info:
             AIService()
         assert exc_info.value.code is ErrorCode.AI_BEDROCK_UNAVAILABLE
 
     def test_create_bedrock_client_error(self):
-        """Bedrock クライアント作成エラーのテスト"""
+        """Bedrock client creation error."""
         with patch("src.services.ai_service.boto3") as mock_boto3:
             mock_boto3.client.side_effect = Exception("AWS認証エラー")
 
@@ -87,33 +85,33 @@ class TestAIService:
             assert exc_info.value.code is ErrorCode.AI_BEDROCK_CONNECTION_FAILED
 
     def test_is_retryable_error(self):
-        """リトライ可能エラーの判定テスト"""
+        """Retryable-error detection."""
         from botocore.exceptions import ClientError, BotoCoreError
 
-        # リトライ可能な ClientError
+        # Retryable ClientError
         retryable_error = ClientError(
             error_response={"Error": {"Code": "ThrottlingException"}},
             operation_name="InvokeModel",
         )
         assert self.ai_service._is_retryable_error(retryable_error) is True
 
-        # リトライ不可能な ClientError
+        # Non-retryable ClientError
         non_retryable_error = ClientError(
             error_response={"Error": {"Code": "ValidationException"}},
             operation_name="InvokeModel",
         )
         assert self.ai_service._is_retryable_error(non_retryable_error) is False
 
-        # BotoCoreError はリトライ可能
+        # BotoCoreError is retryable
         botocore_error = BotoCoreError()
         assert self.ai_service._is_retryable_error(botocore_error) is True
 
-        # その他のエラーはリトライ不可能
+        # Other errors are not retryable
         other_error = ValueError("その他のエラー")
         assert self.ai_service._is_retryable_error(other_error) is False
 
     def test_invoke_model_success(self):
-        """モデル呼び出し成功のテスト（Converse API経由）"""
+        """Successful model invocation via the Converse API."""
         mock_response = {"output": {"message": {"content": [{"text": "テスト応答"}]}}}
         self.mock_bedrock_client.converse.return_value = mock_response
 
@@ -123,7 +121,7 @@ class TestAIService:
         self.mock_bedrock_client.converse.assert_called_once()
 
     def test_invoke_model_skips_reasoning_block(self):
-        """reasoningContentブロックがcontent[0]に来ても後続のテキストブロックを抽出できることのテスト"""
+        """A text block after a leading reasoningContent block is still extracted."""
         mock_response = {
             "output": {
                 "message": {
@@ -141,7 +139,7 @@ class TestAIService:
         assert result == "テスト応答"
 
     def test_invoke_model_empty_response(self):
-        """モデル呼び出しで空のレスポンスの場合のテスト"""
+        """Model invocation with an empty response."""
         mock_response = {"output": {"message": {"content": []}}}
         self.mock_bedrock_client.converse.return_value = mock_response
 
@@ -150,7 +148,7 @@ class TestAIService:
         assert exc_info.value.code is ErrorCode.AI_BEDROCK_API_FAILED
 
     def test_facilitate_discussion_success(self):
-        """議論進行成功のテスト"""
+        """Successful discussion facilitation."""
         mock_response = "[田中太郎]: こんにちは\n[佐藤花子]: よろしくお願いします"
 
         with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
@@ -166,7 +164,7 @@ class TestAIService:
             assert result[1].content == "よろしくお願いします"
 
     def test_facilitate_discussion_error(self):
-        """議論進行エラーのテスト"""
+        """Discussion facilitation error."""
         with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
             mock_retry.side_effect = Exception("API エラー")
 
@@ -176,12 +174,12 @@ class TestAIService:
             assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_facilitate_discussion_streaming_uses_retry(self):
-        """ストリーミング議論がリトライ経由でストリームを取得する
+        """Streaming discussion fetches the stream through the retry wrapper.
 
-        一過性の接続エラー（Connection closed）対策として
-        converse_stream が _retry_with_backoff 経由で呼ばれることを検証する。
+        Guards against transient connection errors (Connection closed): converse_stream
+        must be called via _retry_with_backoff.
         """
-        # ストリームイベントを返すモックレスポンス
+        # Mock response carrying stream events
         mock_response = {"stream": []}
 
         with patch.object(
@@ -194,12 +192,11 @@ class TestAIService:
                 )
             )
 
-            # ストリーム取得がリトライ経由で行われたこと
+            # The stream was fetched through the retry wrapper
             mock_retry.assert_called_once()
 
     def test_facilitate_discussion_streaming_ignores_reasoning_deltas(self):
-        """Converse APIストリーミングでreasoningContent系デルタが
-        発言バッファに混入しないことのテスト"""
+        """reasoningContent deltas in the Converse stream do not leak into the speech buffer."""
         stream_events = [
             {
                 "contentBlockDelta": {
@@ -224,7 +221,7 @@ class TestAIService:
         assert messages[0].content == "こんにちは"
 
     def test_extract_insights_success(self):
-        """インサイト抽出成功のテスト（構造化データ）"""
+        """Successful insight extraction (structured data)."""
         mock_response = """[
             {
                 "category": "顧客ニーズ",
@@ -264,7 +261,7 @@ class TestAIService:
             assert len(result) == 3
             assert isinstance(result, list)
 
-            # 最初のインサイトを詳細チェック
+            # Check the first insight in detail
             first_insight = result[0]
             assert isinstance(first_insight, dict)
             assert first_insight["category"] == "顧客ニーズ"
@@ -273,7 +270,7 @@ class TestAIService:
             )
             assert first_insight["confidence_score"] == 0.85
 
-            # 2番目のインサイトをチェック
+            # Check the second insight
             second_insight = result[1]
             assert second_insight["category"] == "市場機会"
             assert (
@@ -310,7 +307,7 @@ class TestAIService:
         assert all(i["confidence_score"] == 0.6 for i in result)
 
     def test_extract_insights_with_custom_categories(self):
-        """カスタムカテゴリーでのインサイト抽出のテスト"""
+        """Insight extraction with custom categories."""
         from src.models.insight_category import InsightCategory
 
         custom_categories = [
@@ -360,14 +357,14 @@ class TestAIService:
             assert result[1]["category"] == "ユーザー体験"
 
     def test_extract_insights_empty_messages(self):
-        """空のメッセージでインサイト抽出のテスト（Service層はバリデーションなし、Manager層で検証済み）"""
-        # Manager層でバリデーション済みのため、Service層は空リストを受け取ってもAPIを呼ぶ
-        # ここではAPIモックなしのため例外が出るが、バリデーション例外ではないことを確認
+        """Insight extraction with empty messages (validated in the Manager layer, not the Service)."""
+        # The Manager layer already validated input, so the Service calls the API even for an empty list.
+        # Without an API mock an exception is raised here; verify it is not a validation error.
         with pytest.raises(Exception):
             self.ai_service.extract_insights([])
 
     def test_extract_insights_error(self):
-        """インサイト抽出エラーのテスト"""
+        """Insight extraction error."""
         with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
             mock_retry.side_effect = Exception("API エラー")
 
@@ -389,7 +386,7 @@ class TestAIService:
             assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_parse_discussion_response(self):
-        """議論レスポンス解析のテスト"""
+        """Discussion response parsing."""
         response = """
 [田中太郎]: こんにちは、よろしくお願いします。
 [佐藤花子]: こちらこそ、よろしくお願いします。
@@ -414,10 +411,10 @@ class TestAIService:
         assert result[3].content == "最後の発言です。"
 
     def test_parse_insights_response(self):
-        """インサイトレスポンス解析のテスト"""
-        # 実装に合わせたテストデータ
-        # - 箇条書き記号の後にスペースが必要
-        # - 10文字以上の内容が必要
+        """Insight response parsing."""
+        # Test data matching the implementation:
+        # - a space is required after the bullet marker
+        # - content must be at least 10 characters
         response = """
 以下がインサイトです：
 
@@ -435,8 +432,8 @@ class TestAIService:
 
         result = self.ai_service._parse_insights_response(response)
 
-        # 実装では箇条書き記号（- • *）と番号付きリスト（1. 2.）を認識
-        # ・（中黒）は認識されない、短い行は除外される
+        # The implementation recognizes bullet markers (- * and the bullet character) and numbered lists (1. 2.)
+        # The middle dot is not recognized, and short lines are excluded
         expected_insights = [
             "顧客は効率性を重視している傾向がある",
             "価格よりも品質を優先する傾向がある",
@@ -450,11 +447,11 @@ class TestAIService:
 
     @patch("time.sleep")
     def test_retry_with_backoff_success_after_retry(self, mock_sleep):
-        """リトライ後に成功するケースのテスト"""
+        """Succeeds after a retry."""
         from botocore.exceptions import ClientError
 
         mock_func = Mock()
-        # 最初の2回は失敗、3回目で成功
+        # The first two calls fail, the third succeeds
         mock_func.side_effect = [
             ClientError(
                 error_response={"Error": {"Code": "ThrottlingException"}},
@@ -475,7 +472,7 @@ class TestAIService:
 
     @patch("time.sleep")
     def test_retry_with_backoff_max_retries_exceeded(self, mock_sleep):
-        """最大リトライ回数を超えた場合のテスト"""
+        """Fails after exceeding the maximum retries."""
         from botocore.exceptions import ClientError
 
         mock_func = Mock()
@@ -493,7 +490,7 @@ class TestAIService:
 
     @patch("time.sleep")
     def test_retry_with_backoff_non_retryable_error(self, mock_sleep):
-        """リトライ不可能なエラーの場合のテスト"""
+        """Non-retryable error."""
         from botocore.exceptions import ClientError
 
         mock_func = Mock()
@@ -505,11 +502,11 @@ class TestAIService:
         with pytest.raises(BedrockAPIError):
             self.ai_service._retry_with_backoff(mock_func)
 
-        assert mock_func.call_count == 1  # リトライしない
+        assert mock_func.call_count == 1  # No retry
         assert mock_sleep.call_count == 0
 
     def test_create_discussion_prompt(self):
-        """議論プロンプト作成のテスト"""
+        """Discussion prompt creation."""
         personas = [self.test_persona, self.test_persona2]
         topic = "テストトピック"
         prompt = self.ai_service._create_discussion_prompt(personas, topic)
@@ -517,11 +514,11 @@ class TestAIService:
         assert "テストトピック" in prompt
         assert "田中太郎" in prompt
         assert "佐藤花子" in prompt
-        assert "効率性" in prompt  # test_persona の価値観
-        assert "創造性" in prompt  # test_persona2 の価値観
+        assert "効率性" in prompt  # Values of test_persona
+        assert "創造性" in prompt  # Values of test_persona2
 
     def test_create_insight_extraction_prompt(self):
-        """インサイト抽出プロンプト作成のテスト"""
+        """Insight extraction prompt creation."""
         messages = [
             Message.create_new(
                 persona_id="1",
@@ -546,7 +543,7 @@ class TestAIService:
         assert "インサイト" in prompt
 
     def test_extract_json_from_response_success(self):
-        """レスポンスからJSON抽出成功のテスト"""
+        """JSON extraction from a response succeeds."""
         response = """
         以下がペルソナです：
         {
@@ -563,7 +560,7 @@ class TestAIService:
         assert result == expected
 
     def test_extract_json_from_response_no_json(self):
-        """JSONが含まれていないレスポンスのテスト"""
+        """Response containing no JSON."""
         response = "JSONが含まれていないレスポンス"
 
         with pytest.raises(AIServiceError) as exc_info:
@@ -571,15 +568,15 @@ class TestAIService:
         assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_extract_json_from_response_incomplete_json(self):
-        """不完全なJSONのテスト"""
-        response = '{"name": "田中花子", "age": 30'  # 閉じ括弧なし
+        """Incomplete JSON."""
+        response = '{"name": "田中花子", "age": 30'  # Missing closing brace
 
         with pytest.raises(AIServiceError) as exc_info:
             self.ai_service._extract_json_from_response(response)
         assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_invoke_converse_api_basic(self):
-        """Converse API基本呼び出しテスト (Task 3)"""
+        """Basic Converse API call."""
         messages = [{"role": "user", "content": [{"text": "こんにちは"}]}]
 
         mock_response = {"output": {"message": {"content": [{"text": "こんにちは！"}]}}}
@@ -591,7 +588,7 @@ class TestAIService:
             assert response == "こんにちは！"
 
     def test_invoke_converse_api_skips_reasoning_block(self):
-        """reasoningContentブロックがcontent[0]に来ても後続のテキストブロックを抽出できることのテスト"""
+        """A text block after a leading reasoningContent block is still extracted."""
         messages = [{"role": "user", "content": [{"text": "こんにちは"}]}]
 
         mock_response = {
@@ -612,11 +609,11 @@ class TestAIService:
             assert response == "こんにちは！"
 
     def test_prepare_document_content_image(self):
-        """画像ドキュメント準備テスト (Task 3)"""
+        """Image document preparation."""
         import tempfile
         import os
 
-        # 一時ファイル作成
+        # Create a temporary file
         with tempfile.NamedTemporaryFile(mode="wb", suffix=".png", delete=False) as f:
             f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
             temp_path = f.name
@@ -641,11 +638,11 @@ class TestAIService:
             os.unlink(temp_path)
 
     def test_prepare_document_content_pdf(self):
-        """PDFドキュメント準備テスト (Task 3)"""
+        """PDF document preparation."""
         import tempfile
         import os
 
-        # 一時ファイル作成
+        # Create a temporary file
         with tempfile.NamedTemporaryFile(mode="wb", suffix=".pdf", delete=False) as f:
             f.write(b"%PDF-1.4\n" + b"\x00" * 100)
             temp_path = f.name
@@ -669,8 +666,8 @@ class TestAIService:
             os.unlink(temp_path)
 
     def test_facilitate_discussion_with_documents_parameter(self):
-        """ドキュメントパラメータ付き議論テスト (Task 3)"""
-        # テスト用ペルソナを作成
+        """Discussion with a document parameter."""
+        # Create a test persona
         from src.models.persona import Persona
 
         personas = [
@@ -694,7 +691,7 @@ class TestAIService:
             ),
         ]
 
-        # ドキュメントなしの場合（後方互換性）
+        # No documents (backward compatibility)
         with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
             mock_retry.return_value = "[田中太郎]: テスト発言\n[佐藤花子]: テスト応答"
 

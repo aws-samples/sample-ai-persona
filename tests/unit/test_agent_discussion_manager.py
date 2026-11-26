@@ -1,8 +1,8 @@
 """
-AgentDiscussionManager の単体テスト
+Unit tests for AgentDiscussionManager.
 
-エージェントモードでの議論管理をテストします。
-U6 からは実行する人（Principal）を受け取り、保存は DiscussionRecords を通す。
+Covers discussion management in agent mode. Discussions are run by a
+principal and saved through DiscussionRecords.
 """
 
 import json
@@ -70,10 +70,10 @@ def _run_rounds(manager, personas, topic, agents, facilitator, **kwargs) -> list
 
 
 class TestAgentInputValidationUnifiedWithClassic:
-    """エージェント議論も非エージェントと同じ入力ルール（上限5・重複）を課すことの回帰。
+    """Agent discussions apply the same input rules as non-agent ones (max 5, no duplicates).
 
-    以前はエージェント側にペルソナ上限・重複検証が無く drift していた（#3）。
-    DiscussionValidation Component への集約で両モード統一されたことを保証する。
+    The agent side used to lack the persona limit and duplicate checks and
+    drifted. Both modes now share DiscussionValidation.
     """
 
     def test_rejects_more_than_5_personas(self):
@@ -96,11 +96,11 @@ class TestAgentInputValidationUnifiedWithClassic:
 
 
 class TestAgentDiscussionManagerInitialization:
-    """AgentDiscussionManager初期化のテスト"""
+    """Tests for AgentDiscussionManager initialization."""
 
     @patch("src.managers.agent_discussion_manager.service_factory")
     def test_initialization_success(self, mock_service_factory):
-        """正常な初期化を確認"""
+        """Initializes normally."""
         mock_dataset_store = Mock()
         mock_agent_service = Mock()
 
@@ -114,7 +114,7 @@ class TestAgentDiscussionManagerInitialization:
         assert manager.agent_service is mock_agent_service
 
     def test_initialization_with_custom_services(self):
-        """カスタムサービスでの初期化を確認"""
+        """Initializes with custom services."""
         mock_agent_service = Mock()
         mock_dataset_store = Mock()
 
@@ -127,13 +127,13 @@ class TestAgentDiscussionManagerInitialization:
 
 
 class TestCreatePersonaAgents:
-    """ペルソナエージェント作成のテスト"""
+    """Tests for persona agent creation."""
 
     def test_create_persona_agents_success(self, sample_persona, sample_persona_2):
-        """ペルソナエージェント作成が成功することを確認"""
+        """Persona agent creation succeeds."""
         mock_persona_agent = Mock(spec=PersonaAgent)
         manager = _manager()
-        # agent 生成は Component (_agent_integration.build_agent) に委譲するためモック
+        # Agent construction is delegated to the component (_agent_integration.build_agent), so mock it
         manager._agent_integration.build_agent = Mock(return_value=mock_persona_agent)
 
         agents = manager._create_persona_agents(
@@ -146,7 +146,7 @@ class TestCreatePersonaAgents:
     def test_create_persona_agents_with_custom_prompts(
         self, sample_persona, sample_persona_2
     ):
-        """カスタムプロンプトがそのまま渡ることを確認"""
+        """A custom prompt is passed through unchanged."""
         manager = _manager()
         manager._agent_integration.build_agent = Mock(
             return_value=Mock(spec=PersonaAgent)
@@ -168,7 +168,7 @@ class TestCreatePersonaAgents:
     def test_execution_context_is_built_per_persona(
         self, sample_persona, sample_persona_2
     ):
-        """BR6.1: 記憶を書くのは実行する人が持ち主のペルソナだけ。"""
+        """Memory is written only for personas owned by the acting principal."""
         manager = _manager()
         manager._agent_integration.build_agent = Mock(
             return_value=Mock(spec=PersonaAgent)
@@ -216,7 +216,7 @@ class TestCreatePersonaAgents:
 
 
 class TestModelSelectionValidation:
-    """persona_models / facilitator_model のバリデーションテスト"""
+    """Validation tests for persona_models / facilitator_model."""
 
     def test_create_persona_agents_unsupported_model_raises_validation(
         self, sample_persona, sample_persona_2
@@ -268,8 +268,8 @@ class TestModelSelectionValidation:
     def test_create_persona_agents_config_error_not_squashed(
         self, sample_persona, sample_persona_2
     ):
-        """build_agentがAgentConfigurationErrorを投げた場合、
-        個別ペルソナ失敗として握り潰さずCONFIGコードのまま伝播する。"""
+        """If build_agent raises AgentConfigurationError, the CONFIG code propagates
+        instead of being swallowed as a per-persona failure."""
         manager = _manager()
         manager._agent_integration.build_agent = Mock(
             side_effect=AgentConfigurationError(
@@ -289,10 +289,10 @@ class TestModelSelectionValidation:
     def test_create_persona_agents_partial_failure_disposes_created_agents(
         self, sample_persona, sample_persona_2
     ):
-        """1体目作成成功後、2体目が設定エラーで失敗した場合も1体目を解放すること。
+        """If the second agent fails with a config error after the first was created, the first is released.
 
-        Issue #107再レビュー: raise前にcleanup_agentsを呼ばないと、既に作成済みの
-        persona_agentがどこにも渡らずリークしていた。
+        Without cleanup_agents before the raise, the already-created
+        persona agent was passed nowhere and leaked.
         """
         manager = _manager()
         mock_agent_1 = Mock(spec=PersonaAgent)
@@ -317,7 +317,7 @@ class TestModelSelectionValidation:
     def test_create_persona_agents_below_minimum_disposes_created_agents(
         self, sample_persona, sample_persona_2
     ):
-        """作成できたエージェントが最低数(2)未満の場合も、作成済みのagentを解放すること。"""
+        """Created agents are released even when fewer than the minimum (2) were built."""
         manager = _manager()
         mock_agent_1 = Mock(spec=PersonaAgent)
 
@@ -338,10 +338,10 @@ class TestModelSelectionValidation:
 
 
 class TestRunAgentDiscussionFacilitatorFailureCleanup:
-    """facilitator作成失敗時にpersona_agentsが解放されることのテスト
+    """persona_agents are released when facilitator creation fails.
 
-    Issue #107再レビュー: ペルソナのエージェント作成後にファシリテータの作成が
-    失敗すると、ラウンド実行のfinallyに到達せずpersona_agentsがリークしていた。
+    If facilitator creation failed after the persona agents were built, the
+    round-execution finally was never reached and persona_agents leaked.
     """
 
     def _prepared(self):
@@ -405,10 +405,10 @@ class TestRunAgentDiscussionFacilitatorFailureCleanup:
 
 
 class TestCreateFacilitatorAgent:
-    """ファシリテーターエージェント作成のテスト"""
+    """Tests for facilitator agent creation."""
 
     def test_create_facilitator_agent_success(self):
-        """ファシリテーターエージェント作成が成功することを確認"""
+        """Facilitator agent creation succeeds."""
         mock_agent_service = Mock()
         mock_facilitator = Mock(spec=FacilitatorAgent)
         mock_agent_service.create_facilitator_agent.return_value = mock_facilitator
@@ -445,7 +445,7 @@ class TestCreateFacilitatorAgent:
 
 
 class TestRounds:
-    """ラウンド実行（_rounds）のテスト"""
+    """Tests for round execution (_rounds)."""
 
     def _agents(self, *personas):
         agents = []
@@ -467,7 +467,7 @@ class TestRounds:
     def test_rounds_complete_with_statements_and_summary(
         self, sample_persona, sample_persona_2
     ):
-        """議論が完了し、発言と要約が返ることを確認"""
+        """The discussion completes and returns statements and a summary."""
         manager = _manager()
         events = _run_rounds(
             manager,
@@ -486,7 +486,7 @@ class TestRounds:
         ]
 
     def test_insufficient_personas(self, sample_persona):
-        """ペルソナ数不足でエラーを返すことを確認"""
+        """Too few personas returns an error."""
         with raises_code(
             AgentDiscussionManagerError, ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
         ):
@@ -501,11 +501,12 @@ class TestRounds:
     def test_document_validation_failure_disposes_agents(
         self, sample_persona, sample_persona_2
     ):
-        """ドキュメント検証が失敗した場合もagentが解放されること。
+        """Agents are released even when document validation fails.
 
-        Issue #107レビュー: ドキュメント読み込みがtryブロックの外にあったため、
-        検証失敗時にfinally節のcleanup_agentsが実行されずリソースがリークしていた。
-        Gemma4（3.5MB上限）に上限超過のPDFを添付してサイズ検証を失敗させる。
+        Document loading used to sit outside the try block, so on validation
+        failure the finally clause's cleanup_agents never ran and resources
+        leaked. A PDF over Gemma4's 3.5MB limit is attached to trigger the
+        size-validation failure.
         """
         from datetime import datetime, timezone
 
@@ -560,7 +561,7 @@ class TestRounds:
             )
 
     def test_empty_topic(self, sample_persona, sample_persona_2):
-        """空のトピックでエラーを返すことを確認"""
+        """An empty topic returns an error."""
         with raises_code(
             AgentDiscussionManagerError, ErrorCode.DISCUSSION_TOPIC_REQUIRED
         ):
@@ -576,7 +577,7 @@ class TestRounds:
     def test_topic_too_short_disposes_agents(
         self, streaming, sample_persona, sample_persona_2
     ):
-        """トピックが短すぎる（入力検証失敗）場合もagentが解放されること（#107）。"""
+        """Agents are also released when the topic is too short (input validation failure)."""
         agents = [Mock(spec=PersonaAgent), Mock(spec=PersonaAgent)]
         facilitator = Mock(spec=FacilitatorAgent)
 
@@ -614,10 +615,10 @@ class TestRounds:
 
 
 class TestDisposeAgents:
-    """エージェントリソース解放のテスト"""
+    """Tests for agent resource cleanup."""
 
     def test_dispose_agents_success(self):
-        """エージェントリソース解放が成功することを確認"""
+        """Agent resources are released successfully."""
         manager = _manager()
         mock_persona_agent_1 = Mock(spec=PersonaAgent)
         mock_persona_agent_2 = Mock(spec=PersonaAgent)
@@ -632,7 +633,7 @@ class TestDisposeAgents:
         mock_facilitator.dispose.assert_called_once()
 
     def test_dispose_agents_handles_errors(self):
-        """エージェント解放中のエラーが適切に処理されることを確認"""
+        """Errors during agent cleanup are handled."""
         manager = _manager()
         mock_persona_agent = Mock(spec=PersonaAgent)
         mock_persona_agent.dispose.side_effect = Exception("Dispose error")
@@ -644,10 +645,10 @@ class TestDisposeAgents:
 
 
 class TestPrepareDocumentContents:
-    """ドキュメントコンテンツ準備のテスト（shared/document_loader経由）"""
+    """Tests for document content preparation (via shared/document_loader)."""
 
     def test_prepare_image_content(self, tmp_path):
-        """画像コンテンツの準備テスト"""
+        """Image content preparation."""
         from src.managers.shared.document_loader import prepare_document_contents
 
         image_path = tmp_path / "test_image.png"
@@ -669,7 +670,7 @@ class TestPrepareDocumentContents:
         assert result[0]["image"]["source"]["bytes"] == b"fake_png_data"
 
     def test_prepare_pdf_content(self, tmp_path):
-        """PDFコンテンツの準備テスト"""
+        """PDF content preparation."""
         from src.managers.shared.document_loader import prepare_document_contents
 
         pdf_path = tmp_path / "test_document.pdf"
@@ -691,7 +692,7 @@ class TestPrepareDocumentContents:
         assert result[0]["document"]["source"]["bytes"] == b"fake_pdf_data"
 
     def test_prepare_text_content(self, tmp_path):
-        """テキストコンテンツの準備テスト"""
+        """Text content preparation."""
         from src.managers.shared.document_loader import prepare_document_contents
 
         txt_path = tmp_path / "test_document.txt"
@@ -712,7 +713,7 @@ class TestPrepareDocumentContents:
         assert result[0]["document"]["format"] == "txt"
 
     def test_prepare_unsupported_mime_type(self, tmp_path):
-        """サポートされていないMIMEタイプのテスト"""
+        """Unsupported MIME type."""
         from src.managers.shared.document_loader import prepare_document_contents
 
         file_path = tmp_path / "test_file.xyz"
@@ -731,7 +732,7 @@ class TestPrepareDocumentContents:
         assert len(result) == 0
 
     def test_prepare_missing_file(self):
-        """存在しないファイルのテスト"""
+        """Nonexistent file."""
         from src.managers.shared.document_loader import prepare_document_contents
 
         documents_metadata = [
@@ -747,7 +748,7 @@ class TestPrepareDocumentContents:
         assert len(result) == 0
 
     def test_prepare_multiple_documents(self, tmp_path):
-        """複数ドキュメントの準備テスト"""
+        """Preparing multiple documents."""
         from src.managers.shared.document_loader import prepare_document_contents
 
         image_path = tmp_path / "test_image.jpeg"
@@ -777,8 +778,7 @@ class TestPrepareDocumentContents:
 
 
 # =============================================================================
-# U6: 実行する人・実行中の確かめ直し・記憶（BR2.8、BR6.1、BR6.2、BR7.1、NFR1.46、
-# NFR1.47、NFR1.50、NFR2.17、AC4.2.1、AC4.2.2、AC4.2.5）
+# Acting principal, re-checks while running, and memory
 # =============================================================================
 
 U6_TOPIC = "新商品のマーケティングについて"
@@ -876,7 +876,7 @@ class TestU6AgentDiscussion:
         u6_manager.run_agent_discussion_full(
             OWNER, _personas(u6_world), U6_TOPIC, rounds=2
         )
-        # 2 体 × 2 ラウンド = 4 発言。保存の直前には読み直さない
+        # 2 personas x 2 rounds = 4 statements. No re-read right before saving
         assert u6_world.personas.calls - before == 4
 
     def test_unshared_mid_run_stops_before_the_next_statement(

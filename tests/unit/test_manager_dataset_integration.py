@@ -1,9 +1,9 @@
-"""PersonaAgentIntegration（データセット統合の gate・dedup・build）テスト。
+"""Tests for PersonaAgentIntegration (dataset integration gate, dedup, build).
 
-dedup（重複 binding の丸ごと除外）と kill-switch/gate 判定は Component の責務。
-以前は両 Manager に同一メソッドがコピーされていたが、単一ソース化したため
-Component を直接テストする。両 Manager が Component を配線していることは末尾の
-委譲スモークテストで確認する。
+Dedup (excluding duplicate bindings entirely) and the kill-switch/gate decision belong
+to the Component. The same methods used to be copied into both Managers; with a single
+source the Component is tested directly, and a delegation smoke test at the end checks
+that both Managers wire the Component.
 """
 
 from datetime import datetime
@@ -42,7 +42,7 @@ def _dataset(dataset_id):
     )
 
 
-#: U6: 組織資産を使える人（U7 までは admin だけ）
+#: Who can use organization assets (admin only for now)
 ADMIN = Principal(sub="admin", roles=frozenset({Role.ADMIN}))
 
 
@@ -52,7 +52,7 @@ class _AnyAsset:
 
 
 def _component(db, ds_service, agent_service=None):
-    # U5: bindings come from PersonaBindingStore (a persona_id query)
+    # bindings come from PersonaBindingStore (a persona_id query)
     binding_store = Mock()
     binding_store.list_for_persona.side_effect = lambda pid: list(
         getattr(db, "bindings", [])
@@ -78,7 +78,9 @@ class TestResolveDatasetBindings:
         db = Mock()
         db.bindings = [
             _binding("p1", "ds-dup", {"user_id": "U1"}),
-            _binding("p1", "ds-dup", {"user_id": "U2"}),  # 同 dataset に2 binding
+            _binding(
+                "p1", "ds-dup", {"user_id": "U2"}
+            ),  # two bindings for the same dataset
             _binding("p1", "ds-ok", {"user_id": "U9"}),
         ]
         db.get.side_effect = _dataset
@@ -87,7 +89,7 @@ class TestResolveDatasetBindings:
         accepted, datasets = comp._resolve_dataset_bindings("p1")
 
         accepted_ids = {b["dataset_id"] for b in accepted}
-        assert "ds-dup" not in accepted_ids  # 丸ごと除外
+        assert "ds-dup" not in accepted_ids  # excluded entirely
         assert "ds-ok" in accepted_ids
         assert {d.id for d in datasets} == {"ds-ok"}
 
@@ -165,8 +167,8 @@ class TestKillSwitchAndGate:
         assert bundle.enhanced_prompt == "BASE"
 
     def test_excluded_dataset_absent_from_tools_and_prompt(self, monkeypatch):
-        # build_binding_tools が ([], []) を返せば tool もプロンプトも出ない
-        # （同一 accepted_descriptors から両方生成する一貫性）。
+        # if build_binding_tools returns ([], []), neither tool nor prompt appears
+        # (both are generated from the same accepted_descriptors, so they stay consistent)
         monkeypatch.setattr(pai_module.config, "ENABLE_DATASET_ANALYSIS", True)
 
         ds_service = Mock()
@@ -180,7 +182,7 @@ class TestKillSwitchAndGate:
         assert bundle.additional_tools is None
 
 
-# 両 Manager が Component を正しく配線していることの委譲スモークテスト。
+# Delegation smoke test: both Managers wire the Component correctly.
 MANAGER_CLASSES = [
     interview_manager.InterviewManager,
     agent_discussion_manager.AgentDiscussionManager,
@@ -202,7 +204,7 @@ def test_manager_wires_agent_integration_component(cls):
     )
     comp = mgr._agent_integration
     assert isinstance(comp, PersonaAgentIntegration)
-    # Manager の各 Service が Component に注入されていること。
+    # each Manager's Service is injected into the Component
     assert comp._datasets is datasets
     assert comp._agent_service is agent_svc
     assert comp._dataset_analysis_service is ds

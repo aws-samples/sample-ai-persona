@@ -1,4 +1,4 @@
-"""The features of a segment: only numbers that were counted (U6 addendum).
+"""The features of a segment: only numbers that were counted.
 
 Only ``AdvancedPersonaGenerationManager`` uses this, so it is a module of that
 Manager's package. It is a pure decision: no model, no Service.

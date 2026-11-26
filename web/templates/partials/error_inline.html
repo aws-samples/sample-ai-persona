@@ -1,13 +1,12 @@
 {% from "components/icons.html" import icon_x_circle %}
 {#
-  フォーム近傍のインラインエラー表示（Issue #117 ステップ5）。
+  Inline error shown near a form.
 
-  入力を直せば解決するエラー（VALIDATION / CAPACITY）に使う。
-  「ページを更新して再試行」の導線を持たないのが error_banner.html との違い。
-  入力ミスに対して更新を促すと、直そうとしている入力を破棄させてしまう。
+  Used for errors that the user can fix by correcting input (VALIDATION / CAPACITY).
+  Unlike error_banner.html, it has no "reload the page and retry" path: asking for a reload on an input mistake would discard the input the user is trying to fix.
 
-  引数:
-    error ... 表示する文言（web/error_messages.py が解決したもの）
+  Arguments:
+    error ... message to show (resolved by web/error_messages.py)
 #}
 <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4" role="alert">
     <div class="flex items-start gap-2">

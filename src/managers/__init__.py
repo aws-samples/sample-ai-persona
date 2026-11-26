@@ -1,4 +1,1 @@
-"""
-マネージャー層
-ビジネスロジックを管理するマネージャークラス群
-"""
+"""Manager layer: classes that own the business logic."""

@@ -1,20 +1,18 @@
-<!-- データセット紐付け一覧パーシャル -->
+<!-- Dataset binding list partial -->
 {% from "components/dialog.html" import dialog, dialog_open_button %}
 {% from "components/status_label.html" import status_label %}
 {#
-  引数:
-    persona_id ... 対象ペルソナ
-    view       ... DatasetBindingsView（bindings: 今の紐付け、manageable: 変えられるか、
-                   choices: 紐付けられる組織のデータセット。管理できる人にだけ入る）
-  追加・解除は管理できる人にだけ出す（BR4.2）。プレビューは読める人に出すが、使えない
-  組織資産は「利用権限なし」を文字で示してプレビューを出さない（BR2.6、BR2.7）。
-  解除・プレビューの URL はデータセットの ID（BR2.5）。
+  Arguments:
+    persona_id ... target persona
+    view       ... DatasetBindingsView (bindings: current bindings, manageable: whether they can be changed, choices: organization datasets that can be bound; filled only for users who can manage)
+  Add and unbind are shown only to users who can manage. Preview is shown to anyone who can read, but an organization asset the user cannot use shows "利用権限なし" in text and no preview.
+  Unbind and preview URLs use the dataset ID.
 #}
 {% if not view.bindings and not view.choices %}
 <p class="text-gray-500 text-sm">
     {%- set badge = user_badge(request) if request is defined else none %}
     {%- if view.manageable and badge and badge.can_manage_settings %}紐付けられるデータセットがありません。<a href="/settings" class="text-cyan-600 hover:underline">設定</a>からデータセットを追加してください。
-    {#- 設定画面は admin だけ（U7 BR3.2）。member には開けない画面への導線を出さない #}
+    {#- The settings screen is admin-only. Members get no link to a screen they cannot open. #}
     {%- elif view.manageable %}紐付けられるデータセットがありません。使えるデータセットの追加は、管理者に依頼してください。
     {%- else %}紐付けられたデータセットはありません。{% endif -%}
 </p>
@@ -52,7 +50,7 @@
             </div>
         </div>
         {% if row.usable %}
-        <!-- プレビューダイアログ（閲覧だけ。開くと中身を読み込み、背景のクリックで閉じる） -->
+        <!-- Preview dialog (view only; loads content on open and closes on backdrop click) -->
         {{ dialog("dataset-preview-" ~ row.target_id, row.name ~ " - データプレビュー",
                   content_url="/persona/" ~ persona_id ~ "/dataset-bindings/" ~ row.target_id ~ "/preview",
                   close_on_backdrop=True, panel_class="max-w-4xl") }}
@@ -75,7 +73,7 @@
             </div>
         </div>
 
-        <!-- 紐付けダイアログ（保存に成功すると一覧の部分ごと差し替わり、そのとき閉じる） -->
+        <!-- Binding dialog (on a successful save the whole list is swapped, which closes it) -->
         {% call dialog("dataset-binding-" ~ dataset.id, dataset.name ~ " を紐付け") %}
                 <p class="text-sm text-gray-600 mb-4">このペルソナがデータセットにアクセスする際のキー値を設定してください。</p>
 

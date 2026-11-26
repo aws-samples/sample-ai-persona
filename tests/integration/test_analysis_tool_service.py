@@ -1,10 +1,9 @@
-"""AnalysisToolService: the fixed tools of one generation's analysis (C9, BR5.2).
+"""AnalysisToolService: the fixed tools of one generation's analysis.
 
 Only the tools in ``AnalysisToolPolicy`` are made. The agent never writes SQL:
 ``analyze_dataset`` takes the structured arguments of ``dataset_analysis`` and
 the SQL is built in the app. Each call gets a ``tool_call_id`` (the location of
-table evidence) and the call count, total time and output size are limited
-(NFR5.8〜NFR5.10).
+table evidence) and the call count, total time and output size are limited.
 """
 
 from __future__ import annotations
@@ -378,7 +377,7 @@ class TestLimits:
 
 
 # ---------------------------------------------------------------------------
-# U6: several tables, run_code and load_playbook (BR35.3, BR36, BR37.2, BR39.1)
+# several tables, run_code and load_playbook
 # ---------------------------------------------------------------------------
 
 _DETAILED_TOOLS = (
@@ -753,7 +752,7 @@ class TestRunCode:
         assert service.emitted_results() == {}
 
     def test_a_look_around_without_emit_result_is_no_failure(self) -> None:
-        """U6 addendum: a normal end without emit_result is "no result"."""
+        """A normal end without emit_result is "no result"."""
         sandbox = _CodeSandbox()
         sandbox.run_value = {**sandbox.run_value, "stdout": "columns: id, age"}
         sandbox.final = {"result": None, "error": "NO_RESULT"}
@@ -1014,7 +1013,7 @@ class TestLoadPlaybook:
         text = _by_name(service)["load_playbook"](name=name)
 
         assert f"# {name}" in text and service.calls[-1].ok is True
-        # U6 addendum: the record keeps which playbook was read
+        # the record keeps which playbook was read
         assert service.calls[-1].playbook == name
 
     def test_a_refused_name_records_no_playbook(self, playbooks: Path) -> None:

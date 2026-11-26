@@ -1,4 +1,4 @@
-"""A check of the structure of what the synthesis wrote (U6 addendum).
+"""A check of the structure of what the synthesis wrote.
 
 Only ``AdvancedPersonaGenerationManager`` uses this, so it is a module of that
 Manager's package. It is a pure decision: no model, no Service.

@@ -1,4 +1,4 @@
-"""Saving, reading and deleting discussions (U6, ADR-002, ADR-006).
+"""Saving, reading and deleting discussions.
 
 A Component (``.claude/rules/architecture.md``): ``DiscussionManager``,
 ``AgentDiscussionManager``, ``InterviewManager`` and ``ReportManager`` share one
@@ -6,26 +6,26 @@ instance (``sharing_runtime.shared_discussion_parts``). The body, its messages
 and its reports are only written and read here; the tables are reached
 through the injected ``DiscussionStore``.
 
-Rules (``functional-design/rules.md``):
+Rules:
 
-- BR1.1: the saver owns a new discussion; it starts unshared.
-- BR1.2 / BR2.7: the size is measured first (over 350KB: nothing happens,
+- The saver owns a new discussion; it starts unshared.
+- The size is measured first (over 350KB: nothing happens,
   ``DISCUSSION_TOO_LARGE``), then the documents are attached, the messages
   written, and the body written last in one transaction. A failed body write
-  detaches the documents and deletes the messages (NFR1.57).
-- BR1.3 / BR2.4: messages and reports are read only after the body passed
+  detaches the documents and deletes the messages.
+- Messages and reports are read only after the body passed
   ``ensure_readable`` (unreadable = missing = ``DISCUSSION_NOT_FOUND``).
-- BR1.4 / BR2.5 / BR2.6: changes write only their columns, after
+- Changes write only their columns, after
   ``ensure_manageable``; insights are cut at 100.
-- BR1.5 / BR1.6: delete removes the body and its share items in one
+- Delete removes the body and its share items in one
   transaction (``ResourceSharing.delete_with_shares``), then the messages,
   reports and files, each tried three times; what is left is logged as
-  ``discussion.cleanup_failed`` (one line per step, NFR8.18) and the delete
+  ``discussion.cleanup_failed`` (one line per step) and the delete
   still succeeds.
-- BR1.7: a discussion saved before v1.0.0 (no ``message_count``) shows its
+- A discussion saved before the current schema (no ``message_count``) shows its
   inner messages and reports; it can be deleted but not changed.
-- BR4.4: reports get a server ID; the body's ``report_count`` limits them.
-- BR7.3 / BR9.1: each reader sees the participants as readable / no access /
+- Reports get a server ID; the body's ``report_count`` limits them.
+- Each reader sees the participants as readable / no access /
   deleted; the Markdown export carries no owner and no shares.
 """
 
@@ -65,13 +65,13 @@ from .resource_sharing import ResourceSharing
 logger = logging.getLogger(__name__)
 
 _DISCUSSION = ResourceType.DISCUSSION
-#: Most reports one discussion keeps (BR4.4, ``MAX_REPORTS_PER_DISCUSSION``).
+# Most reports one discussion keeps (``MAX_REPORTS_PER_DISCUSSION``).
 MAX_REPORTS = 3
-#: Attempts of each cleanup step before it is logged (BR1.6).
+# Attempts of each cleanup step before it is logged.
 CLEANUP_ATTEMPTS = 3
-#: Waits between cleanup attempts (reliability-design.md §2).
+#: Waits between cleanup attempts.
 CLEANUP_BACKOFF_SECONDS: tuple[float, ...] = (0.2, 0.4, 0.8)
-#: Columns a list page reads (performance-design.md, no insights / documents).
+#: Columns a list page reads.
 LIST_ATTRIBUTES: tuple[str, ...] = (
     "id",
     "topic",
@@ -227,7 +227,7 @@ class DiscussionRecords:
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` / ``DISCUSSION_OPERATION_FAILED``
-                (a discussion before v1.0.0, which is read-only).
+                (a discussion in the old format, which is read-only).
             AccessDeniedError: Readable but not manageable.
         """
         self._manageable(principal, discussion_id)
@@ -245,7 +245,7 @@ class DiscussionRecords:
     def save_new(
         self, principal: Principal, discussion: Discussion, messages: Sequence[Message]
     ) -> Discussion:
-        """Save a new discussion owned by ``principal`` (BR1.1, BR1.2).
+        """Save a new discussion owned by ``principal``.
 
         The documents of ``discussion`` are attached to it.
 
@@ -278,7 +278,7 @@ class DiscussionRecords:
             self._store.put_new(body)
         except DiscussionStoreError as e:
             logger.warning("Saving discussion failed: %s", type(e).__name__)
-            # 同じ ID の議論がすでにある（別の要求が先に保存した）ときは、その発言を消さない
+            # If a discussion with the same ID already exists (another request saved it first), do not delete its messages
             exists = isinstance(e, DiscussionConditionFailed)
             self._roll_back(
                 discussion.id, attached, wrote_messages=bool(stored) and not exists
@@ -322,7 +322,7 @@ class DiscussionRecords:
     # --- reading ---------------------------------------------------------------------
 
     def get(self, principal: Principal, discussion_id: str) -> DiscussionView:
-        """The discussion with its messages, reports and participants (BR1.3, BR7.3).
+        """The discussion with its messages, reports and participants.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` (unreadable or missing).
@@ -338,7 +338,7 @@ class DiscussionRecords:
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` / ``DISCUSSION_OPERATION_FAILED``
-                (a discussion before v1.0.0).
+                (a discussion in the old format).
             AccessDeniedError: Readable but not manageable.
         """
         body, _ = self._manageable(principal, discussion_id)
@@ -396,7 +396,7 @@ class DiscussionRecords:
         *,
         mode: str | None = None,
     ) -> list[Discussion]:
-        """The list columns of the bodies the user can still read (NFR2.15).
+        """The list columns of the bodies the user can still read.
 
         Strongly consistent, in the given order; ``mode`` narrows the page.
 
@@ -423,7 +423,7 @@ class DiscussionRecords:
     def update_insights(
         self, principal: Principal, discussion_id: str, insights: Sequence[Insight]
     ) -> Discussion:
-        """Replace the insights, nothing else (BR1.4, BR2.5, BR2.6).
+        """Replace the insights, nothing else.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND``, ``DISCUSSION_TOO_LARGE`` or
@@ -463,7 +463,7 @@ class DiscussionRecords:
         *,
         skip_saved: bool = False,
     ) -> Discussion:
-        """Add the messages after ``message_count`` and the new documents (BR3.8).
+        """Add the messages after ``message_count`` and the new documents.
 
         Args:
             skip_saved: ``messages`` is the whole conversation; its first
@@ -521,7 +521,7 @@ class DiscussionRecords:
     # --- deleting --------------------------------------------------------------------
 
     def delete(self, principal: Principal, discussion_id: str) -> bool:
-        """Delete the body and its shares, then clean up (BR1.5, BR1.6).
+        """Delete the body and its shares, then clean up.
 
         Returns:
             ``True`` once the body is gone (cleanup failures are logged).
@@ -588,7 +588,7 @@ class DiscussionRecords:
         content: str,
         custom_prompt: str | None,
     ) -> DiscussionReport:
-        """Save a generated report with a server-assigned ID (BR4.2, BR4.4).
+        """Save a generated report with a server-assigned ID.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND``, ``REPORT_LIMIT_REACHED``,
@@ -664,7 +664,7 @@ class DiscussionRecords:
     def update_report(
         self, principal: Principal, discussion_id: str, report_id: str, content: str
     ) -> DiscussionReport:
-        """Change one report's content (BR4.2, BR4.4).
+        """Change one report's content.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` / ``REPORT_NOT_FOUND`` /
@@ -688,7 +688,7 @@ class DiscussionRecords:
     def delete_report(
         self, principal: Principal, discussion_id: str, report_id: str
     ) -> None:
-        """Delete one report (BR4.2, BR4.4).
+        """Delete one report.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` / ``REPORT_NOT_FOUND`` /
@@ -705,12 +705,12 @@ class DiscussionRecords:
                 "the report could not be deleted", ErrorCode.REPORT_OPERATION_FAILED
             ) from e
 
-    # --- export (BR9.1) --------------------------------------------------------------
+    # Export
 
     def export_markdown(
         self, principal: Principal, discussion_id: str
     ) -> tuple[str, str]:
-        """The discussion as Markdown, for a user who may read it (BR9.1).
+        """The discussion as Markdown, for a user who may read it.
 
         Returns:
             ``(filename, text)``. No owner ``sub`` and no shares are included;
@@ -729,7 +729,7 @@ def _escape(text: str) -> str:
 
 
 def build_export(view: DiscussionView) -> tuple[str, str]:
-    """Render a :class:`DiscussionView` as Markdown (BR9.1)."""
+    """Render a :class:`DiscussionView` as Markdown."""
     d = view.discussion
     lines = [
         f"# {_escape(d.topic)}",

@@ -1,8 +1,8 @@
-"""SourceFileStore (``SourceFiles``, contract C4) with moto.
+"""SourceFileStore (``SourceFiles``) with moto.
 
-US2.1, US3.1, BR2.4, BR3.3, NFR5.19 (completion takes effect once; a stuck
-inspection can be retried after 15 minutes), BR2.1 (the owner's files through
-the ``owner_sub-created_at`` index) and BR6.4 (the in-use mark).
+Completion takes effect once; a stuck inspection can be retried after 15 minutes;
+the owner's files are listed through the ``owner_sub-created_at`` index; and the
+in-use mark.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -285,11 +285,11 @@ class TestInUseMark:
         cleared = store.get(sf.source_file_id)
         assert cleared is not None
         assert cleared.in_use_by is None and cleared.in_use_until is None
-        # U2 BR13.3: the last use is written at the start, not at the end.
+        # The last use is written at the start, not at the end.
         assert cleared.last_used_at is None
 
 
-# --- U2: 番号・期限・削除（BR11.3、BR13.2、BR13.6、BR14.1、BR14.2、NFR5.27、NFR5.28） ---
+# --- Numbering, expiry and deletion ---
 
 EXPIRES = NOW + timedelta(days=7)
 
@@ -348,7 +348,7 @@ class TestNumberAndExpiry:
         assert store.max_display_seq("sub-a", "other.csv", now=NOW) == 0
 
     def test_max_display_seq_counts_an_u1_record_as_1(self, store):
-        store.put_new(_new())  # no number and no expiry (U1)
+        store.put_new(_new())  # legacy record: no number and no expiry
 
         assert store.max_display_seq("sub-a", "sales.csv", now=NOW) == 1
 

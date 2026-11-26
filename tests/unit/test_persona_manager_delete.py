@@ -1,7 +1,4 @@
-"""PersonaManager.delete_persona の後始末（U5、reliability-design.md §1）。
-
-BR3.1〜BR3.4、NFR1.35、NFR1.42、NFR8.14、AC5.4.1〜AC5.4.3。
-"""
+"""Cleanup performed by PersonaManager.delete_persona."""
 
 import pytest
 
@@ -92,7 +89,7 @@ class TestDeleteCleansUp:
     def test_memory_on_without_a_service_is_logged(
         self, world, persona, logs, monkeypatch
     ):
-        """R-03: memory is on but its service could not be built (BR3.3)."""
+        """R-03: memory is on but its service could not be built."""
         from src.managers import persona_manager as mod
 
         monkeypatch.setattr(mod.config, "ENABLE_LONG_TERM_MEMORY", True)

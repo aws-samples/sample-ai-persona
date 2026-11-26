@@ -1,15 +1,14 @@
-"""
-非同期ジョブ管理（DynamoDB 永続化、約束 C14）
+"""Asynchronous job management (persisted in DynamoDB).
 
-generate_personas / run_discussion など長時間処理を
-バックグラウンドスレッドで実行し、ステータスを DynamoDB で管理する。
-TTL 7日で自動削除。
+Runs long jobs such as generate_personas / run_discussion on background
+threads and tracks their status in DynamoDB. Items expire after 7 days (TTL).
 
-v1.0.0 では投入した人（``owner_sub``）を記録し、結果はその人にだけ返す
-（BR2.12）。処理の関数は投入した人の Principal を最初の引数で受け取り、その人の
-範囲だけで処理する。結果を返すたびに Jobs テーブルを読み直して照合し、照合の
-結果はキャッシュしない。読み取りは判定用の短い待ち時間のクライアント
-（``AuthzLookupService``）で行い、届かなければ 503 にする（NFR9.22）。
+The submitter (``owner_sub``) is recorded and the result is returned only to
+that user. A job function receives the submitter's Principal as its first
+argument and works only within that user's scope. Every time a result is
+returned the Jobs table is read again and checked; the check is not cached.
+The read uses a short-timeout client for decisions
+(``AuthzLookupService``) and answers 503 when it cannot be reached.
 """
 
 import json
@@ -41,7 +40,7 @@ class JobNotFoundError(CodedError):
 
 
 class JobManager:
-    """DynamoDB ベースの非同期ジョブ管理（ServiceFactory 経由）"""
+    """DynamoDB-based asynchronous job management (via ServiceFactory)"""
 
     def __init__(
         self,
@@ -70,10 +69,10 @@ class JobManager:
         *args: Any,
         **kwargs: Any,
     ) -> str:
-        """ジョブを投入し job_id を返す。
+        """Submit a job and return its job_id.
 
         Jobs run AI work on the submitter's behalf, so ``ai:execute`` is
-        required (contract C12). ``func`` is called as
+        required. ``func`` is called as
         ``func(principal, *args, **kwargs)``.
 
         Raises:
@@ -101,11 +100,11 @@ class JobManager:
         return job_id
 
     def get(self, principal: Principal, job_id: str) -> Job:
-        """Return the job if ``principal`` submitted it (BR2.12).
+        """Return the job if ``principal`` submitted it.
 
         A missing job, a job without a submitter and someone else's job all
         raise the same ``JOB_NOT_FOUND`` and write the same one
-        ``authz.denied`` line (NFR8.6, BR2.13). An unreachable Jobs table is
+        ``authz.denied`` line. An unreachable Jobs table is
         not a denial and writes none. Nothing is cached.
 
         Raises:
@@ -116,7 +115,7 @@ class JobManager:
             job: Optional[Job] = self._lookup.get_job(job_id)
         except AuthzLookupError as e:
             raise LookupUnavailableError("jobs table unreachable") from e
-        # 存在しないジョブは持ち主なしとして同じ照合に通す（他人のものと区別しない）
+        # A missing job is passed through the same check as one with no owner (indistinguishable from someone else's)
         try:
             AccessPolicy.ensure_owner(
                 principal,
@@ -125,7 +124,7 @@ class JobManager:
             )
         except CodedError as e:
             raise JobNotFoundError("job not found for this user") from e
-        assert job is not None  # ensure_owner は持ち主なしを必ず断る
+        assert job is not None  # ensure_owner always rejects a job with no owner
         return job
 
     def _run(
@@ -143,7 +142,7 @@ class JobManager:
             self._jobs.update_completed(job_id, result_json)
             logger.info(f"Job {job_id} completed")
         except Exception as e:
-            # U6 BR8.3: 保存するのはエラーコードだけ（例外文は画面・API に出さない）
+            # Store only the error code (exception text is never shown on screen or API)
             code = e.code if isinstance(e, CodedError) else ErrorCode.UNKNOWN
             self._jobs.update_failed(job_id, code.value)
             logger.error(f"Job {job_id} failed: {type(e).__name__}", exc_info=True)

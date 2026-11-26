@@ -1,7 +1,6 @@
-"""
-REST API ルーター（api.py）のテスト
+"""Tests for the REST API router (api.py).
 
-/api/personas, /api/discussions, /api/health エンドポイントをテストします。
+Covers the /api/personas, /api/discussions and /api/health endpoints.
 """
 
 from unittest.mock import Mock, patch
@@ -10,10 +9,10 @@ import pytest
 
 
 class TestHealthEndpoint:
-    """ヘルスチェックエンドポイントのテスト"""
+    """Health check endpoint tests."""
 
     def test_health_check_returns_ok(self, client):
-        """ヘルスチェックが正常に応答することを確認"""
+        """The health check responds normally."""
         response = client.get("/api/health")
 
         assert response.status_code == 200
@@ -21,11 +20,11 @@ class TestHealthEndpoint:
 
 
 class TestPersonasAPIEndpoint:
-    """ペルソナ一覧APIエンドポイントのテスト"""
+    """Persona list API endpoint tests."""
 
     @patch("web.routers.api.get_persona_manager")
     def test_list_personas_empty(self, mock_get_manager, client):
-        """ペルソナが存在しない場合、空のリストを返す"""
+        """Returns an empty list when no personas exist."""
         mock_manager = Mock()
         mock_manager.list_accessible_personas.return_value = []
         mock_get_manager.return_value = mock_manager
@@ -37,7 +36,7 @@ class TestPersonasAPIEndpoint:
 
     @patch("web.routers.api.get_persona_manager")
     def test_list_personas_with_data(self, mock_get_manager, client, sample_persona):
-        """ペルソナが存在する場合、正しいデータを返す"""
+        """Returns the correct data when personas exist."""
         mock_manager = Mock()
         mock_manager.list_accessible_personas.return_value = [sample_persona]
         mock_get_manager.return_value = mock_manager
@@ -58,7 +57,7 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_with_search(
         self, mock_get_manager, client, sample_persona, sample_persona_2
     ):
-        """検索語を利用者と一緒に Manager へ渡す（絞り込みは Manager、U4）"""
+        """Passes the search term to the Manager with the user (filtering is the Manager's job)."""
         mock_manager = Mock()
         mock_manager.list_accessible_personas.return_value = [sample_persona]
         mock_get_manager.return_value = mock_manager
@@ -76,7 +75,7 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_search_by_occupation(
         self, mock_get_manager, client, sample_persona, sample_persona_2
     ):
-        """検索語がないときは None を渡す"""
+        """Passes None when there is no search term."""
         mock_manager = Mock()
         mock_manager.list_accessible_personas.return_value = [
             sample_persona,
@@ -93,7 +92,7 @@ class TestPersonasAPIEndpoint:
 
     @patch("web.routers.api.get_persona_manager")
     def test_list_personas_error_handling(self, mock_get_manager, client):
-        """エラー発生時に500エラーを返す"""
+        """Returns 500 on error."""
         mock_manager = Mock()
         mock_manager.list_accessible_personas.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
@@ -121,11 +120,11 @@ class TestPersonasAPIEndpoint:
 
 
 class TestPersonaDetailAPIEndpoint:
-    """ペルソナ詳細APIエンドポイントのテスト"""
+    """Persona detail API endpoint tests."""
 
     @patch("web.routers.api.get_persona_manager")
     def test_get_persona_success(self, mock_get_manager, client, sample_persona):
-        """ペルソナ詳細を正常に取得できることを確認"""
+        """The persona detail is fetched normally."""
         from src.managers.persona_manager import PersonaDetail
 
         mock_manager = Mock()
@@ -144,7 +143,7 @@ class TestPersonaDetailAPIEndpoint:
 
     @patch("web.routers.api.get_persona_manager")
     def test_get_persona_not_found(self, mock_get_manager, client):
-        """読めない・存在しないペルソナIDで404エラーを返す（同じ応答、NFR1.14）"""
+        """Returns 404 for an unreadable or nonexistent persona ID (same response for both)."""
         from src.models.errors import CodedError, ErrorCode
 
         mock_manager = Mock()
@@ -161,7 +160,7 @@ class TestPersonaDetailAPIEndpoint:
 
     @patch("web.routers.api.get_persona_manager")
     def test_get_persona_error_handling(self, mock_get_manager, client):
-        """エラー発生時に500エラーを返す"""
+        """Returns 500 on error."""
         mock_manager = Mock()
         mock_manager.get_persona_detail.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
@@ -173,11 +172,11 @@ class TestPersonaDetailAPIEndpoint:
 
 
 class TestDiscussionsAPIErrors:
-    """議論の API の想定外の失敗（判定は tests/api/test_api_endpoints.py、U6）"""
+    """Unexpected failures of the discussion API (the checks are in tests/api/test_api_endpoints.py)"""
 
     @patch("web.routers.api.get_discussion_manager")
     def test_list_discussions_error_handling(self, mock_get_manager, client):
-        """想定外の失敗は 500 で、例外文を出さない"""
+        """An unexpected failure returns 500 without exposing the exception text."""
         mock_get_manager.return_value.list_accessible_discussions.side_effect = (
             Exception("Database error at arn:aws:dynamodb:secret")
         )
@@ -190,7 +189,7 @@ class TestDiscussionsAPIErrors:
 
     @patch("web.routers.api.get_discussion_manager")
     def test_get_discussion_error(self, mock_get_manager, client):
-        """エラー発生時に500"""
+        """Returns 500 on error."""
         mock_get_manager.return_value.get_discussion.side_effect = Exception("DB error")
 
         response = client.get("/api/discussions/test-id")
@@ -199,11 +198,11 @@ class TestDiscussionsAPIErrors:
 
 
 class TestJobEndpoint:
-    """ジョブステータスAPIのテスト"""
+    """Job status API tests."""
 
     @patch("web.routers.api.get_job_manager")
     def test_get_job_not_found(self, mock_get_jm, client):
-        """存在しない（または他人の）ジョブIDで404（約束 C14）"""
+        """Returns 404 for a nonexistent job ID or one owned by someone else."""
         from src.managers.job_manager import JobNotFoundError
 
         mock_jm = Mock()
@@ -217,7 +216,7 @@ class TestJobEndpoint:
 
     @patch("web.routers.api.get_job_manager")
     def test_get_job_completed(self, mock_get_jm, client):
-        """完了ジョブの取得"""
+        """Fetching a completed job."""
         from src.models.job import Job, JobStatus
 
         job = Job(
@@ -243,7 +242,7 @@ class TestJobEndpoint:
     def test_generation_job_keeps_result_a_list_and_adds_the_failures(
         self, mock_get_jm, client
     ):
-        """R-06: ``result`` stays the persona list (C12); the failures are added."""
+        """``result`` stays the persona list; the failures are added."""
         from src.models.job import Job, JobStatus
 
         job = Job(
@@ -291,7 +290,7 @@ class TestJobEndpoint:
 
     @patch("web.routers.api.get_job_manager")
     def test_get_job_failed(self, mock_get_jm, client):
-        """失敗ジョブの取得"""
+        """Fetching a failed job."""
         from src.models.job import Job, JobStatus
 
         job = Job(
@@ -309,17 +308,17 @@ class TestJobEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "failed"
-        # U6 BR8.3: 失敗はコードで返し、文言はカタログの文言（例外文ではない）
+        # Failures return a code; the message is the catalog text, not the exception text
         assert data["error_code"] == "unknown"
         assert data["error"]
 
 
 class TestGeneratePersonasEndpoint:
-    """ペルソナ生成APIのテスト"""
+    """Persona generation API tests."""
 
     @patch("web.routers.api.get_job_manager")
     def test_generate_personas_error(self, mock_get_jm, client):
-        """ペルソナ生成ジョブ投入エラー"""
+        """Error when submitting a persona generation job."""
         mock_jm = Mock()
         mock_jm.submit.side_effect = Exception("job error")
         mock_get_jm.return_value = mock_jm
@@ -333,7 +332,7 @@ class TestGeneratePersonasEndpoint:
 
 
 class TestGenerateJobSavesOwnCandidatesU5:
-    """U5: API の生成ジョブも押さえ → 保存 → 片付けを通す（BR1.3、BR1.4）"""
+    """The API generation job also goes through claim, save and cleanup."""
 
     def _run(self, gen, pm):
         from tests.conftest import MEMBER_A
@@ -381,7 +380,7 @@ class TestGenerateJobSavesOwnCandidatesU5:
         )
         assert pm.save_generated_personas.call_args.args == (principal, "the-claim")
         gen.finish_candidates.assert_called_once_with("the-claim", result)
-        # 返す ID は保存したペルソナの ID（候補の ID ではない）
+        # The returned IDs are those of the saved personas, not the candidates
         assert [p["id"] for p in body["personas"]] == ["new-1", "new-2"]
         assert body["personas"][0]["name"] == sample_persona.name
         assert (body["failed_count"], body["failed_names"]) == (0, [])
@@ -389,7 +388,7 @@ class TestGenerateJobSavesOwnCandidatesU5:
     def test_unsaved_candidates_are_counted_and_named(
         self, sample_persona, sample_persona_2
     ):
-        """R-06: a partial bulk save reports what was not saved (BR1.9, C12)."""
+        """A partial bulk save reports what was not saved."""
         from src.managers.persona_generation_manager import GenerationResult
         from src.models.persona_candidate import CandidateSaveResult
 

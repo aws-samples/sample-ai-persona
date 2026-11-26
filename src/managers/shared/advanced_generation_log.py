@@ -1,8 +1,8 @@
-"""Allowed log fields of the advanced generation (beta) events (NFR6.1〜NFR6.5).
+"""Allowed log fields of the advanced generation (beta) events.
 
 Every structured line of the advanced generation goes through
 :func:`log_advanced_event`, which keeps only the fields listed for its event
-in :data:`ALLOWED_FIELDS` (observability-design.md §1). Anything else (row
+in :data:`ALLOWED_FIELDS`. Anything else (row
 values, URLs, exception text) is dropped here, in one place, before
 :func:`~.structured_log.log_event` writes the line. Both
 ``SourceUploadManager`` and ``AdvancedPersonaGenerationManager`` log through
@@ -32,11 +32,9 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "durations_ms",
             "total_ms",
             "tool_calls",
-            # U5 NFR6.17
             "replan_count",
             "waited_seconds",
-            # U6 NFR6.20: counts only, never the code, its output or the
-            # error text (NFR3.36)
+            # Counts only, never the code, its output or the error text.
             "detailed_analysis_used",
             "run_code_calls",
             "run_code_failures",
@@ -46,15 +44,15 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "join_match_rate",
         }
     ),
-    # U6 NFR6.21 / NFR6.22: ``status`` is what the metric filters match.
+    # ``status`` is what the metric filters match.
     "advanced_generation.run_code_disabled": frozenset(
         {"generation_id", "status", "reason", "failures"}
     ),
     "advanced_generation.tamper_detected": frozenset(
         {"generation_id", "status", "changed"}
     ),
-    # U5 (observability-design.md NFR6.16): IDs, actions, states, codes,
-    # counts and milliseconds only. Never the instruction or the session ID.
+    # IDs, actions, states, codes, counts and milliseconds only. Never the
+    # instruction or the session ID.
     "advanced_generation.control_requested": frozenset({"generation_id", "action"}),
     "advanced_generation.control_taken": frozenset(
         {
@@ -72,8 +70,7 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "advanced_generation.plan_wait_expired": frozenset(
         {"generation_id", "limit", "waited_seconds"}
     ),
-    # U3 (observability-design.md): counts, codes and time of the preparation.
-    # No line number, column name or value.
+    # Counts, codes and time of the preparation. No line number, column name or value.
     "advanced_generation.prepared": frozenset(
         {
             "generation_id",
@@ -86,8 +83,7 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "memory_limit",
         }
     ),
-    # U4 (observability-design.md NFR6.13, NFR6.14, NFR7.3): counts, time and
-    # tokens only. No file name, heading, body or exception text.
+    # Counts, time and tokens only. No file name, heading, body or exception text.
     "advanced_generation.document_prepared": frozenset(
         {
             "generation_id",
@@ -124,13 +120,13 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "error_code",
             "encoding",
             "estimated_rows",
-            # U4: the kind and the estimate of a document (no file name)
+            # The kind and the estimate of a document (no file name)
             "kind",
             "estimated_chars",
         }
     ),
-    # U2 (observability-design.md §1): IDs, states, codes, counts, sizes and
-    # milliseconds only. No owner, file name, column name or row value.
+    # IDs, states, codes, counts, sizes and milliseconds only. No owner, file
+    # name, column name or row value.
     "advanced_generation.source_deleted": frozenset(
         {"source_file_id", "status", "versions", "error_code"}
     ),

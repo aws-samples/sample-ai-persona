@@ -16,7 +16,7 @@
                 <span class="text-sm text-gray-500">{{ survey.persona_count }}名</span>
                 {{ survey_status_badge(survey) }}
             </div>
-            {#- 名前は実行したときの写し（テンプレートや元データを変えても過去の結果は変わらない、BR2.10） #}
+            {#- Names come from the copy taken at run time (changing the template or source data does not change past results). #}
             <div class="flex flex-wrap items-center gap-2 mt-3">
                 <span class="text-xs text-gray-500">データソース:</span>
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
@@ -49,7 +49,7 @@
             {% endif %}
         </div>
         <div class="flex items-center gap-2 shrink-0">
-            {#- 削除・共有は管理できる人だけ（共有された人には出さない、BR2.7） #}
+            {#- Delete and share are shown only to users who can manage (not to users it is shared with). #}
             {%- if detail.manageable %}
             <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
                     data-share-url="/share/survey/{{ survey.id }}/dialog"
@@ -74,16 +74,14 @@
     {% include "sharing/partials/share_dialog.html" %}
     {%- endif %}
 
-    {# 文言は Router が web/error_messages.py 経由で解決したものを受け取る。
-       例外メッセージをここに描画してはならない（S3パス・ロールARN・SDK例外文が
-       画面に出る。Issue #118）。 #}
+    {# The message is the one the Router resolved through web/error_messages.py. Do not render exception messages here (S3 paths, role ARNs, and SDK exception text would appear on screen; Issue #118). #}
     {% if survey.status == 'error' %}
     <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
         <p class="text-red-800">{{ execution_error }}</p>
     </div>
     {% endif %}
 
-    {#- 画像は写しのもの。URL は読める人にだけ署名付きURLへリダイレクトする（BR2.8） #}
+    {#- Images come from the copy. The URL redirects to a signed URL only for users who can read. #}
     {% if images %}
     <div class="bg-white rounded-lg shadow-md p-5 mb-6">
         <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
@@ -102,7 +100,7 @@
     </div>
     {% endif %}
 
-    {#- 取れなかった回答がある完了（5% 以下、FR5.3・BR4.4）。CSV では回答の列が空欄 #}
+    {#- A run that completed with some answers missing (5% or less). In the CSV the answer columns are blank. #}
     {% if survey.status == 'completed' and survey.failed_count %}
     <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
         <p class="text-amber-900 text-sm" data-testid="survey-failed-count">{{ survey.failed_count }} 件の回答を取得できませんでした（CSV では空欄）</p>
@@ -110,10 +108,10 @@
     {% endif %}
 
     {% if survey.status == 'completed' %}
-    <!-- タブナビゲーション -->
+    <!-- Tab navigation -->
     <div class="border-b border-gray-200 mb-6">
         <nav class="flex gap-4">
-            {#- 質問が分からない古い結果（写しがなく、テンプレートも読めない）は CSV だけ（BR2.10） #}
+            {#- Old results where the questions are unknown (no copy and the template is unreadable) get CSV only. #}
             {%- if detail.analysis_available %}
             <button @click="activeTab = 'personas'"
                     :class="activeTab === 'personas' ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
@@ -148,7 +146,7 @@
     </div>
 
     {%- if detail.analysis_available %}
-    <!-- 調査対象ペルソナタブ -->
+    <!-- Surveyed personas tab -->
     <div x-show="activeTab === 'personas'">
         <div id="personas-content"
              hx-get="/survey/results/{{ survey.id }}/personas"
@@ -165,7 +163,7 @@
     </div>
 
     {%- endif %}
-    <!-- ダウンロードタブ -->
+    <!-- Download tab -->
     <div x-show="activeTab === 'download'">
         <div class="bg-white rounded-lg shadow-md p-6 text-center">
             <div class="flex justify-center mb-4 text-teal-600">{{ icon_document("w-12 h-12") }}</div>
@@ -182,7 +180,7 @@
     </div>
 
     {%- if detail.analysis_available %}
-    <!-- ビジュアル分析タブ -->
+    <!-- Visual analysis tab -->
     <div x-show="activeTab === 'visual'">
         <div id="visual-content"
              hx-get="/survey/results/{{ survey.id }}/visual"
@@ -198,7 +196,7 @@
         </div>
     </div>
 
-    <!-- レポートタブ -->
+    <!-- Report tab -->
     <div x-show="activeTab === 'report'">
         <div id="report-content">
             {% if survey.insight_report %}
@@ -225,7 +223,7 @@
                     {{ survey.insight_report.content | markdown | safe }}
                 </div>
             </div>
-            {#- レポートを作れるのは管理できる人だけ（BR2.11） #}
+            {#- Only users who can manage can create reports. #}
             {% elif detail.manageable and detail.analysis_available %}
             <div id="report-generate-area" class="bg-white rounded-lg shadow-md p-6 text-center">
                 <div class="flex justify-center mb-4 text-yellow-500">{{ icon_lightbulb("w-12 h-12") }}</div>
@@ -255,7 +253,7 @@
 
                 var fullContent = '';
                 var output = document.getElementById('stream-output');
-                // 生成は CSRF の検査を受ける POST で始める（NFR4.13）
+                // Generation starts with a POST that passes the CSRF check
                 var es = new PostEventSource('/survey/results/' + surveyId + '/report/generate');
 
                 es.onmessage = function(e) {
@@ -304,7 +302,7 @@
         <p class="text-blue-800">アンケートを実行中です。しばらくお待ちください。</p>
     </div>
     {% elif survey.status == 'queued' %}
-    {#- 順番や予定時刻は出さない（BR2.5） #}
+    {#- Order and scheduled time are not shown. #}
     <div class="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center" data-testid="survey-queued-note">
         {% if survey.start_blocked_since %}
         <p class="text-gray-800">開始できずに待っています。しばらくたっても始まらない場合は、管理者に連絡してください。</p>

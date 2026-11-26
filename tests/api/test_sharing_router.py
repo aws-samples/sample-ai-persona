@@ -1,9 +1,7 @@
-"""共有の入口（/share/...）の API テスト（U4、M7）。
+"""API tests for the sharing endpoints (/share/...).
 
-Manager と Component は本物にし、Store はメモリ上の偽物、部署の一覧は差し替える。
-利用者は AUTH_MODE=local のログイン（login_as）で作る。対応: BR1.1、BR1.4、
-BR2.1〜BR2.4、BR7.3、NFR1.10、NFR1.14、NFR4.11、AC3.1.1〜AC3.1.3、AC3.1.6、
-AC3.2.2、AC3.3.1、AC3.3.2。
+Manager and Component are real, the Store is an in-memory fake, and the department
+list is replaced. Users are created via the AUTH_MODE=local login (login_as).
 """
 
 import json
@@ -19,8 +17,8 @@ from src.models.errors import LookupUnavailableError
 from tests.conftest import login_as
 from tests.unit.test_resource_sharing import DEPARTMENTS, TABLE, FakeStore
 
-A = "local:a@example.com"  # member（sales）
-B = "local:b@example.com"  # member（sales・plan）
+A = "local:a@example.com"  # member (sales)
+B = "local:b@example.com"  # member (sales, plan)
 
 
 @pytest.fixture
@@ -67,7 +65,7 @@ def _triggers(response: Any) -> dict[str, Any]:
 
 
 # =============================================================================
-# ダイアログの中身（GET）
+# Dialog content (GET)
 # =============================================================================
 
 
@@ -81,7 +79,7 @@ class TestDialog:
         assert "data-department-picker" in html
         assert 'name="departments_initial" value="sales"' in html
         assert 'hx-post="/share/persona/p1"' in html
-        # ペルソナの注意文と member の注記が保存ボタンに結び付く（BR6.5、BR7.5）
+        # The persona warning and the member note are tied to the save button
         assert "share-persona-notice" in html and "share-scope-note" in html
         assert 'aria-describedby="share-persona-notice share-scope-note' in html
         assert "選べるのは所属グループだけです" in html
@@ -90,7 +88,7 @@ class TestDialog:
     def test_bulk_dialog_counts_without_names(self, member_b, store):
         store.add("p1", B, {"sales"})
         store.add("p2", B)
-        store.add("p3", A)  # 読めない
+        store.add("p3", A)  # Not readable
         response = member_b.get("/share/persona/dialog?ids=p1&ids=p2,p3")
 
         assert response.status_code == 200
@@ -136,7 +134,7 @@ class TestDialog:
 
 
 # =============================================================================
-# 保存（POST）
+# Save (POST)
 # =============================================================================
 
 
@@ -168,8 +166,8 @@ class TestSave:
 
     def test_partial_failure_is_shown_in_the_dialog(self, member_a, store):
         store.add("p1", A)
-        store.add("p2", B, {"sales"})  # 共有されているだけ（名前は読める）
-        store.add("p3", B)  # 読めない
+        store.add("p2", B, {"sales"})  # Only shared with them (the name is readable)
+        store.add("p3", B)  # Not readable
         response = member_a.post(
             "/share/persona",
             data={"ids": ["p1", "p2", "p3"], "departments": "sales"},
@@ -255,13 +253,13 @@ class TestEntryChecks:
 
 
 # =============================================================================
-# U7: アンケートテンプレートと結果の共有（BR1.2、AC4.1.1、AC4.1.2）
+# Sharing of survey templates and results
 # =============================================================================
 
 
 @pytest.fixture
 def u7(client, survey_world):
-    """ME signed in, with the real U7 sharing behind /share/... (moto)."""
+    """ME signed in, with the real survey sharing behind /share/... (moto)."""
     from contextlib import ExitStack
 
     from tests.api.u7_world import ME, ApiWorld

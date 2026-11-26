@@ -1,4 +1,4 @@
-"""Persona detail (U5, M8, BR3.5, BR4.2, NFR6.16).
+"""Persona detail.
 
 The detail header and body are rendered as the owner sees them and as a shared
 reader sees them. The binding lists are loaded by htmx from canned responses
@@ -60,7 +60,7 @@ def _open(ui: UiHarness, *, manageable: bool, shared: bool = True) -> None:
     ui.respond(f"/persona/{PERSONA.id}/kb-binding", body=kb)
     from web.routers import persona as persona_router
 
-    # 詳細の表示ヘルパー（アバターの URL など）はペルソナの Router の環境が持つ
+    # Display helpers for the detail (avatar URL etc.) live in the persona router's environment
     helpers = {
         name: persona_router.templates.env.globals[name]
         for name in ("persona_avatar_url", "gender_label", "country_name")
@@ -93,7 +93,7 @@ def test_shared_reader_has_no_memory_binding_changes_or_avatar_change(
     assert _count(ui, "[hx-post*='kb-binding']") == 0
     assert _count(ui, "form[hx-post$='/avatar']") == 0
     assert _count(ui, "[data-testid='persona-delete-button']") == 0
-    # 見るだけの操作（エクスポート）は出す
+    # View-only actions (export) are shown
     assert _count(ui, "[data-testid='persona-export-button']") == 1
 
 
@@ -123,7 +123,7 @@ def test_export_button_is_pressable_with_the_keyboard(ui: UiHarness) -> None:
     )
     with ui.page.expect_download() as download:
         ui.page.keyboard.press("Enter")
-    # ファイル名（Content-Disposition）は API のテストが確かめる
+    # The file name (Content-Disposition) is checked by the API tests
     assert download.value.url.endswith(f"/persona/{PERSONA.id}/export")
 
 
@@ -143,7 +143,7 @@ def test_delete_confirmation_names_what_goes_and_focuses_cancel(
     assert "データセット・ナレッジベースの紐付け" in text
     assert "このペルソナの長期記憶" in text
     assert "共有先のグループからも見えなくなります" in text
-    # 取り消せない操作なので、既定のフォーカスは［キャンセル］
+    # The action is irreversible, so the default focus is Cancel
     assert ui.active("document.activeElement.dataset.testid") == (
         "persona-delete-cancel"
     )
@@ -165,13 +165,13 @@ def test_cancel_closes_without_deleting(ui: UiHarness) -> None:
     _open(ui, manageable=True)
     ui.page.click("[data-testid='persona-delete-button']")
 
-    ui.page.keyboard.press("Enter")  # フォーカスは［キャンセル］
+    ui.page.keyboard.press("Enter")  # focus is on Cancel
 
     hidden = ui.page.evaluate(
         "() => document.getElementById('persona-delete-dialog').hidden"
     )
     assert hidden is True
-    # 削除の要求は出ていない（出れば応答の表にない要求としても失敗する）
+    # No delete request was sent (one would also fail as a request missing from the response table)
     assert "/persona/p1" not in ui.requests
 
 
@@ -184,7 +184,7 @@ def test_no_permission_is_text_not_colour(ui: UiHarness) -> None:
     ).all_inner_texts()
     assert labels.count("〔利用権限なし〕") == 2
     assert "〔このペルソナ専用〕" in labels
-    # 使えない組織資産にはプレビューを出さない
+    # No preview for organization assets the user cannot use
     assert _count(ui, "[data-dialog-open='dataset-preview-ds-org']") == 0
     assert _count(ui, "[data-dialog-open='dataset-preview-ds-own']") == 1
 

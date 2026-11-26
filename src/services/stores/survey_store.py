@@ -1,22 +1,20 @@
-"""DynamoDB reads and writes of survey bodies (U7).
+"""DynamoDB reads and writes of survey bodies.
 
 ``Surveys``: PK ``id``, ``OwnerIndex`` (``owner_sub`` / ``created_at``),
 ``RunQueueIndex`` (``run_queue`` / ``queued_at``, sparse: only queued and
-running surveys carry ``run_queue``, NFR3.10).
+running surveys carry ``run_queue``).
 ``shared_group_ids`` is the copy of the shares; only ``ResourceSharing``
-writes it, together with ``ResourceShares`` (contract C7).
+writes it, together with ``ResourceShares``.
 
 - Every status transition of the survey runner holds only when the status
-  is the expected one, so two tasks doing the same work never both win
-  (NFR4.4).
+  is the expected one, so two tasks doing the same work never both win.
 
 - A new survey is written only when the ``id`` does not exist yet, and never
-  with shares (BR1.1).
+  with shares.
 - An update writes only the given columns (status, results, report, ...);
-  the owner, the shares, the keys and the template copy are refused
-  (BR1.5, NFR1.87).
+  the owner, the shares, the keys and the template copy are refused.
 - Batch reads are strongly consistent; unprocessed keys are read again and
-  are never silently dropped (NFR2.21).
+  are never silently dropped.
 
 Who may create, read or change a survey is decided by
 ``SurveyExecutionManager`` and ``SurveyAnalysisManager``.
@@ -40,14 +38,14 @@ BATCH_LIMIT = 100
 #: Re-reads of ``UnprocessedKeys`` before giving up.
 UNPROCESSED_REREADS = 3
 #: Columns :meth:`SurveyStore.update_fields` never writes: the owner and the
-#: shares belong to ``ResourceSharing`` (contract C7), the keys and the
-#: template copy never change (BR1.5).
+#: shares belong to ``ResourceSharing``, the keys and the
+#: template copy never change.
 _PROTECTED_COLUMNS = frozenset(
     {"id", "owner_sub", "shared_group_ids", "created_at", "template_snapshot"}
 )
 #: The sparse index of queued and running surveys (CDK Data stack).
 RUN_QUEUE_INDEX = "RunQueueIndex"
-#: The counters :meth:`SurveyStore.add_attempt` may count up (BR3.2, BR3.7).
+#: The counters :meth:`SurveyStore.add_attempt` may count up.
 _ATTEMPT_COLUMNS = frozenset({"start_attempts", "finish_attempts"})
 
 
@@ -81,7 +79,7 @@ class SurveyStore:
 
     @staticmethod
     def item_size(body: Mapping[str, Any]) -> int:
-        """Approximate DynamoDB size of ``body`` as an item (NFR2.25)."""
+        """Approximate DynamoDB size of ``body`` as an item."""
         serializer = TypeSerializer()
         return sum(
             len(str(name).encode("utf-8"))
@@ -143,7 +141,7 @@ class SurveyStore:
         *,
         remove: Sequence[str] = (),
     ) -> bool:
-        """Write only the given columns of a survey (BR1.5, NFR1.87).
+        """Write only the given columns of a survey.
 
         Args:
             survey_id: The survey.
@@ -167,7 +165,7 @@ class SurveyStore:
         fields: Mapping[str, Any],
         remove: Sequence[str] = (),
     ) -> bool:
-        """Write the given columns only when the status is ``expected`` (NFR4.4).
+        """Write the given columns only when the status is ``expected``.
 
         Returns:
             ``False`` when the survey is gone or its status is another one.
@@ -181,7 +179,7 @@ class SurveyStore:
     def add_attempt(
         self, survey_id: str, column: str, *, expected: str
     ) -> Optional[int]:
-        """Count ``start_attempts`` / ``finish_attempts`` up by one (BR3.2, BR3.7).
+        """Count ``start_attempts`` / ``finish_attempts`` up by one.
 
         Returns:
             The new count, or ``None`` when the status is not ``expected``.
@@ -212,7 +210,7 @@ class SurveyStore:
         return int(response["Attributes"][column]["N"])
 
     def list_run_queue(self) -> list[Survey]:
-        """Every queued and running survey from ``RunQueueIndex`` (NFR3.10).
+        """Every queued and running survey from ``RunQueueIndex``.
 
         The index is eventually consistent: callers re-read a survey with
         :meth:`get` before acting on it.

@@ -1,8 +1,6 @@
-"""CognitoAuthService（AUTH_MODE=admin_api の Cognito 管理 API）の結合テスト。
+"""Integration tests for CognitoAuthService (the Cognito admin API, AUTH_MODE=admin_api).
 
-botocore の Stubber で cognito-idp を模す（本物の Cognito は呼ばない）。
-functional-spec.md「Cognito を呼ぶ層の約束」、BR1.2、BR1.4、BR1.5、BR2.6、BR3.2、
-BR3.3、NFR3.15、NFR4.22、NFR9.39、NFR9.44。
+cognito-idp is simulated with the botocore Stubber (real Cognito is never called).
 """
 
 import base64

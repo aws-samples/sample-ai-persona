@@ -1,5 +1,5 @@
 {% from "components/icons.html" import icon_cpu_chip, icon_sparkles, icon_users, icon_cog, icon_chat, icon_document, icon_play %}
-{# メニューを開くボタンに共通の属性（C1）。項目の一覧の id は menu-<key> #}
+{# Attributes shared by the menu open buttons. The id of each item list is menu-<key>. #}
 {% macro nav_toggle_attrs(key) -%}
 type="button" data-nav-toggle="{{ key }}" data-testid="nav-{{ key }}-button"
 aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu === '{{ key }}').toString()"
@@ -12,38 +12,35 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
     <title>{{ title }} - AIペルソナシステム</title>
     
     <!-- htmx -->
-    {#- 履歴キャッシュを使わない（body の hx-history="false"）ため、「戻る」はブラウザの再読み込みで
-        ページ全体を取り直す。既定の再取得は HX-Request 付きで、断片を返す画面（議論結果など）で
-        ページ全体が断片に置き換わるため（U4 レビュー P2） #}
+    {#- History cache is disabled (hx-history="false" on body), so "Back" refetches the whole page with a browser reload. htmx's default refetch carries HX-Request, which would replace the whole page with a fragment on screens that return fragments (such as discussion results). #}
     <meta name="htmx-config" content='{"refreshOnHistoryMiss": true}'>
     <script src="{{ static_url('js/vendor/htmx.min.js') }}"></script>
     
-    <!-- Tailwind CSS (ビルド済み、typographyプラグイン含む) -->
+    <!-- Tailwind CSS (prebuilt, includes the typography plugin) -->
     <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
     
-    <!-- Alpine.js (軽量なインタラクション用) -->
+    <!-- Alpine.js (lightweight interactions) -->
     <script defer src="{{ static_url('js/vendor/alpine.min.js') }}"></script>
     
-    <!-- DOMPurify (XSS防止用HTMLサニタイザー) -->
+    <!-- DOMPurify (HTML sanitizer against XSS) -->
     <script src="{{ static_url('js/vendor/purify.min.js') }}"></script>
-    <!-- Marked.js (Markdownパーサー) -->
+    <!-- Marked.js (Markdown parser) -->
     <script src="{{ static_url('js/vendor/marked.min.js') }}"></script>
     
-    <!-- カスタムCSS（Tailwindの後に読み込む） -->
+    <!-- Custom CSS (loaded after Tailwind) -->
     <link rel="stylesheet" href="{{ static_url('css/custom.css') }}">
     
     {% block head %}{% endblock %}
 <style>[x-cloak]{display:none!important}</style>
 </head>
-{# hx-history="false": htmx が画面の写しを localStorage に残さない（利用者が替わっても前の画面を復元させない、U4） #}
+{# hx-history="false": htmx does not keep a copy of the screen in localStorage, so a previous screen is never restored after the user changes. #}
 <body class="bg-gray-50 min-h-screen" hx-history="false">
-    {# スキップリンク（A6、NFR6.10）。Tab の 1 回目で画面の左上に見え、Enter で本文へ移る #}
+    {# Skip link. Becomes visible at the top left on the first Tab and jumps to the main content on Enter. #}
     <a href="#main" data-testid="skip-link"
        class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-white focus:text-blue-700 focus:font-medium focus:rounded-md focus:shadow-lg">本文へ移動</a>
 
-    <!-- ナビゲーション -->
-    {# 開閉の状態は Alpine の openMenu のまま。キー操作（矢印・Escape・Tab で外へ出たら閉じる）と
-       外側のクリックは app.js の NavMenu が data-nav-menu / data-nav-toggle / data-nav-item を見て行う（C1、WF1） #}
+    <!-- Navigation -->
+    {# Open state stays with Alpine's openMenu. Key handling (arrows, Escape, closing when Tab leaves) and outside clicks are done by NavMenu in app.js using data-nav-menu / data-nav-toggle / data-nav-item. #}
     <nav aria-label="メインメニュー" class="bg-white shadow-sm border-b" x-data="{ openMenu: null }" data-nav-menu>
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16">
@@ -75,7 +72,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
                             </svg>
                         </button>
 
-                        {# U7 BR3.2: 「設定」は settings:manage を持つ人にだけ出す（ロール名は見ない） #}
+                        {# "Settings" is shown only to users with settings:manage (the role name is not checked). #}
                         {% set nav_badge = user_badge(request) if request is defined else none %}
                         {% if nav_badge and nav_badge.can_manage_settings %}
                         <div class="w-px h-6 bg-gray-200"></div>
@@ -93,8 +90,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
                     </div>
                 </div>
 
-                {# 右側：利用者表示とログアウト（M1、BR1.16）。ログアウトはフォーム送信（POST /signout）。
-                   フォーム送信はカスタムヘッダーを付けられないため、CSRF は Origin で確かめる（BR1.19） #}
+                {# Right side: user display and sign-out. Sign-out is a form submit (POST /signout). A form submit cannot carry custom headers, so CSRF is checked by Origin. #}
                 {% set badge = user_badge(request) if request is defined else none %}
                 <div class="hidden sm:flex sm:items-center gap-3">
                     {% if badge %}
@@ -129,7 +125,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
                     </form>
                 </div>
                 
-                <!-- モバイルメニューボタン -->
+                <!-- Mobile menu button -->
                 <div class="flex items-center sm:hidden">
                     <button {{ nav_toggle_attrs("mobile") }}
                             @click="openMenu = openMenu ? null : 'mobile'" class="p-2 rounded-md text-gray-700 hover:bg-gray-100">
@@ -139,7 +135,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
                         <span class="sr-only">メニュー</span>
                     </button>
 
-                    <!-- モバイルメニュー（外側のクリックで閉じるのは app.js の NavMenu） -->
+                    <!-- Mobile menu (closing on outside click is done by NavMenu in app.js) -->
                     <div id="menu-mobile" x-show="openMenu === 'mobile'" style="display: none;"
                          class="absolute top-16 right-0 w-56 bg-white shadow-lg rounded-md py-2 z-50">
                         <p class="px-4 py-1 text-xs font-semibold text-indigo-700 uppercase tracking-wider">インタビュー</p>
@@ -187,7 +183,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
             </div>
         </div>
         
-        <!-- サブナビ：インタビュー -->
+        <!-- Sub-nav: interview -->
         <div x-show="openMenu === 'interview'" x-transition class="border-t bg-indigo-50 sm:block" style="display: none;">
             <ul id="menu-interview" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-4 py-2">
                 <li><a href="/persona/generation" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_sparkles("w-4 h-4") }} ペルソナ生成</a></li>
@@ -197,7 +193,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
             </ul>
         </div>
 
-        <!-- サブナビ：アンケート -->
+        <!-- Sub-nav: survey -->
         <div x-show="openMenu === 'survey'" x-transition class="border-t bg-green-50 sm:block" style="display: none;">
             <ul id="menu-survey" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-4 py-2">
                 <li><a href="/survey/persona-data" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_users("w-4 h-4") }} ペルソナデータ設定</a></li>
@@ -208,34 +204,25 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
         </div>
     </nav>
     
-    {# トースト通知の表示領域（Issue #117）。
-       画面右上に固定する。従来は main の先頭にインライン挿入していたため、
-       長いフォームを下にスクロールした状態では視認できなかった。
-       TRANSIENT / 422 はトーストが唯一の通知手段なので、スクロール位置に
-       依存せず必ず見える必要がある。
+    {#
+      Toast notification area. Fixed at the top right of the screen. Toasts used to be inserted inline at the top of main, which made them invisible when a long form was scrolled down. TRANSIENT / 422 errors are shown only by toast, so it must be visible regardless of scroll position.
 
-       z-index はモーダル（z-50）より上に置く。モーダル内のフォーム送信が
-       失敗した場合（ナレッジベース登録など）、同じ z-50 だと後方のモーダルが
-       トーストを覆って文言が見えない。
-       pointer-events は個々のトースト（閉じるボタン）にだけ戻す。
+      z-index is above modals (z-50). If a form submit inside a modal fails (for example knowledge base registration), the same z-50 would let the modal behind cover the toast and hide the message. pointer-events is restored only on individual toasts (their close buttons).
 
-       読み上げ領域は種類ごとに 2 つ置き、画面の読み込み時から用意する
-       （あとから作った領域は読まれないことがあるため。U3 WF4、B19）。
-       成功・情報は role="status"、エラー・警告は role="alert"。外側には
-       aria-live を付けない（二重に読まれるため）。ダイアログを開いても
-       この入れ物には inert を付けない（B22）。 #}
+      Two live regions, one per kind, are prepared from page load (a region created later may not be announced). Success and info use role="status"; errors and warnings use role="alert". aria-live is not set on the outer container (it would be announced twice). This container is not made inert when a dialog opens.
+    #}
     <div id="flash-messages"
          class="fixed top-20 right-4 z-toast w-full max-w-sm pointer-events-none">
         <div id="toast-status" role="status" aria-atomic="false"></div>
         <div id="toast-alert" role="alert" aria-atomic="false"></div>
     </div>
 
-    <!-- メインコンテンツ -->
+    <!-- Main content -->
     <main id="main" tabindex="-1" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {% block content %}{% endblock %}
     </main>
     
-    <!-- フッター -->
+    <!-- Footer -->
     <footer class="bg-white border-t mt-auto">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <p class="text-center text-gray-500 text-sm">
@@ -244,12 +231,10 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
         </div>
     </footer>
     
-    <!-- グローバルスクリプト -->
-    {# htmx のイベントハンドラは app.js に集約している。以前はここにも
-       afterSwap / beforeRequest / afterRequest を重複登録していたため、
-       fade-in が二重に適用されていた（Issue #117 ステップ5）。 #}
+    <!-- Global scripts -->
+    {# htmx event handlers are consolidated in app.js. They were once registered here too (afterSwap / beforeRequest / afterRequest), which applied the fade-in twice. #}
     <script src="{{ static_url('js/app.js') }}"></script>
-    {# AI を動かす SSE は POST で始める（NFR4.13）。EventSource の代わりに使う #}
+    {# SSE that runs AI starts with a POST. Used instead of EventSource. #}
     <script src="{{ static_url('js/post-event-source.js') }}"></script>
 
     {% block scripts %}{% endblock %}
