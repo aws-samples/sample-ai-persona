@@ -23,6 +23,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -800,3 +801,38 @@ def test_detailed_analysis_joins_two_tables_and_records_the_code(
     finally:
         _restore_section(page, before)
         page.close()
+
+
+# Files this module uploads. Each user may hold only ADVANCED_UPLOAD_MAX_FILES
+# files, so leftovers from earlier runs stop later uploads from starting at all.
+_OWN_UPLOAD_NAME = re.compile(
+    r"^(E2E-\d+-|advanced_sample|interview_sample|advanced_customers|advanced_purchases)"
+)
+
+
+def _delete_own_uploads(context: BrowserContext) -> None:
+    """Delete the files this module uploads; other files and busy rows are left alone."""
+    page = context.new_page()
+    try:
+        page.goto("/persona/generation/advanced")
+        rows = page.get_by_test_id("advanced-upload-row")
+        targets = [
+            row.get_attribute("data-source-file-id")
+            for row in rows.all()
+            if row.get_attribute("data-state") in ("ready", "error")
+            and _OWN_UPLOAD_NAME.match(row.locator("[data-role=name]").inner_text())
+        ]
+        for source_file_id in targets:
+            context.request.delete(
+                f"/persona/advanced/sources/{source_file_id}",
+                headers={"HX-Request": "true", "X-Requested-With": "XMLHttpRequest"},
+            )
+    finally:
+        page.close()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _clean_uploads(session_context: BrowserContext) -> Generator[None, None, None]:
+    _delete_own_uploads(session_context)
+    yield
+    _delete_own_uploads(session_context)
