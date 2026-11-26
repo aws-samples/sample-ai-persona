@@ -301,14 +301,28 @@ class AdvancedPersonaGenerationManager:
             raise AdvancedGenerationError("start refused", code=e.code) from e
         return generation.generation_id
 
-    def abort_start(self, generation_id: str) -> None:
+    def abort_start(
+        self,
+        generation_id: str,
+        *,
+        owner_sub: Optional[str] = None,
+        source_file_ids: Sequence[str] = (),
+    ) -> None:
         """Undo a start whose run could not be handed to the pool.
 
         Each end step stands alone; the slot goes back last, exactly once,
         even when the read raises (that error still reaches the caller).
+        When the read raises, the lock and the marks are still released from
+        ``owner_sub`` and ``source_file_ids`` (what the caller started with);
+        the store only removes those still held by ``generation_id``.
         """
         try:
-            generation = self._context.store.get(generation_id)
+            try:
+                generation = self._context.store.get(generation_id)
+            except Exception:
+                if owner_sub is not None:
+                    self._release_unread(generation_id, owner_sub, source_file_ids)
+                raise
             if generation is not None:
                 try:
                     self._context.store.transition(
@@ -326,6 +340,18 @@ class AdvancedPersonaGenerationManager:
                 self._finishing.finish(generation)
         finally:
             self._finishing.release_slot()
+
+    def _release_unread(
+        self, generation_id: str, owner_sub: str, source_file_ids: Sequence[str]
+    ) -> None:
+        try:
+            self._context.store.release_holds(
+                generation_id, owner_sub, list(source_file_ids)
+            )
+        except Exception as e:  # noqa: BLE001 - the read's error is the one told
+            logger.error(
+                "advanced generation holds not released (%s)", type(e).__name__
+            )
 
     # --- the run ----------------------------------------------------------------
 

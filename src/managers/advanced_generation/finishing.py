@@ -180,15 +180,21 @@ class FinishingStage:
             e.to_dict() for e in self._trimmed_evidence(state, personas, parts)
         ]
         self._judge_before_results(state)
-        self._context.archive.deposit(record)
-        self._context.candidates.put_all(candidates)
-        part_counts = self._context.store.put_result_parts(
-            generation.generation_id,
-            parts,
-            expires_at=generation.expires_at,
-            max_part_bytes=config.ADVANCED_GENERATION_PART_MAX_BYTES,
-            max_total_bytes=config.ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES,
-        )
+        try:
+            self._context.archive.deposit(record)
+            self._context.candidates.put_all(candidates)
+            part_counts = self._context.store.put_result_parts(
+                generation.generation_id,
+                parts,
+                expires_at=generation.expires_at,
+                max_part_bytes=config.ADVANCED_GENERATION_PART_MAX_BYTES,
+                max_total_bytes=config.ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES,
+            )
+        except Exception:
+            # A failed run keeps nothing: what was written before the failure
+            # goes (the end itself is not written yet, so nothing reads them).
+            self._discard_results(state, candidates)
+            raise
         state.ending.set()
         if not self._context.store.transition(
             generation.generation_id,

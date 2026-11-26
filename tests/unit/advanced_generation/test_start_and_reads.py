@@ -167,14 +167,23 @@ class TestSlotIsAlwaysReturned:
         self, env: _Env, caplog
     ) -> None:
         manager = env.manager(max_concurrent=1)
-        generation_id = _start(manager, env.ready_file())
+        file = env.ready_file()
+        generation_id = _start(manager, file)
         env.generations.get = _boom  # type: ignore[method-assign]
         try:
             with pytest.raises(RuntimeError):
-                manager.abort_start(generation_id)
+                manager.abort_start(
+                    generation_id,
+                    owner_sub=ADMIN.sub,
+                    source_file_ids=[file.source_file_id],
+                )
         finally:
             del env.generations.get  # back to the store's own method
 
+        # The holds come off from what the caller knows, not 75 minutes later
+        assert env.generations.get_lock(ADMIN.sub) is None
+        released = env.files.get(file.source_file_id)
+        assert released is not None and released.in_use_by is None
         self._slot_is_free_exactly_once(manager, env, caplog)
 
 

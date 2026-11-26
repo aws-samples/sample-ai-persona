@@ -260,6 +260,13 @@ class SourceFileCatalog:
     def ensure_room(self, owner_sub: str, *, now: datetime) -> None:
         """Refuse a new upload when the owner already holds the maximum.
 
+        A soft limit: the count and the new row's write are separate, so
+        uploads started at the same moment (two tabs, or the API called
+        directly) can each pass and go a few over. The page itself cannot,
+        since it adds the row before the request and refuses files over the
+        limit. A strict count would need an owner counter kept in step with
+        the files' TTL expiry, which DynamoDB cannot decrement on its own.
+
         Raises:
             CodedError: ``UPLOAD_TOO_MANY_FILES`` with ``max_files``.
         """

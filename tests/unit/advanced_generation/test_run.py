@@ -665,6 +665,27 @@ class TestNothingKeptAfterALateEnd:
         _assert_cancelled_and_released(env, generation_id, file)
         self._assert_nothing_kept(env, generation_id)
 
+    def test_parts_that_cannot_be_written_fail_and_keep_nothing(
+        self, env: _Env
+    ) -> None:
+        """The candidates and the record written just before are removed."""
+        from src.services.stores.advanced_generation_store import (
+            GenerationResultTooLarge,
+        )
+
+        def too_large() -> None:
+            raise GenerationResultTooLarge("one part over a slice")
+
+        store = _ObservedStore(env)
+        manager = env.manager(generation_store=store, **_NO_WATCH)
+        generation_id = _start(manager, env.ready_file())
+        store.before_parts = too_large
+
+        manager.run(generation_id)
+
+        assert _current(env, generation_id).status is GenerationStatus.FAILED
+        self._assert_nothing_kept(env, generation_id)
+
     def test_a_cancel_while_writing_ends_cancelled_and_removes_them(
         self, env: _Env
     ) -> None:
