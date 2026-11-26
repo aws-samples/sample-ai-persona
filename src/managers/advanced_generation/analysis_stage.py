@@ -324,8 +324,13 @@ class AnalysisStage:
             try:
                 current = self._context.store.get(generation_id)
             except CodedError as e:
+                # Read again after the poll: comparing with ``state.generation``
+                # (the status read when the run began) would end the run here
+                # without releasing its lock. The wait's own limit still holds.
                 logger.warning("plan wait read failed (%s)", e.code.value)
-                current = state.generation
+                self._check_plan_wait(state, self._context.clock())
+                state.cancel_requested.wait(self._context.control_poll_seconds)
+                continue
             if current is None or current.status is not state.status:
                 state.ended_elsewhere.set()
                 raise StopRun()

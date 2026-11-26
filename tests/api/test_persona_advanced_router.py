@@ -451,7 +451,10 @@ class TestStartGeneration:
         response = self._post(client)
 
         assert response.status_code == 503
-        adv.generations.abort_start.assert_called_once_with(s.GENERATION_ID)
+        adv.generations.abort_start.assert_called_once()
+        args, kwargs = adv.generations.abort_start.call_args
+        assert args == (s.GENERATION_ID,)
+        assert kwargs["owner_sub"] and kwargs["source_file_ids"] == [s.FILE_ID]
         assert "cannot schedule" not in response.headers.get("HX-Trigger", "")
 
     def test_running_generation_reopens_its_progress_with_a_409(

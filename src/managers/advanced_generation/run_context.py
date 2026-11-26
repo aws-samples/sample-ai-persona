@@ -242,7 +242,12 @@ class RunContext:
         """Move to ``stage`` (conditioned on the current one) and say so.
 
         ``moved``: the store already moved it (the plan wait's own writes).
+        Then the run takes the stage first, so a cancel or the deadline found
+        by the checks is recorded from the stage the store is at.
         """
+        if moved:
+            self.close_stage(state)
+            state.status = stage
         self.checkpoint(state)
         self.check_deadline(state)
         if not first and not moved:
@@ -251,8 +256,9 @@ class RunContext:
                 state.generation.generation_id, state.status, stage, updates=clean
             ):
                 raise StopRun()
-        self.close_stage(state)
-        state.status = stage
+        if not moved:
+            self.close_stage(state)
+            state.status = stage
         state.stage_started[stage.value] = time.monotonic()
         now = self.clock()
         self.event(state, EventType.STAGE, status=stage.value, started_at=now)

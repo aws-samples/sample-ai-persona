@@ -1,14 +1,14 @@
-"""PersonaAnalysisLibrary: fixed functions run inside the analysis sandbox (C9).
+"""PersonaAnalysisLibrary: fixed functions run inside the analysis sandbox.
 
 This file is written into each generation's Code Interpreter session and run
-there; the app never imports it (NFR8.2). Tests load it from its path and call
-the same functions in process (NFR9.3).
+there; the app never imports it. Tests load it from its path and call
+the same functions in process.
 
 It is written for what the session ships with: Python 3.12, duckdb 1.3,
 pyarrow 17, numpy and scikit-learn 1.5. Nothing is installed at run time.
 
 Every function takes ``(args, workdir)`` and returns a JSON-safe value or
-raises :class:`AnalysisError`. :func:`dispatch` wraps both into the C9 result
+raises :class:`AnalysisError`. :func:`dispatch` wraps both into the result
 ``{ok, value}`` / ``{ok, error: {code, context}}``. Error contexts carry counts
 and limits only: no row data, no exception text, no URL.
 
@@ -47,7 +47,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-#: Version of the fixed preparation; recorded in PrepareReport (BR4.4).
+#: Version of the fixed preparation; recorded in PrepareReport.
 PREPARE_VERSION = "1"
 
 _CHUNK_BYTES = 16 << 20
@@ -55,7 +55,7 @@ _DOWNLOAD_CHUNK_BYTES = 1 << 20
 _DOWNLOAD_TIMEOUT_SECONDS = 600
 _DUCKDB_MEMORY_LIMIT = "4GB"
 _DEFAULT_SEED = 42
-#: Line-number examples kept for a failure notice (BR16.2): per reason / in total.
+#: Line-number examples kept for a failure notice: per reason / in total.
 _EXAMPLES_PER_REASON = 3
 _EXAMPLES_TOTAL = 5
 _DEFAULT_MAX_EXCLUDED_PERCENT = 1
@@ -207,7 +207,7 @@ def _is_out_of_memory(error: BaseException) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# download (BR6.2): the URL is used here only and never printed
+# download: the URL is used here only and never printed
 # ---------------------------------------------------------------------------
 
 
@@ -244,12 +244,12 @@ def download(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# prepare (BR4.2〜BR4.4)
+# prepare
 # ---------------------------------------------------------------------------
 
 
 class _RetryAsCp932(Exception):
-    """A strict UTF-8 read found bytes it cannot decode (BR4.3)."""
+    """A strict UTF-8 read found bytes it cannot decode."""
 
 
 def _decode_block(
@@ -263,7 +263,7 @@ def _decode_block(
     """Decode whole lines; a line that does not decode becomes an empty line.
 
     The empty line keeps every later row at its place in the original file, so
-    line numbers given to the user stay true (BR16.2). An empty line is skipped
+    line numbers given to the user stay true. An empty line is skipped
     when the table is read, so it never counts as a row. ``first_line`` is the
     1-based number of the block's first line; the numbers of the first few
     undecodable lines are added to ``bad_lines``.
@@ -400,7 +400,7 @@ def _header_columns(path: str, delimiter: str) -> Optional[int]:
 
 
 def _pick_examples(per_reason: Dict[str, List[int]]) -> Dict[str, List[int]]:
-    """At most 3 line numbers per reason and 5 in all, smallest first (BR16.2)."""
+    """At most 3 line numbers per reason and 5 in all, smallest first."""
     picked: Dict[str, List[int]] = {}
     total = 0
     for reason in sorted(per_reason):
@@ -420,7 +420,7 @@ def _max_percent(args: Dict[str, Any]) -> int:
 
 
 def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Prepare one table into ``prepared/<source_id>.parquet`` (BR4.2).
+    """Prepare one table into ``prepared/<source_id>.parquet``.
 
     Args: ``source_id``, ``metadata`` (``encoding``, ``delimiter``), optional
     ``local_path`` (inside ``workdir``) and ``progress_id``.
@@ -460,7 +460,7 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         )
 
     def memory_context() -> Dict[str, Any]:
-        """What is known when memory runs out (BR17.1): rows so far, columns."""
+        """What is known when memory runs out: rows so far, columns."""
         context: Dict[str, Any] = {}
         if seen["lines"] > 1:
             context["rows_read"] = seen["lines"] - 1
@@ -513,7 +513,7 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     examples = _pick_examples(per_reason)
     if rows == 0:
         raise AnalysisError("SOURCE_UNREADABLE", {"rows_excluded": excluded})
-    # Integers only: more than max_percent % of the rows seen (BR16.1, NFR1.14).
+    # Integers only: more than max_percent % of the rows seen.
     if excluded * 100 > (rows + excluded) * max_percent:
         context: Dict[str, Any] = {"rows_read": rows, "rows_excluded": excluded}
         row_examples = sorted({n for v in examples.values() for n in v})
@@ -537,7 +537,7 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         report["excluded_reasons"] = {"counts": counts}
         if examples:
             report["excluded_reasons"]["examples"] = examples
-    # U6 (NFR3.35): counted before any AI-written code can run
+    # Hashed before any AI-written code can run, so a change it makes shows
     report["parquet_sha256"] = _file_sha256(out)
     _write_progress(
         workdir, progress_id, phase="finished", rows=rows, rows_excluded=excluded
@@ -619,7 +619,7 @@ def run_query(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# profile_segments (U6 addendum: the features of a layer a fixed tool made)
+# profile_segments (the features of a layer a fixed tool made)
 # ---------------------------------------------------------------------------
 
 _SEGMENT_COMPARISONS = {
@@ -757,7 +757,7 @@ def profile_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# cluster_segments (BR5.3)
+# cluster_segments
 # ---------------------------------------------------------------------------
 
 
@@ -929,7 +929,7 @@ def _sample(con: Any, select: str, population: int, limit: int, seed: int) -> An
 
 
 def cluster_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Cluster on a sample, then count every row (BR5.3).
+    """Cluster on a sample, then count every row.
 
     Args: ``source_id``, ``columns``, ``k`` (the persona count), ``seed``
     (default 42), ``sample_max_rows`` (default 1,000,000).
@@ -993,26 +993,26 @@ def _fit(matrix: Any, k: int, seed: int) -> Callable[[Any], Any]:
 
 
 # ---------------------------------------------------------------------------
-# documents (U4: BR24.1〜BR24.6, BR27.1, NFR1.20, NFR1.22, NFR5.39)
+# documents: reading, chunking and the quote check
 # ---------------------------------------------------------------------------
 #
 # Layout under ``documents/<source_id>/``: ``chunks/<index>.txt`` the text of
 # each chunk, ``index.json`` the chunk positions (pages, heading path) and the
 # settled character count, ``normalized.txt`` the whole text normalised for
 # the quote check. The limits (chunk size, overlap, the shortest quote) come
-# as arguments: this file never reads the app's settings (NFR8.6).
+# as arguments: this file never reads the app's settings.
 #
 # PDF pages are read with pdfminer.six and a docx with the standard library
 # (zipfile + ElementTree). Both ship with Code Interpreter and with the app
-# (U4 Step 1: markitdown cannot read a docx in the session, and pypdf is not
-# in the app, so the same code runs in both places and is tested in process).
+# (markitdown cannot read a docx in the session, and pypdf is not in the
+# app, so the same code runs in both places and is tested in process).
 
 _DOCUMENT_FORMATS = frozenset({"pdf", "docx", "txt", "md"})
 _MAX_QUOTES = 50
 _MD_HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t#]*$")
 _STYLE_HEADING = re.compile(r"^heading\s*([1-9])$", re.IGNORECASE)
 _BLANK_LINES = re.compile(r"\n[ \t\r\f\v]*\n")
-#: Removed before quotes are compared (with every white space, BR27.1): the
+#: Removed before quotes are compared (with every white space): the
 #: soft hyphen, the zero-width space (``wrap_untrusted_data`` puts one in
 #: ``<data``) and the zero-width no-break space.
 _NOT_COMPARED = frozenset({"­", "​", "﻿"})
@@ -1071,7 +1071,7 @@ def _looks_encrypted(error: BaseException) -> bool:
 
 
 def _read_pdf(path: str, document: _Document, on_page: Callable[[int], None]) -> None:
-    """Page by page with pdfminer; pages without text are left out (BR24.3)."""
+    """Page by page with pdfminer; pages without text are left out."""
     try:
         from pdfminer.converter import TextConverter
         from pdfminer.layout import LAParams
@@ -1091,7 +1091,7 @@ def _read_pdf(path: str, document: _Document, on_page: Callable[[int], None]) ->
             if _looks_encrypted(e):
                 raise AnalysisError("DOCUMENT_ENCRYPTED") from None
             raise AnalysisError("SOURCE_UNREADABLE") from None
-        # BR24.6, NFR1.20: refused even when an empty password opens it
+        # An encrypted PDF is refused even when an empty password opens it
         if getattr(pdf, "encryption", None):
             raise AnalysisError("DOCUMENT_ENCRYPTED")
         resources = PDFResourceManager()
@@ -1223,7 +1223,7 @@ def _read_text(path: str, document: _Document, encoding: str, markdown: bool) ->
 def _document_blocks(
     path: str, fmt: str, encoding: str, on_page: Callable[[int], None]
 ) -> _Document:
-    """Read one brought-in document into blocks (BR24.1). OCR is never tried."""
+    """Read one brought-in document into blocks. OCR is never tried."""
     document = _Document()
     if fmt == "pdf":
         _read_pdf(path, document, on_page)
@@ -1282,7 +1282,7 @@ class _Layout:
         return [title for _level, title in stack]
 
     def split(self, chunk_chars: int, overlap: int) -> List[Tuple[int, int, int]]:
-        """``(start, end, new_start)`` of each chunk (BR24.2).
+        """``(start, end, new_start)`` of each chunk.
 
         A chunk ends before the last heading that fits, else the last page,
         else the last paragraph, else at ``chunk_chars``; the next one starts
@@ -1314,7 +1314,7 @@ class _Layout:
 
 
 def _normalize_for_quotes(text: str) -> str:
-    """NFKC, then no white space, soft hyphen or zero-width space (BR27.1)."""
+    """NFKC, then no white space, soft hyphen or zero-width space."""
 
     normalized = unicodedata.normalize("NFKC", text)
     return "".join(
@@ -1323,7 +1323,7 @@ def _normalize_for_quotes(text: str) -> str:
 
 
 def prepare_document(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Turn one document into chunks inside the session (BR24.1〜BR24.6).
+    """Turn one document into chunks inside the session.
 
     Args: ``source_id``, ``source_index`` (its place in the generation),
     ``format`` (pdf / docx / txt / md), ``encoding`` (txt / md),
@@ -1414,7 +1414,7 @@ def _read_index(folder: str) -> Dict[str, Any]:
 
 
 def document_chunk(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Part of one chunk, ``max_chars`` at a time (NFR5.39).
+    """Part of one chunk, ``max_chars`` at a time.
 
     Args: ``source_id``, ``index``, ``offset`` and ``max_chars``.
     Returns ``{index, chunks, text, next_offset, page_from, page_to,
@@ -1444,7 +1444,7 @@ def document_chunk(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 def verify_quotes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Whether each quote is in the document's text (BR27.1).
+    """Whether each quote is in the document's text.
 
     Both sides are normalised (:func:`_normalize_for_quotes`), so a quote that
     runs across a line break or the overlap of two chunks is found. A quote
@@ -1474,8 +1474,7 @@ def verify_quotes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# U6: AI-written code (BR36), the check after it (NFR3.35) and the playbook
-# functions (BR37.3, BR37.4, BR39.2)
+# AI-written code, the check after it and the playbook functions
 # ---------------------------------------------------------------------------
 #
 # ``run_ai_code`` runs the code as its own process group in an empty folder
@@ -1517,12 +1516,12 @@ _JOIN_FUNCS = {
     "last": "max({col})",
 }
 # Characters that cannot be part of a name; letters of any script (Japanese
-# included), digits and ``_`` stay (U6 addendum).
+# included), digits and ``_`` stay.
 _NAME_PART = re.compile(r"[^\w]")
 
 
 def _unique_name(name: str, used: set) -> str:
-    """``name``, or ``name_2``, ``name_3``.. when it is taken (U6 addendum).
+    """``name``, or ``name_2``, ``name_3``.. when it is taken.
 
     ``used`` holds lower-cased names: DuckDB identifiers are case-insensitive.
     """
@@ -1720,7 +1719,7 @@ def emit_result(
     out_dir: Optional[str] = None,
     tables_read: Optional[List[str]] = None,
 ) -> None:
-    """Hand the result of AI-written code over, once (BR36.3).
+    """Hand the result of AI-written code over, once.
 
     ``frame`` has one row per person: ``id_column`` names the person (for a
     joined table, the axis table's ID column) and ``assign_column`` the
@@ -1787,7 +1786,7 @@ def emit_result(
 
 
 def run_ai_code(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Run AI-written code as its own process group (BR36.1, NFR3.35).
+    """Run AI-written code as its own process group.
 
     Args: ``code``, ``work_dir`` (``ai_work/<random>``, must not exist),
     ``pgid_file`` (``ai_work/<random>.pgid``, outside that folder),
@@ -2118,7 +2117,7 @@ def _chunks(items: List[Any], size: int) -> Any:
 def _profile_features(
     con: Any, source: str, id_column: str, metrics: Optional[List[str]] = None
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Features of each segment, counted from the axis table (U6 addendum).
+    """Features of each segment, counted from the axis table.
 
     Per segment and per column of the axis table (the ID column and columns
     named like a key left out): the mean of a numeric column (``kind``
@@ -2412,7 +2411,7 @@ def _recount(
 
 
 def finalize_ai_result(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """The check after one ``run_ai_code`` (NFR3.35 (4)).
+    """The check after one ``run_ai_code``.
 
     Run from the source the app sent with the command (``python -I -c``).
     Stops the code's process group and anything else it left (see
@@ -2448,7 +2447,7 @@ def verify_hashes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 def key_overlap(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """How far the values of same-named columns meet (BR37.3). No values.
+    """How far the values of same-named columns meet. No values.
 
     Args: ``axis`` and ``other`` (source IDs), ``columns``.
     Returns ``{columns: [{column, match_rate, overlap, axis_matched}]}``:
@@ -2512,7 +2511,7 @@ def join_tables(
     *,
     paths: Optional[Dict[str, str]] = None,
 ) -> Any:
-    """Left join onto the axis table, one row per person (BR37.4).
+    """Left join onto the axis table, one row per person.
 
     Each of ``others`` is ``{"source": alias, "key": column?, "aggregations":
     [{"column", "func", "as"?}]}``; the other table is first reduced to one
@@ -2589,7 +2588,7 @@ def join_tables(
 def compare_groups(
     frame: Any, group_column: str, columns: List[str]
 ) -> List[Dict[str, Any]]:
-    """Tests of differences between groups (BR39.2).
+    """Tests of differences between groups.
 
     Numeric columns: Welch's t-test and Cohen's d for two groups (each group
     against the rest for more). Other columns: the chi-square test and
@@ -2673,7 +2672,7 @@ def rfm(
     as_of: Optional[str] = None,
     bins: int = 5,
 ) -> Any:
-    """Recency, frequency and monetary value per person, scored 1..bins (BR39.2).
+    """Recency, frequency and monetary value per person, scored 1..bins.
 
     Returns a pandas DataFrame of ``id_column``, ``recency`` (days since the
     last date), ``frequency``, ``monetary`` and ``r_score`` / ``f_score`` /
@@ -2841,7 +2840,7 @@ FUNCTIONS: Dict[str, Callable[[Dict[str, Any], str], Any]] = {
     "prepare_document": prepare_document,
     "document_chunk": document_chunk,
     "verify_quotes": verify_quotes,
-    # U6
+    # the AI-written code and its checks
     "run_ai_code": run_ai_code,
     "finalize_ai_result": finalize_ai_result,
     "verify_hashes": verify_hashes,
@@ -2857,7 +2856,7 @@ def _failure(code: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, A
 
 
 def dispatch(function: str, args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Run one function and return the C9 result. Never raises."""
+    """Run one function and return ``{ok, value}`` or ``{ok, error}``. Never raises."""
     fn = FUNCTIONS.get(function)
     if fn is None:
         return _failure("UNKNOWN_FUNCTION")

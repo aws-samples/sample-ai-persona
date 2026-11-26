@@ -586,7 +586,12 @@ async def start_generation(
     except Exception:
         logger.error("advanced generation not handed to the pool", exc_info=True)
         try:
-            await run_in_threadpool(manager.abort_start, generation_id)
+            await run_in_threadpool(
+                manager.abort_start,
+                generation_id,
+                owner_sub=principal.sub,
+                source_file_ids=list(source_file_ids),
+            )
         except Exception:
             logger.error("advanced generation start not undone", exc_info=True)
         busy = CodedError(code=ErrorCode.ADVANCED_GENERATION_BUSY)

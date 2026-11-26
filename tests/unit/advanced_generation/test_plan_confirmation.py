@@ -6,6 +6,8 @@ from datetime import timedelta
 
 import pytest
 
+import threading
+
 from src.managers.advanced_generation.errors import AdvancedGenerationError
 from src.models.advanced_generation import GenerationStatus
 from src.models.errors import ErrorCode
@@ -32,8 +34,42 @@ from tests.unit.advanced_generation.helpers import (
     _start_detailed,
     _Thread,
 )
+from src.services.stores.advanced_generation_store import (
+    AdvancedGenerationStore,
+    AdvancedGenerationStoreError,
+)
 
 pytestmark = pytest.mark.unit
+
+
+class _FlakyStore(AdvancedGenerationStore):
+    """The env's store whose reads fail once on demand, with a hook on takes."""
+
+    def __init__(self, env: _Env) -> None:
+        super().__init__(
+            region="ap-northeast-1",
+            table_name=env.generations.table_name,
+            source_files_table_name=env.generations.source_files_table_name,
+            client=env.generations.client,
+        )
+        self.fail_reads = 0
+        #: Only reads of this thread fail (the run, not the watch)
+        self.fail_thread: threading.Thread | None = None
+        self.failed = threading.Event()
+        self.after_take = None
+
+    def get(self, generation_id):
+        if self.fail_reads and threading.current_thread() is self.fail_thread:
+            self.fail_reads -= 1
+            self.failed.set()
+            raise AdvancedGenerationStoreError("throttled")
+        return super().get(generation_id)
+
+    def take_control_request(self, *args, **kwargs):
+        taken = super().take_control_request(*args, **kwargs)
+        if taken and self.after_take is not None:
+            self.after_take()
+        return taken
 
 
 class TestPlanConfirmation:
@@ -123,6 +159,45 @@ class TestPlanConfirmation:
             manager.request_control(
                 ADMIN, generation_id, "replan", revised_purpose="あ" * 2001
             )
+
+    def test_a_failed_read_during_the_wait_is_read_again(self, env: _Env) -> None:
+        """One throttled read must not end the run and leave the lock held."""
+        store = _FlakyStore(env)
+        manager = env.manager(generation_store=store, **FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        store.fail_thread = run.thread
+        store.fail_reads = 1
+        assert store.failed.wait(5)
+        manager.request_control(ADMIN, generation_id, "approve")
+        run.join()
+
+        assert _current(env, generation_id).status is GenerationStatus.DONE
+        assert env.generations.get_lock(ADMIN.sub) is None
+
+    def test_the_deadline_right_after_approve_ends_the_run_cleanly(
+        self, env: _Env
+    ) -> None:
+        """The store is already ``running``: the failure is recorded from there."""
+        store = _FlakyStore(env)
+        manager = env.manager(generation_store=store, **FAST_CONTROL)
+        file = env.ready_file()
+        generation_id = _start_confirming(manager, file)
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+        store.after_take = lambda: env.clock.advance(minutes=180)
+
+        manager.request_control(ADMIN, generation_id, "approve")
+        run.join()
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.GENERATION_TIMEOUT.value
+        assert env.generations.get_lock(ADMIN.sub) is None
+        released = env.files.get(file.source_file_id)
+        assert released is not None and released.in_use_by is None
 
     def test_fifteen_minutes_untouched_stop_the_generation(self, env: _Env) -> None:
         manager = env.manager(**FAST_CONTROL)
