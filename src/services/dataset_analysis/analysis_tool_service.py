@@ -112,6 +112,69 @@ _PLAYBOOKS_DIR = (
 #: What the agent is told; it is never told why it halted.
 _DISABLED_TEXT = "AI による詳細分析は使えません。決まった関数で続けてください"
 _HALTED_TEXT = "分析を続けられません。今ある結果でまとめてください"
+#: The counts the check may send with each refusal. Only these keys, and
+#: only non-negative integers (and ``side``), go on to the agent and the log.
+_CHECK_COUNT_KEYS: Dict[str, tuple[str, ...]] = {
+    "DUPLICATE_IDS": ("rows", "distinct_ids"),
+    "ID_MISMATCH": (
+        "population_rows",
+        "result_rows",
+        "not_in_result",
+        "not_in_population",
+    ),
+    "UNASSIGNED": ("rows_unassigned",),
+    "POPULATION_ID_MISSING": ("rows_without_id",),
+}
+_CHECK_SIDES = frozenset({"population", "result"})
+#: How to fix a refused result, by error code and the side it was found on.
+_CHECK_HINTS: Dict[tuple[str, Optional[str]], str] = {
+    ("DUPLICATE_IDS", "population"): (
+        "The population table has several rows per person. Give "
+        "population_source a table with one row per person (or join: with it), "
+        "as the playbook shows."
+    ),
+    ("DUPLICATE_IDS", "result"): (
+        "The frame repeats people. Check that a merge did not add rows, make it "
+        "one row per person, then call emit_result."
+    ),
+    ("DUPLICATE_IDS", None): (
+        "IDs repeat. Make the frame and the population one row per person."
+    ),
+    ("ID_MISMATCH", None): (
+        "The frame must hold every person of the population exactly once: "
+        "not_in_result were left out, not_in_population are not in the "
+        "population table."
+    ),
+    ("UNASSIGNED", None): (
+        "Some rows have no ID or no segment (missing values after a merge "
+        "count too). Give every row a segment."
+    ),
+    ("POPULATION_ID_MISSING", None): (
+        "The ID column of the population table is empty in some rows. Choose "
+        "another ID column or table, or continue with the fixed tools."
+    ),
+}
+
+
+def _check_context(code: str, raw: Any) -> Optional[Dict[str, Any]]:
+    """The check's counts for ``code``, keeping only the known, safe values."""
+    keys = _CHECK_COUNT_KEYS.get(code)
+    if keys is None or not isinstance(raw, Mapping):
+        return None
+    context: Dict[str, Any] = {}
+    side = raw.get("side")
+    if code == "DUPLICATE_IDS" and side in _CHECK_SIDES:
+        context["side"] = side
+    for key in keys:
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            context[key] = value
+    return context or None
+
+
+def _check_hint(code: str, context: Optional[Mapping[str, Any]]) -> Optional[str]:
+    side = context.get("side") if context else None
+    return _CHECK_HINTS.get((code, side)) or _CHECK_HINTS.get((code, None))
 
 
 @dataclass(frozen=True)
@@ -304,10 +367,14 @@ class AnalysisToolService:
         call_id = self._next_call_id()
         self._record_call(ToolCall(call_id, tool_name, False, code, elapsed, 0))
         logger.info(
-            "analysis tool failed: tool=%s tool_call_id=%s error_code=%s",
+            "analysis tool failed: tool=%s tool_call_id=%s error_code=%s%s",
             tool_name,
             call_id,
             code,
+            # fixed keys, counts and table aliases only (no data values)
+            " context=" + json.dumps(dict(context), ensure_ascii=False)
+            if context
+            else "",
         )
         return self._error_text(tool_name, call_id, code, context, detail)
 
@@ -377,6 +444,8 @@ class AnalysisToolService:
             lines.append(_DISABLED_TEXT)
         elif code == "ANALYSIS_HALTED":
             lines.append(_HALTED_TEXT)
+        elif hint := _check_hint(code, context):
+            lines.append(hint)
         text = "\n".join(lines) + "\n"
         if detail:
             # The error text of AI-written code is untrusted data
@@ -809,7 +878,12 @@ class AnalysisToolService:
             detail = error_text or None
             if value.get("error") and code_error != value.get("error"):
                 detail = f"check: {value.get('error')}\n{error_text}".strip()
-            return self._fail(tool_name, code_error, elapsed, detail=detail)
+            context = (
+                _check_context(code_error, value.get("error_context"))
+                if code_error == value.get("error")
+                else None
+            )
+            return self._fail(tool_name, code_error, elapsed, context, detail=detail)
         self._gate.record(RunCodeOutcome(ok=True))
         self.code_runs.append(CodeRun(call_id, code, _sha(code), True, result))
         self._emitted[call_id] = result

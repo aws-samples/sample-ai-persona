@@ -1495,7 +1495,9 @@ class AgentService:
     # advanced generation model, puts the untrusted-data rule first, wraps the
     # data in markers and maps the structured output to the ``Segment`` / ``Evidence`` shapes.
 
-    def _build_advanced_model(self, model_id: Optional[str] = None) -> Any:
+    def _build_advanced_model(
+        self, model_id: Optional[str] = None, max_tokens: Optional[int] = None
+    ) -> Any:
         """BedrockModel on ``config.ADVANCED_GENERATION_MODEL_ID``."""
         credentials = config.get_aws_credentials()
         filtered_credentials = {
@@ -1504,7 +1506,7 @@ class AgentService:
         return BedrockModel(
             model_id=model_id or config.ADVANCED_GENERATION_MODEL_ID,
             region_name=config.AWS_REGION,
-            max_tokens=config.AGENT_MAX_TOKENS,
+            max_tokens=max_tokens or config.AGENT_MAX_TOKENS,
             boto_client_config=self._build_boto_config(),
             **filtered_credentials,
         )
@@ -1515,6 +1517,7 @@ class AgentService:
         instructions: str,
         tools: Optional[list[Any]] = None,
         model_id: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> Any:
         if Agent is None or BedrockModel is None:
             raise AgentInitializationError(
@@ -1524,7 +1527,7 @@ class AgentService:
         try:
             agent = Agent(
                 name=name,
-                model=self._build_advanced_model(model_id),
+                model=self._build_advanced_model(model_id, max_tokens),
                 system_prompt=f"{ADVANCED_DATA_RULES}\n\n{instructions}",
                 tools=list(tools) if tools else None,
                 # One tool at a time: the sandbox checks after run_ai_code stop
@@ -1544,8 +1547,15 @@ class AgentService:
         return agent
 
     def create_advanced_planning_agent(self, instructions: str) -> Any:
-        """The agent that writes the AnalysisPlan. It has no tools."""
-        return self._create_advanced_agent("AdvancedPlanner", instructions)
+        """The agent that writes the AnalysisPlan. It has no tools.
+
+        Its output limit is ``ADVANCED_PLANNING_MAX_TOKENS``: a plan is short.
+        """
+        return self._create_advanced_agent(
+            "AdvancedPlanner",
+            instructions,
+            max_tokens=config.ADVANCED_PLANNING_MAX_TOKENS,
+        )
 
     def create_advanced_analysis_agent(
         self, instructions: str, tools: list[Any]
@@ -1606,9 +1616,13 @@ class AgentService:
         try:
             return run()
         except Exception as e:
-            # The text of a model error may hold prompt data; keep the type only.
+            # The text of a model error may hold prompt data; keep the type
+            # and whether it was the output limit or a timeout only.
             self.logger.warning(
-                "advanced %s agent failed (%s)", label, type(e).__name__
+                "advanced %s agent failed (%s) capacity=%s",
+                label,
+                type(e).__name__,
+                self._is_capacity_error(e),
             )
             raise AgentServiceError(
                 f"advanced {label} agent failed ({type(e).__name__})",
@@ -1630,7 +1644,22 @@ class AgentService:
         message = self._with_data(prompt, data, documents)
 
         def run() -> dict[str, Any]:
-            plan = self._advanced_structured(agent, AdvancedPlanOutput, message)
+            history = _history_snapshot(agent)
+            try:
+                plan = self._advanced_structured(agent, AdvancedPlanOutput, message)
+            except Exception as e:
+                # A plan is short, so hitting the output limit is a runaway
+                # answer by chance: try once more. Other outputs are long by
+                # nature and would hit it again, so only the plan is retried.
+                if not self._is_capacity_error(e):
+                    raise
+                self.logger.warning(
+                    "advanced planning hit the output limit (%s) capacity=True;"
+                    " trying once more",
+                    type(e).__name__,
+                )
+                _restore_history(agent, history)
+                plan = self._advanced_structured(agent, AdvancedPlanOutput, message)
             return dict(plan.model_dump(exclude_none=True))
 
         return cast(dict[str, Any], self._run_advanced("planning", run))

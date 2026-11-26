@@ -1238,8 +1238,15 @@ class TestEmittedResult:
         result = self._result()
 
         data = result.to_dict()
-        assert "joined_columns" not in data
+        assert "joined_columns" not in data and "tables_read" not in data
         assert EmittedResult.from_dict(data) == result
+
+    def test_the_tables_read_are_kept(self):
+        result = self._result(tables_read=("source_1", "source_2"))
+
+        again = EmittedResult.from_dict(result.to_dict())
+
+        assert again.tables_read == ("source_1", "source_2")
 
     def test_size_of_a_segment_key(self):
         result = self._result()

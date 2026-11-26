@@ -173,13 +173,17 @@ class AnalysisVerifier:
             if sum(s.size for s in members if not s.overlaps) > sizes[key]:
                 return _fail("sum", unverified)
         if method is AnalysisMethod.CLUSTER:
+            # The segments of a run_code result are left out: its check already
+            # put every person in exactly one of them, and each size used must
+            # equal the recounted one. With fewer personas than its segments,
+            # the ones used need not add up to the population.
             clustered = [
                 (key, members)
                 for key, members in groups.items()
-                if len(groups) == 1
-                or any(
-                    str(s.definition.get("kind")) == "cluster" or s.tool_call_id in runs
-                    for s in members
+                if not any(s.tool_call_id in runs for s in members)
+                and (
+                    len(groups) == 1
+                    or any(str(s.definition.get("kind")) == "cluster" for s in members)
                 )
             ]
             for key, members in clustered:

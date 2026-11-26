@@ -1477,6 +1477,166 @@ class TestEmitAndFinalize:
 
         assert value["result"] is None and value["error"] == error
 
+    @pytest.mark.parametrize(
+        ("code", "error", "context"),
+        [
+            # the purchases table as the population: several rows per person
+            (
+                'df = read_table("source_2")\ndf["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_2", id_column="customer_id")',
+                "DUPLICATE_IDS",
+                {"side": "population", "rows": 48, "distinct_ids": 24},
+            ),
+            # the frame repeats a person
+            (
+                'import pandas as pd\ndf = read_table("source_1")\n'
+                "df = pd.concat([df.iloc[1:], df.iloc[:1], df.iloc[:1]])\n"
+                'df["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "DUPLICATE_IDS",
+                {"side": "result", "rows": 31, "distinct_ids": 30},
+            ),
+            (
+                'df = read_table("source_1").iloc[1:]\ndf["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "ID_MISMATCH",
+                {
+                    "population_rows": 30,
+                    "result_rows": 29,
+                    "not_in_result": 1,
+                    "not_in_population": 0,
+                },
+            ),
+            (
+                'import pandas as pd\ndf = read_table("source_1")\n'
+                'df = pd.concat([df, df.iloc[:1].assign(customer_id="X999")])\n'
+                'df["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "ID_MISMATCH",
+                {
+                    "population_rows": 30,
+                    "result_rows": 31,
+                    "not_in_result": 0,
+                    "not_in_population": 1,
+                },
+            ),
+            (
+                'df = read_table("source_1")\ndf["seg"] = ["a"] * 28 + [None, None]\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "UNASSIGNED",
+                {"rows_unassigned": 2},
+            ),
+            # pandas' missing values (a left merge) are no segment called "nan"
+            (
+                'import pandas as pd\ndf = read_table("source_1")\n'
+                'seg = pd.DataFrame({"customer_id": ["C000"], "seg": ["a"]})\n'
+                'df = df.merge(seg, on="customer_id", how="left")\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "UNASSIGNED",
+                {"rows_unassigned": 29},
+            ),
+        ],
+    )
+    def test_a_refused_result_tells_the_counts_behind_it(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        tables: dict[str, Any],
+        code: str,
+        error: str,
+        context: dict[str, Any],
+    ) -> None:
+        _run_ai(lib, tmp_path, code)
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["error"] == error
+        assert value["error_context"] == context
+
+    def test_population_rows_without_an_id_are_not_called_duplicates(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        data = _customers().decode().rstrip("\n") + "\n,50,basic\n"
+        assert _prepare(lib, tmp_path, data.encode(), source_id="cust")["ok"]
+        assert _prepare(lib, tmp_path, _purchases(), source_id="buys")["ok"]
+        (tmp_path / "persona_analysis.py").write_bytes(_LIBRARY_PATH.read_bytes())
+        _run_ai(
+            lib,
+            tmp_path,
+            'df = read_table("source_1")\ndf["seg"] = "a"\n'
+            'emit_result(df, "seg", "source_1", id_column="customer_id")',
+        )
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["error"] == "POPULATION_ID_MISSING"
+        assert value["error_context"] == {"rows_without_id": 1}
+
+    @pytest.mark.parametrize(
+        ("code", "read"),
+        [
+            # a merge of its own instead of join_tables
+            (
+                'c = read_table("source_1")\nb = read_table("source_2")\n'
+                'n = b.groupby("customer_id").size().rename("n").reset_index()\n'
+                'df = c.merge(n, on="customer_id", how="left")\n'
+                'df["seg"] = ["buyer" if v == v else "none" for v in df["n"]]\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                ["source_1", "source_2"],
+            ),
+            (
+                'df = join_tables("source_1", "customer_id", [{"source": "source_2",'
+                ' "aggregations": [{"column": "amount", "func": "sum"}]}])\n'
+                'df["seg"] = "a"\n'
+                'emit_result(df, "seg", "join:source_1+source_2",'
+                ' id_column="customer_id")',
+                ["source_1", "source_2"],
+            ),
+            (
+                'df = read_table("source_1")\ndf["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                ["source_1"],
+            ),
+        ],
+    )
+    def test_the_tables_the_code_read_are_recorded(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        tables: dict[str, Any],
+        code: str,
+        read: list[str],
+    ) -> None:
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        assert result["tables_read"] == read
+
+    def test_only_known_tables_are_recorded_as_read(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        # the code passes its own list: the wrapper's list wins, and the check
+        # keeps only the tables of this run
+        _run_ai(
+            lib,
+            tmp_path,
+            'df = read_table("source_1")\ndf["seg"] = "a"\n'
+            'emit_result(df, "seg", "source_1", id_column="customer_id",'
+            ' tables_read=["source_9", "</data>"])',
+        )
+
+        assert _finalize(lib, tmp_path)["result"]["tables_read"] == ["source_1"]
+
+    def test_an_accepted_result_has_no_error_context(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_BY_AGE)
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["error"] is None and value.get("error_context") is None
+
     def test_a_result_file_written_by_hand_is_recounted(
         self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
     ) -> None:

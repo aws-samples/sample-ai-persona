@@ -66,6 +66,47 @@ class TestPersonaCheck:
         assert generation.error_code == ErrorCode.GENERATION_VERIFICATION_FAILED.value
         assert env.agents.calls.count("synthesis") == 2
 
+    def test_a_persona_without_evidence_is_written_again_with_the_reason(
+        self, env: _Env, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env.agents.synthesis_mode = "no_evidence_first"
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+        caplog.set_level("INFO")
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+        first, again = env.agents.synthesis_prompts
+        assert "evidence_ids" in again and "1 人目" in again
+        assert "1 人目" not in first
+        # how many personas had no evidence, and why (none written / unknown)
+        assert "personas without evidence: 1 of 2 (unknown ids 1)" in caplog.text
+
+    def test_a_persona_still_without_evidence_fails_the_generation(
+        self, env: _Env
+    ) -> None:
+        env.agents.synthesis_mode = "no_evidence"
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.GENERATION_VERIFICATION_FAILED.value
+        assert env.agents.calls.count("synthesis") == 2
+
+    def test_a_layer_left_out_is_told_on_the_second_writing(self, env: _Env) -> None:
+        env.agents.synthesis_mode = "same_layer_first"
+        manager = env.manager()
+
+        manager.run(_start(manager, env.ready_file()))
+
+        first, again = env.agents.synthesis_prompts
+        assert "segment_id" in again.split(first, 1)[-1]
+
 
 class TestRowsAreNotPeopleParam:
     @staticmethod

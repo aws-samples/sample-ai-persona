@@ -1589,6 +1589,7 @@ class TestAdvancedGenerationAgents:
             mock_config.BEDROCK_MODEL_ID = "global.anthropic.default-model"
             mock_config.AWS_REGION = "ap-northeast-1"
             mock_config.AGENT_MAX_TOKENS = 16000
+            mock_config.ADVANCED_PLANNING_MAX_TOKENS = 8000
             mock_config.ADVANCED_EVIDENCE_MAX_RETRIES = 2
             mock_config.ADVANCED_EVIDENCE_RETRY_BASE_SECONDS = 2
             mock_config.get_aws_credentials.return_value = {}
@@ -1811,6 +1812,82 @@ class TestAdvancedGenerationAgents:
         assert raised.value.context == {"cause": "model"}
         assert "secret" not in str(raised.value)
         assert raised.value.__cause__ is None
+
+    def test_the_planner_has_its_own_smaller_output_limit(self, strands):
+        """A plan is short: a runaway output stops soon instead of in minutes."""
+        _, mock_model = strands
+
+        AgentService().create_advanced_planning_agent("計画")
+        planner_limit = mock_model.call_args.kwargs["max_tokens"]
+        AgentService().create_advanced_synthesis_agent("合成")
+
+        assert planner_limit == 8000
+        assert mock_model.call_args.kwargs["max_tokens"] == 16000
+
+    def test_a_plan_that_hit_the_output_limit_is_tried_once_more(self, strands, caplog):
+        from strands.types.exceptions import MaxTokensReachedException
+
+        agent = Mock()
+        agent.structured_output.side_effect = [
+            MaxTokensReachedException("max_tokens reached"),
+            _plan_output(),
+        ]
+        caplog.set_level("WARNING")
+
+        plan = AgentService().run_advanced_planning(agent, "計画", {})
+
+        assert plan["method"] == "cluster"
+        assert agent.structured_output.call_count == 2
+        assert "capacity=True" in caplog.text
+
+    def test_a_plan_that_hits_the_limit_twice_fails_as_the_model(self, strands, caplog):
+        from strands.types.exceptions import MaxTokensReachedException
+
+        agent = Mock()
+        agent.structured_output.side_effect = MaxTokensReachedException("max_tokens")
+        caplog.set_level("WARNING")
+
+        with pytest.raises(AgentServiceError) as raised:
+            AgentService().run_advanced_planning(agent, "計画", {})
+
+        assert agent.structured_output.call_count == 2
+        assert raised.value.code == ErrorCode.GENERATION_SANDBOX_UNAVAILABLE
+        assert raised.value.context == {"cause": "model"}
+        assert "advanced planning agent failed (MaxTokensReachedException)" in (
+            caplog.text
+        )
+        assert "capacity=True" in caplog.text
+
+    def test_the_failed_turn_is_taken_out_before_the_plan_is_tried_again(self, strands):
+        from strands.types.exceptions import MaxTokensReachedException
+
+        agent = Mock()
+        agent.messages = [{"role": "user", "content": "before"}]
+        seen: list[int] = []
+
+        def answer(*_args):
+            seen.append(len(agent.messages))
+            if len(seen) == 1:
+                agent.messages.append({"role": "user", "content": "failed turn"})
+                raise MaxTokensReachedException("max_tokens")
+            return _plan_output()
+
+        agent.structured_output.side_effect = answer
+
+        AgentService().run_advanced_planning(agent, "計画", {})
+
+        assert seen == [1, 1]
+
+    def test_synthesis_that_hit_the_output_limit_is_not_tried_again(self, strands):
+        from strands.types.exceptions import MaxTokensReachedException
+
+        agent = Mock()
+        agent.structured_output.side_effect = MaxTokensReachedException("max_tokens")
+
+        with pytest.raises(AgentServiceError):
+            AgentService().run_advanced_synthesis(agent, "合成", {}, output_schema=dict)
+
+        assert agent.structured_output.call_count == 1
 
     def test_a_bad_structured_output_is_asked_again_once(self, strands):
         agent = Mock()

@@ -301,6 +301,52 @@ class TestMultiStepPlan:
         record = manager.get_record(ADMIN, gid)
         assert [s["kind"] for s in record.plan["steps"]] == ["join", "cluster"]
 
+    @pytest.mark.parametrize(
+        ("code", "starts"),
+        [
+            (_EMIT_JOIN, "結合した列: id, "),
+            # a merge of its own: no joined columns, but both tables were used
+            (
+                'c = read_table("source_1")\nb = read_table("source_2")\n'
+                'n = b.groupby("id").size().rename("n").reset_index()\n'
+                'df = c.merge(n, on="id", how="left")\n'
+                'df["seg"] = ["young" if a < 40 else "old" for a in df["age"]]\n'
+                'emit_result(df, "seg", "source_1", id_column="id")\n',
+                "使った表: ",
+            ),
+        ],
+    )
+    def test_the_record_names_the_tables_the_code_used(
+        self, env: _Env, code: str, starts: str
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        people, buys = env.ready_file(), env.ready_file(data=_purchases_csv())
+        gid = _start_detailed(manager, people, buys)
+        env.agents.analysis_fn = _code_analysis(code=code)
+
+        manager.run(gid)
+
+        assert _current(env, gid).status is GenerationStatus.DONE
+        record = manager.get_record(ADMIN, gid)
+        (written,) = [b for b in record.code_blocks if b["kind"] == "ai_written"]
+        assert written["title"].startswith(starts)
+        assert buys.display_name in written["title"]
+
+    def test_code_on_one_table_has_no_table_line(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(
+            manager, env.ready_file(), env.ready_file(data=_purchases_csv())
+        )
+        env.agents.analysis_fn = _code_analysis(code=_EMIT)
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        (written,) = [b for b in record.code_blocks if b["kind"] == "ai_written"]
+        assert not written.get("title")
+
     def test_without_the_detailed_analysis_no_detailed_step_is_kept(
         self, env: _Env
     ) -> None:

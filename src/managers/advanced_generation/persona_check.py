@@ -29,6 +29,11 @@ def _filled(items: Sequence[str]) -> bool:
     return any(str(i).strip() for i in items)
 
 
+def without_evidence(personas: Sequence[AdvancedPersonaOutput]) -> list[int]:
+    """The 1-based numbers of the personas that point at no evidence."""
+    return [n for n, p in enumerate(personas, start=1) if not p.evidence_ids]
+
+
 def check_personas(
     personas: Sequence[AdvancedPersonaOutput],
     segment_ids: Sequence[str],
