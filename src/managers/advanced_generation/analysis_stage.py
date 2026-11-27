@@ -44,7 +44,7 @@ from .detailed_analysis import (
 from .errors import Cancelled, StopRun, fail
 from .run_context import CAUSE_SANDBOX, RunContext
 from .run_types import NoTools, Run
-from .segment_features import settle_features
+from .segment_features import ranked_features, settle_features
 
 logger = logging.getLogger(__name__)
 
@@ -518,10 +518,14 @@ class AnalysisStage:
         }
         if detailed:
             state.budget = self._new_budget(state)
+            skip = self._skipped(state)
             extra.update(
                 gate=state.budget,
                 expected_library_sha256=self._context.sandbox.library_sha256,
                 expected_parquet_sha256=self._expected_parquet(state),
+                # The agent names each segment from the features its persona
+                # is written from (settle_features picks the same ones)
+                present_features=lambda items: ranked_features(items, skip),
             )
         tools = self._context.tool_factory(
             state.session,

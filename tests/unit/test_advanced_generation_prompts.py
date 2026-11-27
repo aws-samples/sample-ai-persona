@@ -43,6 +43,20 @@ class TestSynthesisInstructions:
         assert "断り書き" in instructions
 
 
+class TestSynthesisTrustsTheCountedFeatures:
+    def test_counted_features_win_over_the_label_and_the_claim(self) -> None:
+        instructions = prompts.SYNTHESIS_INSTRUCTIONS
+        # The analysis agent writes the label and the claim; the features are
+        # counted by the app. When they disagree, the persona follows the count.
+        assert "食い違う" in instructions
+        assert "features の数値を優先" in instructions
+
+    def test_the_analysis_names_a_run_code_segment_from_its_features(self) -> None:
+        detailed = prompts.analysis_instructions(detailed=True)
+        assert "層の label は" in detailed and "features" in detailed
+        assert "層の label は" not in prompts.analysis_instructions()
+
+
 class TestPersonaSchema:
     @pytest.mark.parametrize("field", ["background", "values", "pain_points", "goals"])
     def test_descriptions_are_as_detailed_as_the_ordinary_one(self, field: str) -> None:
