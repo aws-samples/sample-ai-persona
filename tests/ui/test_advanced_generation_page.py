@@ -644,6 +644,27 @@ class TestFileList:
         button = ui.page.locator("[data-testid='advanced-source-delete-open']")
         assert button.get_attribute("aria-disabled") != "true"
 
+    def test_the_delete_dialog_wraps_a_long_name_without_side_scrolling(
+        self, ui: UiHarness
+    ) -> None:
+        # the buttons of a row sit in a box that never wraps; the dialog drawn
+        # there must still wrap its title and text
+        long_name = "pos_transactions_with_products_of_every_store_2024_2025.csv"
+        _open(ui, upload_rows=_listed((_second_ready(filename=long_name), None)))
+        ui.page.locator("[data-testid='advanced-source-delete-open']").click()
+        ui.settle()
+
+        panel = ui.page.locator("[data-dialog-panel]:visible")
+        sizes = panel.evaluate(
+            "(el) => ({scroll: el.scrollWidth, client: el.clientWidth,"
+            " white: getComputedStyle(el).whiteSpace})"
+        )
+        assert sizes["scroll"] <= sizes["client"], sizes
+        assert sizes["white"] == "normal"
+        title = panel.locator("h2").inner_text()
+        assert long_name in title.replace("\n", "")
+        ui.check_a11y()
+
     def test_the_list_has_no_axe_violations(self, ui: UiHarness) -> None:
         _open(
             ui,
