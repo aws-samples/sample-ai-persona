@@ -1,4 +1,5 @@
 {% from "components/icons.html" import icon_check_circle, icon_chat, icon_lightbulb, icon_document, icon_refresh, icon_persona, icon_cpu_chip %}
+{% from "components/insight_description.html" import insight_preview %}
 <!-- Discussion result partial -->
 <div class="bg-white rounded-lg shadow-md p-6 fade-in">
     <div class="flex items-center justify-between mb-6">
@@ -131,7 +132,7 @@
                 <span class="bg-yellow-200 text-yellow-800 px-2 py-0.5 rounded text-xs font-medium">
                     {{ insight.category if insight.category else 'インサイト' }}
                 </span>
-                <p class="text-gray-700 text-sm mt-2">{{ insight.description[:150] }}{% if insight.description|length > 150 %}...{% endif %}</p>
+                {{ insight_preview(insight.description) }}
             </div>
             {% endfor %}
         </div>

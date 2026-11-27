@@ -279,6 +279,75 @@ class TestAIService:
             )
             assert second_insight["confidence_score"] == 0.72
 
+    def test_extract_insights_uses_its_own_token_limit(self):
+        """Reasoning plus quoted evidence exceed MAX_TOKENS, so extraction asks for more."""
+        from src.config import config
+
+        assert config.INSIGHT_MAX_TOKENS > config.MAX_TOKENS
+        with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
+            mock_retry.return_value = (
+                '[{"category": "顧客ニーズ", "description": "十分な長さのインサイト説明文",'
+                ' "confidence_score": 0.7}]'
+            )
+            self.ai_service.extract_insights(
+                [
+                    Message.create_new("1", "田中太郎", "一括だと高いと感じています。"),
+                    Message.create_new("2", "佐藤花子", "私は品質が気になっています。"),
+                ]
+            )
+
+        assert mock_retry.call_args.kwargs["max_tokens"] == config.INSIGHT_MAX_TOKENS
+
+    def test_extract_insights_puts_participant_profiles_in_the_prompt(self):
+        with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
+            mock_retry.return_value = (
+                '[{"category": "顧客ニーズ", "description": "十分な長さのインサイト説明文",'
+                ' "confidence_score": 0.7}]'
+            )
+            self.ai_service.extract_insights(
+                [
+                    Message.create_new("1", "田中太郎", "一括だと高いと感じています。"),
+                    Message.create_new("2", "佐藤花子", "私は品質が気になっています。"),
+                ],
+                participant_profiles=["- 田中太郎: 35歳・男性・会社員"],
+            )
+
+        prompt = mock_retry.call_args.args[1]
+        assert "- 田中太郎: 35歳・男性・会社員" in prompt
+
+    def test_extract_insights_keeps_supporting_messages(self):
+        """Quoted statements are kept as a list of non-empty strings."""
+        mock_response = """[
+            {
+                "category": "顧客ニーズ",
+                "description": "観察: 価格を気にする／仮説: 値下げより分割払いが効く",
+                "confidence_score": 0.7,
+                "supporting_messages": ["田中太郎: 一括だと高い", "", 3]
+            },
+            {
+                "category": "市場機会",
+                "description": "根拠の欄が文字列で返ってきた場合のインサイト",
+                "confidence_score": 0.6,
+                "supporting_messages": "田中太郎: 一括だと高い"
+            },
+            {
+                "category": "商品開発",
+                "description": "根拠の欄がない場合のインサイトの説明文",
+                "confidence_score": 0.5
+            }
+        ]"""
+        with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
+            mock_retry.return_value = mock_response
+            messages = [
+                Message.create_new("1", "田中太郎", "一括だと高いと感じています。"),
+                Message.create_new("2", "佐藤花子", "私は品質が気になっています。"),
+            ]
+            result = self.ai_service.extract_insights(messages)
+
+        assert result[0]["supporting_messages"] == ["田中太郎: 一括だと高い"]
+        assert result[1]["supporting_messages"] == []
+        assert result[2]["supporting_messages"] == []
+
     def test_extract_insights_falls_back_to_bullet_text(self):
         """A bullet-list reply (no JSON) is parsed into categorized insights."""
         bullet_response = (

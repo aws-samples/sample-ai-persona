@@ -90,6 +90,43 @@ class TestInsightUtils:
         assert len(result.insights) == 1
         assert result.insights[0].category == "ニーズ"
 
+    def test_attach_insights_passes_participant_profiles(self):
+        from datetime import datetime
+
+        from src.models.message import Message
+        from src.models.persona import Persona
+
+        persona = Persona(
+            id="p1",
+            name="太郎",
+            age=40,
+            occupation="会社員",
+            background="",
+            values=["品質"],
+            pain_points=[],
+            goals=[],
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        discussion = Discussion.create_new(topic="テスト議論", participants=["p1"])
+        messages = [Message.create_new("p1", "太郎", "テスト")]
+        mock_ai_service = Mock()
+        mock_ai_service.extract_insights.return_value = []
+
+        attach_insights_to_discussion(
+            discussion=discussion,
+            messages=messages,
+            categories=None,
+            ai_service=mock_ai_service,
+            logger=Mock(),
+            personas=[persona],
+        )
+
+        profiles = mock_ai_service.extract_insights.call_args.kwargs[
+            "participant_profiles"
+        ]
+        assert profiles == ["- 太郎: 40歳・会社員／価値観: 品質"]
+
     def test_attach_insights_failure_returns_discussion_unchanged(self):
         """When the AI fails, the discussion is returned as is without insights."""
         discussion = Discussion.create_new(
@@ -148,6 +185,73 @@ class TestInsightUtils:
 @pytest.mark.unit
 class TestNormalizeAndDeduplicateInsights:
     """Tests for normalize_and_deduplicate_insights."""
+
+    def _raw(self, supporting):
+        return [
+            {
+                "category": "テスト",
+                "description": "テスト用のインサイト説明文です",
+                "confidence_score": 0.8,
+                "supporting_messages": supporting,
+            }
+        ]
+
+    def test_supporting_messages_pass_through(self):
+        result = normalize_and_deduplicate_insights(self._raw(["田中: 高い"]))
+        assert result[0]["supporting_messages"] == ["田中: 高い"]
+
+    def test_supporting_messages_default_to_empty(self):
+        raw = [
+            {
+                "category": "テスト",
+                "description": "テスト用のインサイト説明文です",
+                "confidence_score": 0.8,
+            }
+        ]
+        assert normalize_and_deduplicate_insights(raw)[0]["supporting_messages"] == []
+
+    def test_supporting_messages_get_the_speakers_profile(self):
+        """The profile is added after the cap, so it is never cut off."""
+        from datetime import datetime
+
+        from src.managers.shared.insight_utils import MAX_SUPPORTING_MESSAGE_LENGTH
+        from src.managers.shared.participant_profiles import (
+            build_participant_profiles,
+        )
+        from src.models.persona import Persona
+
+        persona = Persona(
+            id="p1",
+            name="田中",
+            age=40,
+            occupation="会社員",
+            background="",
+            values=[],
+            pain_points=[],
+            goals=[],
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        long_body = "あ" * (MAX_SUPPORTING_MESSAGE_LENGTH + 50)
+        result = normalize_and_deduplicate_insights(
+            self._raw([f"田中: {long_body}"]),
+            profiles=build_participant_profiles([persona]),
+        )
+        quote = result[0]["supporting_messages"][0]
+        assert quote.startswith("田中（40歳・会社員）: あ")
+
+    def test_supporting_messages_are_capped(self):
+        """At most 3 quotes, each trimmed to the length limit."""
+        from src.managers.shared.insight_utils import (
+            MAX_SUPPORTING_MESSAGE_LENGTH,
+            MAX_SUPPORTING_MESSAGES,
+        )
+
+        long_quote = "あ" * (MAX_SUPPORTING_MESSAGE_LENGTH + 50)
+        result = normalize_and_deduplicate_insights(self._raw([long_quote] * 5))
+        quotes = result[0]["supporting_messages"]
+        assert len(quotes) == MAX_SUPPORTING_MESSAGES == 3
+        assert all(len(q) == MAX_SUPPORTING_MESSAGE_LENGTH for q in quotes)
 
     def test_category_normalization(self):
         """Category names are normalized by partial match."""

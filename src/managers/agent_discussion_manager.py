@@ -799,18 +799,41 @@ class AgentDiscussionManager:
                 "他の参加者の体験も踏まえて意見を述べてください。"
             )
         elif current_round < total_rounds:
+            # Asking "has your view changed?" invites easy agreement; ask for a
+            # concrete reaction to one named statement instead.
             parts.append(
-                "議論が深まってきました。他の参加者の意見を踏まえて、あなたの考えに変化はありますか？"
-                "新たに気づいたことや、まだ議論されていない重要な観点があれば提起してください。"
+                "他の参加者の発言から1つを選び、その人の名前を挙げて応答してください。"
+                "応答は次のどれかにしてください。\n"
+                "- あなたの経験では違った（反例）\n"
+                "- その意見が成り立つ条件と、成り立たない条件\n"
+                "- 同意するが、理由や背景が違う\n"
+                "無理に同意したり意見を変えたりする必要はありません。"
+                "考えが変わった場合は、何がきっかけかを具体的に述べてください。"
             )
         else:
+            # A counted list ("次の3つ") made personas announce their structure,
+            # so the points are asked for in one sentence.
             parts.append(
-                "最終ラウンドです。これまでの議論を踏まえて、あなたが最も重要だと感じたポイントと、"
-                "具体的にどうすべきかについて、あなたの立場から結論を述べてください。"
+                "これがこの議論での最後の発言です。この議論で最も重要だと感じた点、"
+                "まだ納得していない点や他の参加者と意見が分かれたままの点、"
+                "あなたなら具体的にどうしたいかを、あなたの立場から話してください。"
             )
 
-        if latest_facilitator_message:
-            parts.append("\nファシリテータの問いかけの観点にも着目してください。")
+        if latest_facilitator_message and _is_addressed_to(
+            latest_facilitator_message, persona_agent.get_persona_name()
+        ):
+            # Only the addressed persona is told; telling everyone made the
+            # others say there was no question for them.
+            parts.append(
+                "\nファシリテータから、あなたあての問いがあります。まずそれに答えてください。"
+                "問いを言い直したり、問われたことに触れたりせず、答えから話し始めてください。"
+            )
+
+        if not is_first_round:
+            parts.append(
+                "\n指示や議論の進め方（ラウンド、問いかけの有無など）には触れず、"
+                "普段の会話として自然に話してください。"
+            )
 
         return "\n".join(parts)
 
@@ -861,23 +884,29 @@ class AgentDiscussionManager:
 
         if round_number < total_rounds:
             parts.append(
-                "以下の観点で簡潔に要約してください:\n"
-                "- 各参加者の主要な意見や立場\n"
-                "- 参加者間の共通点や対立点\n"
-                "- まだ掘り下げられていない重要な観点\n"
-                "- 各ペルソナに次のラウンドで答えてほしい具体的な問い（1-2個）\n"
+                "以下の観点で要約してください:\n"
+                "- 各参加者の主要な意見（誰が何を言ったか）\n"
+                "- 対立点（誰と誰が、何について、どう違うか）\n"
+                "- 1人だけが述べた意見や、意外な発言（消さずに残す）\n"
+                "- 名指しの問いを1-2個（「〇〇さんへ: …」の形。対立や意外な発言を掘り下げるもの）\n"
                 f"残り{total_rounds - round_number}ラウンドです。"
             )
-            if total_rounds - round_number <= 2:
-                parts.append("論点を絞り込み、結論に向けて議論を収束させてください。")
-            parts.append("3-5文で要約し、最後に問いかけで締めてください。")
+            # Narrowing earlier leaves no round to explore before the conclusion.
+            if total_rounds - round_number == 1:
+                parts.append(
+                    "最終ラウンドに向けて、意見が分かれている論点を1〜2個に絞ってください。"
+                )
+            # The summary is the only thing carried into the next round, so it
+            # is long enough to keep concrete details.
+            parts.append("5-8文で要約し、最後に名指しの問いで締めてください。")
         else:
             parts.append(
                 "最終ラウンドが完了しました。以下の観点で議論全体をまとめてください:\n"
                 "- 議論を通じて明らかになった主要な結論\n"
                 "- 参加者間で合意に至った点と残った対立点\n"
+                "- 少数意見や意外な発言（1人だけの意見も含める）\n"
                 "- 議論テーマの目的に対する具体的な示唆\n"
-                "5-7文で最終まとめを作成してください。"
+                "5-8文で最終まとめを作成してください。"
             )
 
         return "\n".join(parts)
@@ -1119,7 +1148,7 @@ class AgentDiscussionManager:
             participant_names={p.id: p.name for p in personas},
             discussion_id=discussion_id,
         )
-        discussion = self._attach_insights(discussion, messages, categories)
+        discussion = self._attach_insights(discussion, messages, categories, personas)
         discussion_validation.validate_for_save(
             discussion,
             error_cls=AgentDiscussionManagerError,
@@ -1143,6 +1172,7 @@ class AgentDiscussionManager:
         discussion: Discussion,
         messages: List[Message],
         categories: Optional[List[InsightCategory]],
+        personas: List[Persona],
     ) -> Discussion:
         """Common handling of insight generation and category saving (up to 100)."""
         from .shared.insight_utils import attach_insights_to_discussion
@@ -1153,6 +1183,7 @@ class AgentDiscussionManager:
             categories=categories,
             ai_service=self._ai_service or service_factory.get_ai_service(),
             logger=self.logger,
+            personas=personas,
         )
 
 
@@ -1165,3 +1196,18 @@ def _target_of(persona: Persona) -> AccessTarget:
         shared_group_ids=persona.shared_group_ids,
         display_name=persona.name,
     )
+
+
+def _is_addressed_to(message: str, persona_name: str) -> bool:
+    """Whether the facilitator's message has a question for this persona.
+
+    The summary addresses people as "〇〇さんへ"; the full name (with or
+    without its space) or the family name of a spaced name counts.
+    """
+    if not persona_name:
+        return False
+    compact = "".join(message.split())
+    names = {"".join(persona_name.split())}
+    if len(persona_name.split()) > 1:
+        names.add(persona_name.split()[0])
+    return any(f"{name}さんへ" in compact for name in names)

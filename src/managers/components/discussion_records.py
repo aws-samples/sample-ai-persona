@@ -48,7 +48,7 @@ from ...models.discussion import (
 )
 from ...models.discussion_report import DiscussionReport
 from ...models.errors import CodedError, ErrorCode, LookupUnavailableError
-from ...models.insight import Insight
+from ...models.insight import Insight, split_observation_hypothesis
 from ...models.message import DiscussionMessage, Message
 from ...models.uploaded_file import AttachResult
 from ...services.stores.discussion_store import (
@@ -752,9 +752,17 @@ def build_export(view: DiscussionView) -> tuple[str, str]:
         lines += [f"### {_escape(name)}{round_label}", "", m.content, ""]
     if d.insights:
         lines += ["## インサイト", ""]
-        lines += [
-            f"- [{_escape(i.category)}] {_escape(i.description)}" for i in d.insights
-        ]
+        for i in d.insights:
+            parts = split_observation_hypothesis(i.description)
+            if parts:
+                lines += [
+                    f"- [{_escape(i.category)}]",
+                    f"  - 観察: {_escape(parts[0])}",
+                ]
+                if parts[1]:
+                    lines.append(f"  - 仮説: {_escape(parts[1])}")
+            else:
+                lines.append(f"- [{_escape(i.category)}] {_escape(i.description)}")
         lines.append("")
     for report in view.reports:
         lines += [f"## レポート（{report.template_type}）", "", report.content, ""]

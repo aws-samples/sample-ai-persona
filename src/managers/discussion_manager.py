@@ -302,7 +302,7 @@ class DiscussionManager:
             documents=documents,
             participant_names={p.id: p.name for p in personas},
         )
-        discussion = self._attach_insights(discussion, messages, categories)
+        discussion = self._attach_insights(discussion, messages, categories, personas)
         discussion_validation.validate_for_save(
             discussion,
             error_cls=DiscussionManagerError,
@@ -615,8 +615,14 @@ class DiscussionManager:
                 code=ErrorCode.DISCUSSION_RESULT_INVALID,
             )
         try:
+            # Only participants the reader can still read carry a profile
+            personas = [p.persona for p in view.participants if p.persona is not None]
             insights = generate_insights(
-                view.messages, view.discussion.topic, categories, self.ai_service
+                view.messages,
+                view.discussion.topic,
+                categories,
+                self.ai_service,
+                personas=personas,
             )
         except Exception as e:
             self.logger.error("Insight generation failed", exc_info=True)
@@ -718,6 +724,7 @@ class DiscussionManager:
         discussion: Discussion,
         messages: List[Message],
         categories: Optional[List[InsightCategory]],
+        personas: List[Persona],
     ) -> Discussion:
         """Common handling of insight generation and category saving (up to 100)."""
         from .shared.insight_utils import attach_insights_to_discussion
@@ -728,6 +735,7 @@ class DiscussionManager:
             categories=categories,
             ai_service=self.ai_service,
             logger=self.logger,
+            personas=personas,
         )
 
 

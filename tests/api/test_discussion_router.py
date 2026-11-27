@@ -518,6 +518,84 @@ class TestDetail:
         aw.s3.generate_presigned_url.assert_not_called()
         aw.s3.open_stream.assert_not_called()
 
+    def _with_insights(self, aw):
+        from src.models.insight import Insight
+
+        discussion = Discussion.create_new(
+            topic="PB の拡大について",
+            participants=["p1", "p2"],
+            mode="agent",
+            participant_names={"p1": "佐藤", "p2": "鈴木"},
+        ).with_insights(
+            [
+                Insight.create_new(
+                    "顧客ニーズ",
+                    "観察: 夜は薬剤師がいない／仮説: 説明に届かないことが主因",
+                    ["佐藤: 聞けないなら、いつものにします"],
+                    0.8,
+                ),
+                Insight.create_new(
+                    "市場機会", "ベビー用品は乗り換えが進んでいる", [], 0.7
+                ),
+                Insight.create_new(
+                    "商品開発", "観察: 全員が医薬品は説明がないと替えない", [], 0.9
+                ),
+            ]
+        )
+        return aw.world.records.save_new(
+            ME.principal(), discussion, _messages(aw.world)
+        )
+
+    def test_insights_show_observation_and_hypothesis_apart(self, aw, client):
+        discussion = self._with_insights(aw)
+        html = client.get(f"/discussion/insights/{discussion.id}").text
+
+        observation = re.search(
+            r'data-testid="insight-observation"[^>]*>.*?</p>', html, re.S
+        )
+        hypothesis = re.search(
+            r'data-testid="insight-hypothesis"[^>]*>.*?</p>', html, re.S
+        )
+        assert observation and "夜は薬剤師がいない" in observation.group(0)
+        assert hypothesis and "説明に届かないことが主因" in hypothesis.group(0)
+        assert "観察: 夜は" not in html
+        # A plain description is shown as it is
+        assert "ベビー用品は乗り換えが進んでいる" in html
+        assert html.count('data-testid="insight-hypothesis"') == 1
+        # An observation alone gets the observation label and no hypothesis
+        assert html.count('data-testid="insight-observation"') == 2
+        assert "全員が医薬品は説明がないと替えない" in html
+        assert "観察: 全員が" not in html
+
+    def test_result_preview_leads_with_the_hypothesis(self, aw, client):
+        discussion = self._with_insights(aw)
+        html = client.get(f"/discussion/result-partial/{discussion.id}").text
+        preview = re.search(
+            r'data-testid="insight-preview-hypothesis"[^>]*>.*?</p>', html, re.S
+        )
+        assert preview and "説明に届かないことが主因" in preview.group(0)
+        assert "ベビー用品は乗り換えが進んでいる" in html
+
+    def test_result_preview_labels_an_observation_alone(self, aw, client):
+        discussion = self._with_insights(aw)
+        html = client.get(f"/discussion/result-partial/{discussion.id}").text
+        preview = re.search(
+            r'data-testid="insight-preview-observation"[^>]*>.*?</p>', html, re.S
+        )
+        assert preview and "全員が医薬品は説明がないと替えない" in preview.group(0)
+
+    def test_export_puts_observation_and_hypothesis_on_their_own_lines(
+        self, aw, client
+    ):
+        discussion = self._with_insights(aw)
+        text = client.get(f"/discussion/{discussion.id}/export").text
+        assert (
+            "- [顧客ニーズ]\n  - 観察: 夜は薬剤師がいない\n  - 仮説: 説明に届かないことが主因"
+            in text
+        )
+        assert "- [市場機会] ベビー用品は乗り換えが進んでいる" in text
+        assert "- [商品開発]\n  - 観察: 全員が医薬品は説明がないと替えない\n" in text
+
     def test_result_partial_and_insights_for_readers(self, aw, client):
         discussion = aw.discussion(PEER, shared_with=("sales",))
         assert (

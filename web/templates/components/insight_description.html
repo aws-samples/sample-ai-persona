@@ -1,0 +1,48 @@
+{#
+  The body of an insight. A "観察: …／仮説: …" description is shown as two labelled
+  blocks so the fact and the inference read apart, and "観察: …" alone as one; any other
+  text is shown as it is.
+  The labels are text, so the meaning does not depend on color.
+  Arguments: description ... the insight description.
+#}
+{% macro insight_description(description) -%}
+{%- set parts = split_insight(description) -%}
+{%- if parts -%}
+<dl class="space-y-2" data-testid="insight-parts">
+    <div class="flex items-start gap-2">
+        <dt class="shrink-0 mt-0.5 px-2 py-0.5 rounded border text-xs font-medium bg-white text-gray-700 border-gray-300">観察</dt>
+        <dd class="m-0"><p class="text-gray-700" data-testid="insight-observation">{{ parts[0] }}</p></dd>
+    </div>
+    {%- if parts[1] %}
+    <div class="flex items-start gap-2">
+        <dt class="shrink-0 mt-0.5 px-2 py-0.5 rounded border text-xs font-medium bg-indigo-50 text-indigo-800 border-indigo-300">仮説</dt>
+        <dd class="m-0"><p class="text-gray-900 font-medium" data-testid="insight-hypothesis">{{ parts[1] }}</p></dd>
+    </div>
+    {%- endif %}
+</dl>
+{%- else -%}
+<p class="text-gray-700">{{ description }}</p>
+{%- endif -%}
+{%- endmacro %}
+
+{#
+  A short preview of an insight, cut to ``limit`` characters: the hypothesis (the takeaway)
+  when there is one, otherwise the observation, each with its label.
+  Arguments: description ... the insight description; limit ... characters to keep.
+#}
+{% macro insight_preview(description, limit=150) -%}
+{%- set parts = split_insight(description) -%}
+{%- if parts and parts[1] -%}
+<p class="text-gray-700 text-sm mt-2 flex items-start gap-2">
+    <span class="shrink-0 px-1.5 py-0.5 rounded border text-xs font-medium bg-indigo-50 text-indigo-800 border-indigo-300">仮説</span>
+    <span data-testid="insight-preview-hypothesis">{{ parts[1][:limit] }}{% if parts[1]|length > limit %}...{% endif %}</span>
+</p>
+{%- elif parts -%}
+<p class="text-gray-700 text-sm mt-2 flex items-start gap-2">
+    <span class="shrink-0 px-1.5 py-0.5 rounded border text-xs font-medium bg-white text-gray-700 border-gray-300">観察</span>
+    <span data-testid="insight-preview-observation">{{ parts[0][:limit] }}{% if parts[0]|length > limit %}...{% endif %}</span>
+</p>
+{%- else -%}
+<p class="text-gray-700 text-sm mt-2">{{ description[:limit] }}{% if description|length > limit %}...{% endif %}</p>
+{%- endif -%}
+{%- endmacro %}
