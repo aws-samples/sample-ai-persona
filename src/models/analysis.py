@@ -949,6 +949,31 @@ def processes_left(value: Mapping[str, Any]) -> Optional[bool]:
     return count > 0
 
 
+# The library's error codes; anything else is never written to a log.
+_CHECK_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+
+def check_failure_reason(checked: Mapping[str, Any]) -> str:
+    """Why an isolated check could not be read, as a fixed word for the log.
+
+    The library's error code when it gave one (``OUTPUT_TOO_LARGE`` ...),
+    otherwise ``not_ok``, ``unreadable``, ``no_hashes`` or
+    ``scan_unavailable``. Free text from the answer is never returned.
+    """
+    if not checked.get("ok"):
+        error = checked.get("error")
+        code = error.get("code") if isinstance(error, Mapping) else None
+        if isinstance(code, str) and _CHECK_ERROR_CODE.match(code):
+            return code
+        return "not_ok"
+    value = checked.get("value")
+    if not isinstance(value, Mapping):
+        return "unreadable"
+    if not isinstance(value.get("hashes"), Mapping):
+        return "no_hashes"
+    return "scan_unavailable"
+
+
 @dataclass(frozen=True)
 class RunCodeOutcome:
     """How one ``run_code`` call ended, as the Service tells the gate.

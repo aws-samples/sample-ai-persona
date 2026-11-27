@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import itertools
 import json
+import logging
 import os
 import signal
 from pathlib import Path
@@ -1085,6 +1086,29 @@ class TestRunCodeFailsClosed:
         assert gate.outcomes[-1].changed == ()
         assert "分析を続けられません" in text and "分析を続けられません" in after
         assert service.emitted_results() == {}
+
+    @pytest.mark.parametrize(
+        ("answer", "reason"),
+        [
+            ({"ok": False, "error": {"code": "OUTPUT_TOO_LARGE"}}, "OUTPUT_TOO_LARGE"),
+            ({"ok": False, "error": {"code": "not a code; s3://b/k"}}, "not_ok"),
+            ({"ok": True, "value": {"result": _EMITTED}}, "no_hashes"),
+        ],
+        ids=["code", "unsafe_code", "no_hashes"],
+    )
+    def test_a_failed_check_logs_why(
+        self, caplog: pytest.LogCaptureFixture, answer: dict[str, Any], reason: str
+    ) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.verified_answer = answer
+        service = _detailed(sandbox, _Gate())
+
+        with caplog.at_level(logging.WARNING):
+            _by_name(service)["run_code"](code="x = 1")
+
+        (line,) = [m for m in caplog.messages if "check failed" in m]
+        assert line.endswith(f"reason={reason}")
+        assert "s3://" not in caplog.text
 
     def test_a_process_the_code_left_is_a_tamper(self) -> None:
         sandbox = _CodeSandbox()

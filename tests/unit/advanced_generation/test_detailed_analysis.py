@@ -312,8 +312,10 @@ class TestDetailedAnalysisFailsClosed:
 
         manager.run(gid)
 
+        # The check is ours, not the data's: try again, not "change the request"
         assert (
-            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+            _failed(env, gid).error_code
+            == ErrorCode.GENERATION_SANDBOX_UNAVAILABLE.value
         )
         assert "synthesis" not in env.agents.calls
         assert _candidate_count(env) == 0 and not _record_exists(env, gid)
@@ -359,7 +361,8 @@ class TestDetailedAnalysisFailsClosed:
         manager.run(gid)
 
         assert (
-            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+            _failed(env, gid).error_code
+            == ErrorCode.GENERATION_SANDBOX_UNAVAILABLE.value
         )
         assert logs.events("advanced_generation.tamper_detected") == []
         (disabled,) = logs.events("advanced_generation.run_code_disabled")

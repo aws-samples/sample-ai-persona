@@ -21,6 +21,7 @@ from ...models.advanced_generation import (
 )
 from ...models.analysis import (
     CHANGED_PROCESS,
+    check_failure_reason,
     processes_left,
     AnalysisMethod,
     AnalysisPlan,
@@ -41,7 +42,7 @@ from .detailed_analysis import (
     filter_evidence,
 )
 from .errors import Cancelled, StopRun, fail
-from .run_context import RunContext
+from .run_context import CAUSE_SANDBOX, RunContext
 from .run_types import NoTools, Run
 from .segment_features import settle_features
 
@@ -703,6 +704,14 @@ class AnalysisStage:
         """
         assert state.budget is not None and state.session is not None
         if state.budget.halted():
+            if state.budget.verify_failed:
+                # Our own check could not be read: nothing the data or the
+                # request did, so the user is told to try again
+                raise fail(
+                    ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
+                    "check failed",
+                    cause=CAUSE_SANDBOX,
+                )
             raise fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
         if not state.tools.run_code_ids():
             return
@@ -728,9 +737,17 @@ class AnalysisStage:
             self._log_tamper(state.generation.generation_id, changed)
             raise fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
         if not isinstance(hashes, Mapping) or left is None:
-            # The check itself failed -> fail closed, no tamper
+            # The check itself failed -> fail closed, no tamper; try again
+            logger.warning(
+                "advanced generation final check failed reason=%s",
+                check_failure_reason(result),
+            )
             self._log_verify_failed(state)
-            raise fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "check failed")
+            raise fail(
+                ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
+                "check failed",
+                cause=CAUSE_SANDBOX,
+            )
 
     def _changed_hashes(self, state: Run, hashes: Mapping[str, Any]) -> list[str]:
         """A missing expected or returned hash is a change."""

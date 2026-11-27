@@ -65,6 +65,7 @@ from ...models.analysis import (
     LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     LIMIT_RUN_CODE_MAX_CHARS,
     CHANGED_PROCESS,
+    check_failure_reason,
     processes_left,
     AnalysisTool,
     AnalysisToolPolicy,
@@ -885,7 +886,10 @@ class AnalysisToolService:
             # the check itself (or its
             # process scan) failed. Fail closed (halt), but this is no tamper.
             self._gate.record(RunCodeOutcome(ok=False, verify_failed=True))
-            logger.warning("analysis tool halted: tool=run_code check failed")
+            logger.warning(
+                "analysis tool halted: tool=run_code check failed reason=%s",
+                check_failure_reason(checked),
+            )
             self.code_runs.append(
                 CodeRun(self._next_call_id(), code, _sha(code), False)
             )
