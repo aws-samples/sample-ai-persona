@@ -142,7 +142,9 @@ class SandboxService(Protocol):
         cannot swap it between a write and the run). ``session_library`` (the
         session's own copy, to be hashed) is added to ``args``. A command
         longer than :data:`VERIFY_COMMAND_MAX_CHARS` is not sent; the result
-        is then ``COMMAND_TOO_LONG`` (the caller fails closed).
+        is then ``COMMAND_TOO_LONG`` (the caller fails closed). The answer is
+        not cut to ``max_output_chars`` (it goes to the app, not the model);
+        one over :data:`VERIFY_OUTPUT_MAX_CHARS` is ``OUTPUT_TOO_LARGE``.
         """
         ...
 
@@ -222,6 +224,13 @@ def _cut_strings(cut: dict[str, Any], max_chars: int) -> dict[str, Any] | None:
         step *= 2
 
 
+def _bound_check(result: dict[str, Any]) -> dict[str, Any]:
+    """A check's answer whole, or ``OUTPUT_TOO_LARGE`` past its bound."""
+    if _size(result) > VERIFY_OUTPUT_MAX_CHARS:
+        return _failure("OUTPUT_TOO_LARGE", limit=VERIFY_OUTPUT_MAX_CHARS)
+    return result
+
+
 def _parse_result(stdout: str) -> dict[str, Any]:
     """The last JSON line the library printed; anything else is dropped."""
     # split("\n"), not splitlines(): a stray U+0085 is not a line break here.
@@ -258,6 +267,11 @@ SESSION_LIBRARY_ARG = "session_library"
 #: Longest check command (security review). One argument of a Linux command
 #: may be 128 KiB at most; past this bound the check fails closed.
 VERIFY_COMMAND_MAX_CHARS = 100_000
+#: Longest answer of a check. The check is read by the app, never by the
+#: model, so the tool output limit (``max_output_chars``) does not apply: its
+#: features grow with segments x columns and would lose the hashes when cut.
+#: The answer is never cut either; past this bound it fails closed.
+VERIFY_OUTPUT_MAX_CHARS = 2_000_000
 #: Runs the library sent as the first argument (zlib + base64) as ``__main__``
 #: with the remaining arguments. Nothing is written to disk.
 _VERIFY_BOOTSTRAP = (
@@ -620,8 +634,7 @@ class CodeInterpreterSandbox:
             )
             return _failure("COMMAND_TOO_LONG", limit=VERIFY_COMMAND_MAX_CHARS)
         content = self._invoke(session, "executeCommand", {"command": command})
-        result = _parse_result(str(content.get("stdout", "")))
-        return limit_output(result, self.max_output_chars)
+        return _bound_check(_parse_result(str(content.get("stdout", ""))))
 
     def stop_session(self, session: SandboxSession) -> None:
         """Stop the session; raises after the retries (the caller logs it)."""
@@ -874,7 +887,7 @@ class InProcessSandbox:
             timeout=_DOWNLOAD_TIMEOUT_SECONDS,
             check=False,
         )
-        return limit_output(_parse_result(completed.stdout), self.max_output_chars)
+        return _bound_check(_parse_result(completed.stdout))
 
     def stop_session(self, session: SandboxSession) -> None:
         self.stop_session_by_id(session.session_id)

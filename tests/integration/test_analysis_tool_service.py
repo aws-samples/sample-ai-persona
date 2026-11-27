@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import itertools
 import json
+import logging
 import os
 import signal
 from pathlib import Path
@@ -501,6 +502,7 @@ def _detailed(
     clock: Any = None,
     expected_library: str | None = _LIB_SHA,
     expected_parquet: Mapping[str, str] | None = _PARQUET_SHA,
+    present_features: Any = None,
     **limits: int,
 ) -> AnalysisToolService:
     values = {"run_code_max_failures": 5, "run_code_timeout_seconds": 120}
@@ -508,6 +510,8 @@ def _detailed(
     kwargs: dict[str, Any] = {}
     if clock is not None:
         kwargs["clock"] = clock
+    if present_features is not None:
+        kwargs["present_features"] = present_features
     return AnalysisToolService(
         sandbox,
         object(),
@@ -1086,6 +1090,29 @@ class TestRunCodeFailsClosed:
         assert "分析を続けられません" in text and "分析を続けられません" in after
         assert service.emitted_results() == {}
 
+    @pytest.mark.parametrize(
+        ("answer", "reason"),
+        [
+            ({"ok": False, "error": {"code": "OUTPUT_TOO_LARGE"}}, "OUTPUT_TOO_LARGE"),
+            ({"ok": False, "error": {"code": "not a code; s3://b/k"}}, "not_ok"),
+            ({"ok": True, "value": {"result": _EMITTED}}, "no_hashes"),
+        ],
+        ids=["code", "unsafe_code", "no_hashes"],
+    )
+    def test_a_failed_check_logs_why(
+        self, caplog: pytest.LogCaptureFixture, answer: dict[str, Any], reason: str
+    ) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.verified_answer = answer
+        service = _detailed(sandbox, _Gate())
+
+        with caplog.at_level(logging.WARNING):
+            _by_name(service)["run_code"](code="x = 1")
+
+        (line,) = [m for m in caplog.messages if "check failed" in m]
+        assert line.endswith(f"reason={reason}")
+        assert "s3://" not in caplog.text
+
     def test_a_process_the_code_left_is_a_tamper(self) -> None:
         sandbox = _CodeSandbox()
         sandbox.processes = {"process_scan": "ok", "leftover_processes": 2}
@@ -1162,6 +1189,63 @@ class TestRunCodeFailsClosed:
         kept = json.dumps(service.output_of(_tool_call_id(text)))
         assert "0.0123" not in kept and "3.21" not in kept and "5123.5" not in kept
         assert '"size": 40' in kept
+
+
+def _features(n: int) -> list[dict[str, Any]]:
+    return [
+        {"name": f"col_{i}", "kind": "mean", "value": float(i), "baseline": 0.0}
+        for i in range(n)
+    ]
+
+
+class TestRunCodeResultTheAgentSees:
+    """The agent sees the features the Manager presents; the app keeps all."""
+
+    def _emitted(self, segments: int, features: int) -> dict[str, Any]:
+        return {
+            "population": segments * 10,
+            "population_source": "source_1",
+            "segments": [
+                {"segment_key": f"seg_{s}", "size": 10, "features": _features(features)}
+                for s in range(segments)
+            ],
+        }
+
+    def test_the_agent_sees_only_the_presented_features(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.final = {"result": self._emitted(2, 3)}
+        service = _detailed(
+            sandbox,
+            present_features=lambda items: [i for i in items if i["name"] == "col_1"],
+        )
+
+        text = _by_name(service)["run_code"](code="x = 1")
+
+        assert '"col_1"' in text
+        assert '"col_0"' not in text and '"col_2"' not in text
+        (kept,) = service.emitted_results().values()
+        assert [len(s["features"]) for s in kept.segments] == [3, 3]
+
+    def test_every_segment_reaches_the_agent_when_features_are_presented(
+        self,
+    ) -> None:
+        # 20 segments x 400 columns would be far past the 20,000-char limit
+        sandbox = _CodeSandbox()
+        sandbox.final = {"result": self._emitted(20, 400)}
+        service = _detailed(sandbox, present_features=lambda items: list(items)[:6])
+
+        text = _by_name(service)["run_code"](code="x = 1")
+
+        assert "(truncated)" not in text
+        assert all(f'"seg_{s}"' in text for s in range(20))
+
+    def test_without_a_presenter_the_features_go_as_counted(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.final = {"result": self._emitted(1, 3)}
+
+        text = _by_name(_detailed(sandbox))["run_code"](code="x = 1")
+
+        assert all(f'"col_{i}"' in text for i in range(3))
 
 
 class TestLoadPlaybook:

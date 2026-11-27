@@ -28,6 +28,7 @@ from tests.unit.advanced_generation.helpers import (
     _Env,
     _failed,
     _FailingCheckSandbox,
+    _from_emitted,
     _interview,
     _NoLibraryHashSandbox,
     _NoParquetHashSandbox,
@@ -162,7 +163,43 @@ class TestDetailedAnalysisChoice:
         assert "load_playbook" not in env.agents.tools
 
 
+def _data_block(text: str) -> dict:
+    """The JSON a tool returned to the agent, read from inside its data block."""
+    body = text.split(">\n", 1)[1].rsplit("\n</data>", 1)[0]
+    return json.loads(body)
+
+
 class TestRunCodeInTheGeneration:
+    def test_the_analysis_sees_the_features_the_personas_are_written_from(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        seen: dict = {}
+
+        def analysis(tools: dict, holder: dict, source_id: str) -> dict:
+            text = tools["run_code"](code=_EMIT)
+            seen["text"] = text
+            return _from_emitted(holder["service"], _call_id(text))
+
+        env.agents.analysis_fn = analysis
+
+        manager.run(gid)
+
+        assert _current(env, gid).status is GenerationStatus.DONE
+        shown = {
+            s["segment_key"]: s["features"]
+            for s in _data_block(seen["text"])["result"]["segments"]
+        }
+        settled = {
+            s["label"]: s["features"]
+            for s in json.loads(env.agents.data_seen[-1]["segments"])
+        }
+        # the same features, in the same order: the label is written from them
+        assert shown == settled
+        assert all(shown.values())
+
     def test_five_failures_go_on_with_the_fixed_functions(
         self, env: _Env, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -312,8 +349,10 @@ class TestDetailedAnalysisFailsClosed:
 
         manager.run(gid)
 
+        # The check is ours, not the data's: try again, not "change the request"
         assert (
-            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+            _failed(env, gid).error_code
+            == ErrorCode.GENERATION_SANDBOX_UNAVAILABLE.value
         )
         assert "synthesis" not in env.agents.calls
         assert _candidate_count(env) == 0 and not _record_exists(env, gid)
@@ -359,7 +398,8 @@ class TestDetailedAnalysisFailsClosed:
         manager.run(gid)
 
         assert (
-            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+            _failed(env, gid).error_code
+            == ErrorCode.GENERATION_SANDBOX_UNAVAILABLE.value
         )
         assert logs.events("advanced_generation.tamper_detected") == []
         (disabled,) = logs.events("advanced_generation.run_code_disabled")

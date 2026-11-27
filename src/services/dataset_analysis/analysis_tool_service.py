@@ -65,6 +65,7 @@ from ...models.analysis import (
     LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     LIMIT_RUN_CODE_MAX_CHARS,
     CHANGED_PROCESS,
+    check_failure_reason,
     processes_left,
     AnalysisTool,
     AnalysisToolPolicy,
@@ -272,8 +273,12 @@ class AnalysisToolService:
         sleep: Callable[[float], None] = time.sleep,
         poll_seconds: float = RUN_CODE_POLL_SECONDS,
         token: Callable[[], str] = lambda: secrets.token_hex(8),
+        present_features: Optional[
+            Callable[[Sequence[Any]], Sequence[Mapping[str, Any]]]
+        ] = None,
     ) -> None:
         self._sandbox = sandbox
+        self._present_features = present_features
         self._session = session
         self._policy = policy
         self._tables: Dict[str, AnalysisTable] = {
@@ -885,7 +890,10 @@ class AnalysisToolService:
             # the check itself (or its
             # process scan) failed. Fail closed (halt), but this is no tamper.
             self._gate.record(RunCodeOutcome(ok=False, verify_failed=True))
-            logger.warning("analysis tool halted: tool=run_code check failed")
+            logger.warning(
+                "analysis tool halted: tool=run_code check failed reason=%s",
+                check_failure_reason(checked),
+            )
             self.code_runs.append(
                 CodeRun(self._next_call_id(), code, _sha(code), False)
             )
@@ -955,7 +963,7 @@ class AnalysisToolService:
         self.code_runs.append(CodeRun(call_id, code, _sha(code), True, result))
         self._emitted[call_id] = result
         payload = {
-            "result": result.to_dict(),
+            "result": self._shown_result(result),
             "stdout": str(run_value.get("stdout") or ""),
         }
         text = self._result_text(tool_name, call_id, payload)
@@ -968,6 +976,25 @@ class AnalysisToolService:
             elapsed,
         )
         return text
+
+    def _shown_result(self, result: EmittedResult) -> Dict[str, Any]:
+        """The result as the agent sees it: each segment's presented features.
+
+        The recount gives every column of every segment, which grows past the
+        output limit with many segments and columns, and the cut drops the
+        last segments whole. The Manager presents the features the personas
+        are written from, so the agent names each segment from those. The
+        result the app keeps (:meth:`emitted_results`) is never changed.
+        """
+        shown = result.to_dict()
+        if self._present_features is None:
+            return shown
+        present = self._present_features
+        shown["segments"] = [
+            {**s, "features": [dict(f) for f in present(s.get("features") or [])]}
+            for s in shown["segments"]
+        ]
+        return shown
 
     def _no_result(self, code: str, stdout: str, elapsed: float) -> str:
         """A look around (no ``emit_result``) is no failure.

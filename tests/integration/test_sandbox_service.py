@@ -28,6 +28,7 @@ from botocore.stub import ANY, Stubber
 from src.models.errors import ErrorCode
 from src.services.sandbox_service import (
     VERIFY_COMMAND_MAX_CHARS,
+    VERIFY_OUTPUT_MAX_CHARS,
     CodeInterpreterSandbox,
     InProcessSandbox,
     SandboxCapacityError,
@@ -940,11 +941,71 @@ class TestCodeInterpreterCallVerified:
         assert got["ok"] is False
         assert got["error"]["code"] == "COMMAND_TOO_LONG"
 
+    def test_a_check_longer_than_the_tool_output_limit_is_read_whole(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        # The check is read by the app, not the model: the tool output limit
+        # (2,000 here) must not turn its hashes into OUTPUT_TOO_LARGE.
+        features = [{"name": f"col_{i}", "value": 1.0} for i in range(400)]
+        result = {
+            "ok": True,
+            "value": {
+                "hashes": {"library": "a" * 64, "parquet": {"f1": "b" * 64}},
+                "result": {"segments": [{"segment_key": "s1", "features": features}]},
+                "process_scan": "ok",
+                "leftover_processes": 0,
+            },
+        }
+
+        got, _ = self._verified(sandbox, stub, result)
+
+        assert got == result
+
+    def test_a_check_over_its_own_bound_fails_closed(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        result = {
+            "ok": True,
+            "value": {"hashes": {}, "n": [0] * VERIFY_OUTPUT_MAX_CHARS},
+        }
+
+        got, _ = self._verified(sandbox, stub, result)
+
+        assert got["ok"] is False
+        assert got["error"]["code"] == "OUTPUT_TOO_LARGE"
+
     def test_kind(self, sandbox: CodeInterpreterSandbox) -> None:
         assert sandbox.kind == "code_interpreter"
 
 
 class TestInProcessCallVerified:
+    def test_a_check_longer_than_the_tool_output_limit_is_read_whole(
+        self, tmp_path: Path
+    ) -> None:
+        # A tool output limit shorter than the check's answer
+        small = InProcessSandbox(
+            library_path=str(_LIBRARY),
+            root_dir=str(tmp_path),
+            read_object={"sources/u/f1": _CSV}.__getitem__,
+            max_output_chars=50,
+        )
+        session = small.start_session("gen1", lifetime_seconds=60)
+        small.put_files(session, [{"source_file_id": "f1", "s3_key": "sources/u/f1"}])
+        command_id = small.start_command(
+            session,
+            "prepare",
+            {"source_id": "f1", "metadata": {"encoding": "utf-8", "delimiter": ","}},
+        )
+        _poll_until_done(small, session, command_id)
+
+        result = small.call_verified(
+            session, "verify_hashes", {"sources": {"source_1": "f1"}}
+        )
+
+        assert len(json.dumps(result)) > 50
+        assert result["ok"] is True and "truncated" not in result
+        assert isinstance(result["value"]["hashes"]["parquet"]["f1"], str)
+
     def test_the_session_holds_a_copy_of_the_library(
         self, local: InProcessSandbox
     ) -> None:

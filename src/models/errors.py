@@ -276,7 +276,8 @@ class ErrorCode(StrEnum):
     )
     # The whole generation took more than 60 minutes.
     GENERATION_TIMEOUT = ("generation_timeout", ErrorKind.TRANSIENT)
-    # Code Interpreter or the model failed after retries.
+    # Code Interpreter or the model failed after retries, or the isolated check
+    # after AI-written code could not be read.
     GENERATION_SANDBOX_UNAVAILABLE = (
         "generation_sandbox_unavailable",
         ErrorKind.TRANSIENT,

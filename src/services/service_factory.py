@@ -5,7 +5,7 @@ Factory class that manages service instances across the application
 
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Callable, Mapping, Optional, Sequence, TYPE_CHECKING
 from threading import Lock
 
 from .ai_service import AIService
@@ -576,6 +576,9 @@ class ServiceFactory:
         gate: Optional["RunCodeGate"] = None,
         expected_library_sha256: Optional[str] = None,
         expected_parquet_sha256: Optional[Mapping[str, str]] = None,
+        present_features: Optional[
+            Callable[[Sequence[Any]], Sequence[Mapping[str, Any]]]
+        ] = None,
     ) -> "AnalysisToolService":
         """Build the tools of one generation's analysis (never cached).
 
@@ -584,6 +587,8 @@ class ServiceFactory:
         ``tables`` are the generation's tables (``source_1``...), ``gate``
         decides on ``run_code`` (the Manager's budget) and the expected hashes
         are the trust anchor of the check after each ``run_code``.
+        ``present_features`` picks the features of a ``run_code`` segment the
+        agent is shown (the Manager's choice; the kept result stays whole).
         """
         from .dataset_analysis.analysis_tool_service import AnalysisToolService
 
@@ -598,6 +603,7 @@ class ServiceFactory:
             gate=gate,
             expected_library_sha256=expected_library_sha256,
             expected_parquet_sha256=expected_parquet_sha256,
+            present_features=present_features,
         )
 
     def get_persona_binding_store(self) -> "PersonaBindingStore":
