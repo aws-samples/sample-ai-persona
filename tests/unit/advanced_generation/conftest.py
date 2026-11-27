@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,32 @@ from tests.advanced_helpers import (  # noqa: E402
     create_source_files_table,
 )
 from tests.unit.advanced_generation.helpers import _Env  # noqa: E402
+
+
+class _SerializedClient:
+    """A boto3 client whose calls run one at a time.
+
+    The generation runs on its own thread while the test thread writes control
+    requests and reads the record. moto keeps tables in plain dicts and is not
+    thread-safe, so two calls at once can fail with "dictionary changed size
+    during iteration". Real DynamoDB and S3 take concurrent calls; only the
+    fake needs the lock.
+    """
+
+    def __init__(self, client: Any, lock: threading.RLock) -> None:
+        self._client = client
+        self._lock = lock
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._client, name)
+        if not callable(attribute):
+            return attribute
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            with self._lock:
+                return attribute(*args, **kwargs)
+
+        return call
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +66,12 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         create_candidates_table(dynamo)
         s3_client = boto3.client("s3", region_name=REGION)
         s3_client.create_bucket(Bucket=BUCKET)
-        yield _Env(dynamo, s3_client, tmp_path)
+        lock = threading.RLock()
+        yield _Env(
+            _SerializedClient(dynamo, lock),
+            _SerializedClient(s3_client, lock),
+            tmp_path,
+        )
 
 
 @pytest.fixture
