@@ -29,6 +29,7 @@ from ..shared.advanced_generation_log import log_advanced_event
 from . import documents, prompts
 from .analysis_policy import AnalysisPolicy
 from .analysis_verifier import AnalysisVerifier, VerificationResult
+from .call_results import call_result, table_summary
 from .errors import Cancelled, StopRun, fail
 from .results import build_analysis_run, build_candidates, build_record
 from .run_context import ENDED_REMOVES, RunContext, safe_context
@@ -38,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 #: Room kept under the 2MB of the result parts for the item keys.
 _PARTS_SLACK_BYTES = 16 * 1024
+#: The share of a history's rows one ID may hold before the record points it
+#: out (a value such as "guest" may stand for many people).
+_ONE_ID_ROWS_SHARE = 0.2
 
 
 class FinishingStage:
@@ -136,6 +140,11 @@ class FinishingStage:
             now=now,
             document_mode=state.document_mode,
             ai_code=ai_code,
+            call_results=self._call_results(state),
+            table_summaries=[
+                table_summary(t.source.display_name, t.report, t.profile)
+                for t in state.tables
+            ],
         )
         candidates = build_candidates(
             generation=generation,
@@ -243,6 +252,81 @@ class FinishingStage:
         return f"結合した列: {columns}" + (f"（{rates}）" if rates else "")
 
     @staticmethod
+    def _call_results(state: Run) -> dict[str, dict[str, Any]]:
+        """What each tool call found, for the record (counted aggregates only)."""
+        emitted = state.tools.emitted_results() if state.budget is not None else {}
+        history = {r.alias: r.person_id for r in state.reading if r.kind == "history"}
+        skip = {c for r in state.reading for c in r.skip}
+        out: dict[str, dict[str, Any]] = {}
+        for call in state.tools.calls:
+            found = call_result(
+                call,
+                output=state.tools.output_of(call.tool_call_id),
+                emitted=emitted.get(call.tool_call_id),
+                segments=state.segments,
+                history_tables=history,
+                skip=skip,
+            )
+            if found is not None:
+                out[call.tool_call_id] = found
+        return out
+
+    @staticmethod
+    def _adopted_people_results(state: Run) -> list[tuple[Any, EmittedResult]]:
+        """The kept segments resting on the people of a history (``people:``)."""
+        if state.budget is None:
+            return []
+        emitted = state.tools.emitted_results()
+        out = []
+        for segment in state.segments:
+            result = emitted.get(segment.tool_call_id or "")
+            if result is not None and result.from_history:
+                out.append((segment, result))
+        return out
+
+    @staticmethod
+    def _all_rest_on_people(state: Run) -> bool:
+        adopted = {id(s) for s, _ in FinishingStage._adopted_people_results(state)}
+        return bool(state.segments) and all(id(s) in adopted for s in state.segments)
+
+    @staticmethod
+    def _people_from_history(state: Run) -> Optional[dict[str, Any]]:
+        """How the people of a history were counted, for the record.
+
+        The rows without an ID are left out of the population and shown as a
+        count (never refused); one ID holding a large share of the rows is
+        pointed out, since a value such as "guest" may stand for no one.
+        """
+        adopted = FinishingStage._adopted_people_results(state)
+        if not adopted:
+            return None
+        result = adopted[0][1]
+        alias = result.population_source.removeprefix("people:")
+        table = next((t for t in state.tables if t.alias == alias), None)
+        reading = next((r for r in state.reading if r.alias == alias), None)
+        source_rows = int(result.source_rows or 0)
+        without = int(result.rows_without_id or 0)
+        with_id = source_rows - without
+        largest = int(result.largest_id_rows or 0)
+        return {
+            "table": table.source.display_name if table is not None else "CSV",
+            # The check accepts people: only with a confirmed person column
+            "id_column": (
+                reading.person_id
+                if reading is not None and reading.person_id
+                else "人を特定する列"
+            ),
+            "people": int(result.population),
+            "source_rows": source_rows,
+            "rows_without_id": without,
+            "one_id_holds_many_rows": (
+                result.population > 1
+                and with_id > 0
+                and largest / with_id >= _ONE_ID_ROWS_SHARE
+            ),
+        }
+
+    @staticmethod
     def _extra_run_params(state: Run) -> dict[str, Any]:
         """``detailed_analysis`` and ``join`` of AnalysisRun.params."""
         params: dict[str, Any] = {}
@@ -261,7 +345,12 @@ class FinishingStage:
                 "failures": 0,
                 "reason": state.detailed_fallback,
             }
-        if AnalysisPolicy.readings_count_rows(state.reading):
+        people = FinishingStage._people_from_history(state)
+        if people is not None:
+            params["people_from_history"] = people
+        if AnalysisPolicy.readings_count_rows(state.reading) and (
+            people is None or not FinishingStage._all_rest_on_people(state)
+        ):
             # The counts are of rows (orders, events), not people
             params["rows_are_not_people"] = True
         if state.joins and budget is not None:

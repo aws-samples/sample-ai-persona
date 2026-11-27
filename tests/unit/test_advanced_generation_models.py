@@ -837,6 +837,29 @@ class TestAnalysisRecordU2:
         assert again.source_file_ids == ("sf-1",)
         assert again.source_display_names == ("sales.csv (2)",)
 
+    def test_keeps_the_tables_read_and_each_steps_result(self):
+        tables = [{"name": "pos.csv", "rows_read": 10, "rows_excluded": 0}]
+        calls = [
+            {
+                "tool_call_id": "tc-1",
+                "tool": "cluster_segments",
+                "ok": True,
+                "result": {"population": 10, "unit": "people", "groups": []},
+            }
+        ]
+        record = self._record(table_summaries=tables, tool_calls=calls)
+
+        again = AnalysisRecord.from_dict(record.to_dict())
+
+        assert again.table_summaries == tuple(tables)
+        assert again.tool_calls[0]["result"]["population"] == 10
+
+    def test_an_older_record_has_no_table_summaries(self):
+        data = self._record().to_dict()
+
+        assert "table_summaries" not in data
+        assert AnalysisRecord.from_dict(data).table_summaries == ()
+
     def test_an_u1_record_has_neither(self):
         data = self._record().to_dict()
 
@@ -1264,8 +1287,39 @@ class TestEmittedResult:
         assert again.joined_columns == ("customer_id", "source_2_amount_sum")
         assert again.population_source == "join:source_1+source_2"
 
+    def test_the_people_of_a_history_keep_their_row_counts(self):
+        result = self._result(
+            population_source="people:source_1",
+            source_rows=1200,
+            rows_without_id=90,
+            largest_id_rows=14,
+        )
+
+        again = EmittedResult.from_dict(result.to_dict())
+
+        assert again == result
+        assert again.from_history is True
+        assert self._result().from_history is False
+        # the row counts are not what a segment or an evidence rests on
+        assert set(again.recounted()) == {"population", "population_source", "segments"}
+
+    def test_row_counts_are_left_out_when_absent(self):
+        data = self._result().to_dict()
+
+        assert not {"source_rows", "rows_without_id", "largest_id_rows"} & set(data)
+
     @pytest.mark.parametrize(
-        "source", ["", "dataset", "join:source_1", "join:source_1+x", "source_4"]
+        "source",
+        [
+            "",
+            "dataset",
+            "join:source_1",
+            "join:source_1+x",
+            "source_4",
+            "people:",
+            "people:source_4",
+            "people:source_1+source_2",
+        ],
     )
     def test_an_unknown_population_source_is_refused(self, source):
         with pytest.raises(ValueError):
@@ -1274,6 +1328,8 @@ class TestEmittedResult:
     def test_negative_counts_are_refused(self):
         with pytest.raises(ValueError):
             self._result(population=-1)
+        with pytest.raises(ValueError):
+            self._result(population_source="people:source_1", rows_without_id=-1)
         with pytest.raises(ValueError):
             self._result(segments=({"segment_key": "a", "size": -1},))
 

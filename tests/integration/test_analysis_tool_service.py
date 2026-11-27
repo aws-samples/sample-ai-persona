@@ -587,6 +587,16 @@ class TestSourceArgument:
 
         assert sandbox.calls == [("profile_dataset", {"source_id": "f1"})]
 
+    def test_the_call_names_the_table_it_read(self) -> None:
+        sandbox = _SpySandbox()
+        service = _detailed(sandbox)
+        tools = _by_name(service)
+
+        tools["profile_dataset"](source="source_2")
+        tools["load_playbook"](name="rfm")
+
+        assert [c.table for c in service.calls] == ["source_2", None]
+
 
 class TestRunCode:
     def test_runs_in_a_fresh_folder_and_returns_the_recounted_result(self) -> None:
@@ -614,6 +624,79 @@ class TestRunCode:
         assert f'<data source="run_code" tool_call_id="{call_id}">' in first
         assert gate.outcomes[0].ok is True
         assert service.code_runs[0].ok and service.code_runs[0].sha256
+
+    def test_the_check_gets_the_person_column_of_each_history_table(self) -> None:
+        sandbox = _CodeSandbox()
+        tables = (
+            AnalysisTable("source_1", "f1", ("id", "age")),
+            AnalysisTable(
+                "source_2",
+                "f2",
+                ("id", "amount", "store"),
+                history_person_id="id",
+                skip=("id", "store"),
+            ),
+        )
+
+        _by_name(_detailed(sandbox, tables=tables))["run_code"](code="x = 1")
+
+        _, verify_args = sandbox.verified[0]
+        assert verify_args["people"] == {
+            "source_2": {"person_id": "id", "skip": ["id", "store"]}
+        }
+
+    def test_a_refused_result_keeps_the_counts_of_the_check_on_the_call(
+        self,
+    ) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.final = {
+            "result": None,
+            "error": "DUPLICATE_IDS",
+            "error_context": {"side": "result", "rows": 31, "distinct_ids": 30},
+        }
+        service = _detailed(sandbox)
+
+        _by_name(service)["run_code"](code="x = 1")
+
+        (call,) = service.calls
+        assert call.error_code == "DUPLICATE_IDS"
+        assert call.check_counts == {"side": "result", "rows": 31, "distinct_ids": 30}
+
+    def test_a_code_error_keeps_no_counts(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.final = {"result": None, "error": "ID_MISMATCH"}
+        service = _detailed(sandbox)
+
+        _by_name(service)["run_code"](code="x = 1")
+
+        assert service.calls[0].check_counts is None
+
+    def test_no_history_table_sends_no_people(self) -> None:
+        sandbox = _CodeSandbox()
+
+        _by_name(_detailed(sandbox))["run_code"](code="x = 1")
+
+        assert "people" not in sandbox.verified[0][1]
+
+    def test_the_people_of_a_history_are_an_accepted_result(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.final = {
+            "result": {
+                **_EMITTED,
+                "population_source": "people:source_2",
+                "source_rows": 1200,
+                "rows_without_id": 90,
+                "largest_id_rows": 14,
+            }
+        }
+        gate = _Gate()
+        service = _detailed(sandbox, gate)
+
+        call_id = _tool_call_id(_by_name(service)["run_code"](code="x = 1"))
+
+        result = service.emitted_results()[call_id]
+        assert result.from_history and result.rows_without_id == 90
+        assert gate.outcomes[-1].ok is True
 
     def test_a_changed_parquet_halts_every_tool(self) -> None:
         sandbox = _CodeSandbox()
@@ -832,7 +915,7 @@ class TestRunCode:
                     },
                 },
                 '"rows": 48',
-                "one row per person",
+                "people:source_n",
             ),
             (
                 {
@@ -866,7 +949,7 @@ class TestRunCode:
                     "error_context": {"rows_without_id": 1},
                 },
                 '"rows_without_id": 1',
-                "ID column",
+                "people:source_n",
             ),
         ],
     )

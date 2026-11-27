@@ -967,6 +967,10 @@ def cluster_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         }
         for index, label in enumerate(order)
     ]
+    _mark_twins(
+        {str(c["index"]): c["features"] for c in clusters},
+        _sample_twins(sample, columns),
+    )
     return {
         "k": k,
         "seed": seed,
@@ -1488,8 +1492,11 @@ def verify_quotes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 # the data. Nothing the code printed or wrote as a number is used.
 
 _SOURCE_ALIAS = re.compile(r"^source_[1-3]$")
+#: ``source_n`` (one row per person), ``join:<axis>+<table>`` or
+#: ``people:source_n`` (the distinct people of a history table, by the person
+#: column the user confirmed). Kept in step with ``src/models/analysis.py``.
 _POPULATION_SOURCE = re.compile(
-    r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$"
+    r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$|^people:(source_[1-3])$"
 )
 _WORK_DIR = re.compile(r"^ai_work/[A-Za-z0-9_-]{1,64}$")
 _PGID_FILE = re.compile(r"^ai_work/[A-Za-z0-9_-]{1,64}\.pgid$")
@@ -1753,7 +1760,9 @@ def emit_result(
     if previous:
         raise RuntimeError("emit_result is called once per run")
     if not _POPULATION_SOURCE.match(str(population_source)):
-        raise ValueError("population_source is source_n or join:source_n+source_m")
+        raise ValueError(
+            "population_source is source_n, join:source_n+source_m or people:source_n"
+        )
     # Those of the axis table are dropped when the features are counted.
     if metrics is None:
         metrics = _numeric_columns(frame, (id_column, assign_column))
@@ -2166,6 +2175,8 @@ def _profile_views(
     numeric = numeric[:_PROFILE_MAX_COLUMNS]
     categories = categories[:_PROFILE_MAX_COLUMNS]
     join = "FROM d JOIN a ON d.__pid = a.person_id"
+    # (feature name, its per-person value, whether it is of the assignment)
+    figures: List[Tuple[str, str, bool]] = []
 
     for chunk in _chunks(numeric, _PROFILE_CHUNK):
         cols = [_quote_ident(n) for n in chunk]
@@ -2186,6 +2197,7 @@ def _profile_views(
             mean_all, spread = overall[2 * index], overall[2 * index + 1]
             if mean_all is None:
                 continue
+            figures.append((_short(name), f"CAST(d.{cols[index]} AS DOUBLE)", False))
             for record in per_segment:
                 mean = record[1 + index]
                 if mean is not None:
@@ -2265,6 +2277,7 @@ def _profile_views(
         if overall_row[0] is None:
             continue
         derived += 1
+        figures.append((_short(name), f"CAST(a.{col} AS DOUBLE)", True))
         for key, mean in rows:
             if mean is not None and str(key) in out:
                 out[str(key)].append(
@@ -2276,15 +2289,240 @@ def _profile_views(
                         "spread": round(float(overall_row[1] or 0.0), 4),
                     }
                 )
+    _mark_twins(out, _counted_twins(con, out, figures))
     return out
 
 
+#: Two numbers whose per-person values correlate at least this much (either
+#: way) say the same thing: a column copied under another name, or a metric
+#: the code computed that the library counts too. Set high, so that two
+#: figures that merely go together (visits and spending) stay apart.
+_TWIN_CORRELATION = 0.995
+#: Pairs whose correlation is counted, those alike across segments first.
+_TWIN_MAX_PAIRS = 300
+#: Pairs whose differences from the whole are less alike across the segments
+#: (cosine) cannot be twins and are not counted.
+_TWIN_ALIKE = 0.9
+
+
+def _deviations(
+    out: Dict[str, List[Dict[str, Any]]], keys: List[str]
+) -> Dict[str, List[float]]:
+    """Each number's difference from the whole in each segment, in spreads."""
+    vectors: Dict[str, List[float]] = {}
+    for position, key in enumerate(keys):
+        for f in out[key]:
+            if f["kind"] == "share" or not f.get("spread"):
+                continue
+            vector = vectors.setdefault(f["name"], [0.0] * len(keys))
+            vector[position] = (f["value"] - f["baseline"]) / f["spread"]
+    return vectors
+
+
+def _alike(a: List[float], b: List[float]) -> float:
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return abs(sum(x * y for x, y in zip(a, b))) / norm if norm else 0.0
+
+
+def _twin_groups(pairs: List[Tuple[str, str]], order: List[str]) -> Dict[str, str]:
+    """Name -> the first name of its group, for groups of two or more."""
+    parent = {name: name for name in order}
+
+    def root(name: str) -> str:
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    for a, b in pairs:
+        ra, rb = root(a), root(b)
+        if ra != rb:
+            first, second = sorted((ra, rb), key=order.index)
+            parent[second] = first
+    grouped: Dict[str, List[str]] = {}
+    for name in order:
+        grouped.setdefault(root(name), []).append(name)
+    return {
+        name: group
+        for group, names in grouped.items()
+        if len(names) > 1
+        for name in names
+    }
+
+
+def _mark_twins(out: Dict[str, List[Dict[str, Any]]], twins: Dict[str, str]) -> None:
+    """Put ``twin`` (the group's first name) on each feature of a group; the
+    app shows one feature of a group."""
+    for features in out.values():
+        for f in features:
+            if f["kind"] != "share" and f["name"] in twins:
+                f["twin"] = twins[f["name"]]
+
+
+def _counted_twins(
+    con: Any,
+    out: Dict[str, List[Dict[str, Any]]],
+    figures: List[Tuple[str, str, bool]],
+) -> Dict[str, str]:
+    """The twins among the numbers of :func:`_profile_views`.
+
+    The correlation is counted over the rows of ``d`` (one per person but in
+    :func:`profile_segments`), or over the people of ``a`` for a metric of the
+    code. The twins only tidy the features, so a failure gives none (but an
+    interruption or a lack of memory goes on up).
+    """
+    vectors = _deviations(out, sorted(out))
+    known = [f for f in figures if f[0] in vectors]
+    order = [f[0] for f in known]
+    pairs: List[Tuple[float, Tuple[str, str, bool], Tuple[str, str, bool]]] = []
+    for i, first in enumerate(known):
+        for second in known[i + 1 :]:
+            score = _alike(vectors[first[0]], vectors[second[0]])
+            if score >= _TWIN_ALIKE:
+                pairs.append((score, first, second))
+    pairs.sort(key=lambda p: -p[0])
+    pairs = pairs[:_TWIN_MAX_PAIRS]
+    same: List[Tuple[str, str]] = []
+    try:
+        for joined in (False, True):
+            chosen = [p for p in pairs if (p[1][2] or p[2][2]) == joined]
+            source = "FROM d JOIN a ON d.__pid = a.person_id" if joined else "FROM d"
+            for chunk in _chunks(chosen, _PROFILE_CHUNK):
+                row = con.execute(
+                    "SELECT "
+                    + ", ".join(f"corr({p[1][1]}, {p[2][1]})" for p in chunk)
+                    + f" {source}"
+                ).fetchone()
+                same += [
+                    (p[1][0], p[2][0])
+                    for p, r in zip(chunk, row)
+                    if r is not None and abs(float(r)) >= _TWIN_CORRELATION
+                ]
+    except Exception as e:  # noqa: BLE001 - twins only tidy the features
+        if _is_out_of_memory(e) or "Interrupt" in type(e).__name__:
+            raise
+        return {}
+    return _twin_groups(same, order)
+
+
+def _sample_twins(
+    sample: Dict[str, List[Any]], columns: List[Tuple[str, bool]]
+) -> Dict[str, str]:
+    """The twins among the numeric columns of a clustering, on its sample."""
+    import numpy as np
+
+    names = [name for name, numeric in columns if numeric]
+    arrays = {
+        n: np.array([np.nan if v is None else float(v) for v in sample[n]])
+        for n in names
+    }
+    pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1 :]]
+    same: List[Tuple[str, str]] = []
+    for a, b in pairs[:_TWIN_MAX_PAIRS]:
+        both = np.isfinite(arrays[a]) & np.isfinite(arrays[b])
+        x, y = arrays[a][both], arrays[b][both]
+        if len(x) < 3 or not x.std() or not y.std():
+            continue
+        if abs(float(np.corrcoef(x, y)[0, 1])) >= _TWIN_CORRELATION:
+            same.append((a, b))
+    return _twin_groups(same, names)
+
+
+def _confirmed_people(value: Any) -> Dict[str, Tuple[str, frozenset]]:
+    """The history tables the app confirmed a person column for.
+
+    ``value`` is ``{alias: {person_id, skip}}`` from the app (what the user
+    confirmed); anything else is left out, so ``people:`` is refused for it.
+    """
+    out: Dict[str, Tuple[str, frozenset]] = {}
+    if not isinstance(value, dict):
+        return out
+    for alias, item in value.items():
+        if not _SOURCE_ALIAS.match(str(alias)) or not isinstance(item, dict):
+            continue
+        person = item.get("person_id")
+        if not isinstance(person, str) or not person:
+            continue
+        skip = item.get("skip")
+        names = (
+            frozenset(str(c) for c in skip) if isinstance(skip, list) else frozenset()
+        )
+        out[str(alias)] = (person, names)
+    return out
+
+
+def _blank_as_null(expression: str) -> str:
+    """An ID as text, with an empty or blank value read as no ID."""
+    text = f"CAST({expression} AS VARCHAR)"
+    return f"CASE WHEN trim({text}) = '' THEN NULL ELSE {text} END"
+
+
+def _people_features(
+    con: Any,
+    id_column: str,
+    skip: frozenset,
+    metrics: Optional[List[str]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Features of each segment from the history ``h``, one figure per person.
+
+    Each person's rows are first summed up as :func:`person_profile` does
+    (rows, days since the last date, the sum and the mean of numbers), so a
+    person with many rows counts once. Only the library's own sums are used.
+    """
+    schema = [
+        (str(row[0]), str(row[1]))
+        for row in con.execute("DESCRIBE SELECT * FROM h").fetchall()
+    ]
+    left_out = set(skip) | {id_column, "file_row_number"}
+    stamp = next(
+        (
+            n
+            for n, t in schema
+            if n not in left_out and t.startswith(("DATE", "TIMESTAMP"))
+        ),
+        None,
+    )
+    numbers = [
+        n
+        for n, t in schema
+        if n not in left_out and _is_numeric(t) and not _KEY_NAME.search(n)
+    ][:_PROFILE_NUMERIC]
+    parts = ['count(*) AS "回数（行）"']
+    if stamp is not None:
+        day = f"CAST({_quote_ident(stamp)} AS DATE)"
+        parts += [
+            f"date_diff('day', max({day}), (SELECT max({day}) FROM h))"
+            ' AS "最後からの日数"',
+            f"date_diff('day', min({day}), max({day})) AS \"期間（日）\"",
+            f'count(DISTINCT {day}) AS "活動日数"',
+        ]
+    for name in numbers:
+        value = f"CAST({_quote_ident(name)} AS DOUBLE)"
+        parts += [
+            f"sum({value}) AS {_quote_ident(name + 'の合計')}",
+            f"avg({value}) AS {_quote_ident(name + 'の平均')}",
+        ]
+    pid = _blank_as_null(_quote_ident(id_column))
+    con.execute(
+        f"CREATE VIEW d AS SELECT {pid} AS __pid, {', '.join(parts)} FROM h "
+        f"WHERE {pid} IS NOT NULL GROUP BY 1"
+    )
+    profile_schema = con.execute("DESCRIBE SELECT * FROM d").fetchall()
+    return _profile_views(con, profile_schema, {"__pid"}, metrics)
+
+
 def _recount(
-    workdir: str, work: str, sources: Dict[str, str]
+    workdir: str,
+    work: str,
+    sources: Dict[str, str],
+    people: Optional[Dict[str, Tuple[str, frozenset]]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, Any]]]:
     """Count sizes and the population again from the assignment and the data.
 
-    Returns ``(result, error, error_context)``; the context holds counts only.
+    ``people`` names the history tables whose person column the user
+    confirmed (:func:`_confirmed_people`); only these may be the population
+    as ``people:source_n``. Returns ``(result, error, error_context)``; the
+    context holds counts only.
     """
     count_path = os.path.join(work, _EMIT_COUNT_FILE)
     assignment = os.path.join(work, _ASSIGNMENT_FILE)
@@ -2303,21 +2541,60 @@ def _recount(
     match = _POPULATION_SOURCE.match(population_source)
     if not isinstance(meta, dict) or not match:
         return None, "RESULT_INVALID", None
-    axis = match.group(1) or population_source[len("join:") :].split("+")[0]
+    history_axis = match.group(3)
+    axis = (
+        match.group(1)
+        or history_axis
+        or population_source[len("join:") :].split("+")[0]
+    )
     if axis not in sources:
         return None, "RESULT_INVALID", None
     id_column = str(meta.get("id_column", ""))
+    history_skip: frozenset = frozenset()
+    if history_axis is not None:
+        confirmed = (people or {}).get(history_axis)
+        if confirmed is None:
+            return None, "PEOPLE_SOURCE_INVALID", None
+        # The code writes meta.json itself: only the user's person column counts
+        if id_column != confirmed[0]:
+            return None, "ID_COLUMN_MISMATCH", None
+        history_skip = confirmed[1]
     source = _parquet_path(workdir, sources[axis])
     con = _connect(workdir)
+    history_counts: Dict[str, int] = {}
     try:
         con.execute(
             f"CREATE VIEW a AS SELECT * FROM read_parquet({_sql_literal(assignment)})"
         )
-        con.execute(
-            "CREATE VIEW s AS SELECT CAST("
-            f"{_quote_ident(id_column)} AS VARCHAR) AS person_id "
-            f"FROM read_parquet({_sql_literal(source)})"
-        )
+        if history_axis is None:
+            con.execute(
+                "CREATE VIEW s AS SELECT CAST("
+                f"{_quote_ident(id_column)} AS VARCHAR) AS person_id "
+                f"FROM read_parquet({_sql_literal(source)})"
+            )
+        else:
+            con.execute(
+                f"CREATE VIEW h AS SELECT * FROM read_parquet({_sql_literal(source)})"
+            )
+            con.execute(
+                f"CREATE VIEW hid AS SELECT {_blank_as_null(_quote_ident(id_column))}"
+                " AS person_id FROM h"
+            )
+            # One row per person: the rows without an ID are counted, not refused
+            con.execute(
+                "CREATE VIEW s AS SELECT DISTINCT person_id FROM hid "
+                "WHERE person_id IS NOT NULL"
+            )
+            rows, without, largest = con.execute(
+                "SELECT count(*), count(*) FILTER (WHERE person_id IS NULL), "
+                "(SELECT max(n) FROM (SELECT count(*) AS n FROM hid "
+                "WHERE person_id IS NOT NULL GROUP BY person_id)) FROM hid"
+            ).fetchone()
+            history_counts = {
+                "source_rows": int(rows),
+                "rows_without_id": int(without),
+                "largest_id_rows": int(largest or 0),
+            }
         n_a, d_a, null_a, n_s, d_s, null_s = con.execute(
             "SELECT (SELECT count(*) FROM a), (SELECT count(DISTINCT person_id) "
             "FROM a), (SELECT count(*) FROM a WHERE person_id IS NULL OR segment "
@@ -2364,15 +2641,14 @@ def _recount(
             "SELECT segment, count(*) FROM a GROUP BY segment ORDER BY 2 DESC, 1"
         ).fetchall()
         metric_names = meta.get("metrics")
+        metrics = (
+            [str(m) for m in metric_names] if isinstance(metric_names, list) else []
+        )
         try:
-            profile = _profile_features(
-                con,
-                source,
-                id_column,
-                [str(m) for m in metric_names]
-                if isinstance(metric_names, list)
-                else [],
-            )
+            if history_axis is None:
+                profile = _profile_features(con, source, id_column, metrics)
+            else:
+                profile = _people_features(con, id_column, history_skip, metrics)
         except Exception as e:  # noqa: BLE001 - the features are a help, not a result
             if _is_out_of_memory(e):
                 raise
@@ -2394,6 +2670,7 @@ def _recount(
             }
             for key, size in sizes
         ],
+        **history_counts,
     }
     statistics = meta.get("statistics")
     if isinstance(statistics, list) and statistics:
@@ -2416,14 +2693,21 @@ def finalize_ai_result(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     Run from the source the app sent with the command (``python -I -c``).
     Stops the code's process group and anything else it left (see
     :func:`_stop_leftovers`), hashes the prepared Parquets and
-    ``session_library``, then recounts the assignment. Returns ``{hashes,
-    result, error, error_context, process_scan[, leftover_processes]}``.
+    ``session_library``, then recounts the assignment. ``people`` (optional)
+    is ``{alias: {person_id, skip}}`` of the history tables the user confirmed
+    a person column for. Returns ``{hashes, result, error, error_context,
+    process_scan[, leftover_processes]}``.
     """
     work_rel = _checked_relative(args.get("work_dir"), _WORK_DIR, "work_dir")
     sources = _checked_sources(args.get("sources"))
     processes = _stop_leftovers(workdir, [args.get("pgid_file")])
     hashes = _hashes(workdir, sources, args.get("session_library"))
-    result, error, context = _recount(workdir, _inside(workdir, work_rel), sources)
+    result, error, context = _recount(
+        workdir,
+        _inside(workdir, work_rel),
+        sources,
+        _confirmed_people(args.get("people")),
+    )
     return {
         "hashes": hashes,
         "result": result,
@@ -2680,6 +2964,7 @@ def rfm(
     """
     import pandas as pd
 
+    frame = _named_rows(frame, id_column)
     dates = pd.to_datetime(frame[date_column], errors="coerce")
     data = pd.DataFrame(
         {
@@ -2718,6 +3003,18 @@ _PROFILE_DISTINCT = 20
 _HOUR_BINS = ((0, 6), (6, 12), (12, 18), (18, 24))
 
 
+def _named_rows(frame: Any, id_column: str) -> Any:
+    """The rows whose ID names someone.
+
+    A missing, empty or blank ID names no one, as the check of
+    ``people:source_n`` reads it, so the people of a result match its count.
+    """
+    if id_column not in frame.columns:
+        raise KeyError(f"no column {id_column}")
+    ids = frame[id_column]
+    return frame[ids.notna() & (ids.astype(str).str.strip() != "")]
+
+
 def person_profile(
     frame: Any,
     id_column: str,
@@ -2751,9 +3048,7 @@ def person_profile(
     """
     import pandas as pd
 
-    if id_column not in frame.columns:
-        raise KeyError(f"no column {id_column}")
-    data = frame[frame[id_column].notna()]
+    data = _named_rows(frame, id_column)
     ids = data[id_column]
     by = data.groupby(id_column, sort=True)
     out = pd.DataFrame({"回数（行）": by.size()})

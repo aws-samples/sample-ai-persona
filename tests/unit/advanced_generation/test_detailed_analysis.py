@@ -19,6 +19,7 @@ from tests.unit.advanced_generation.helpers import (
     _EMIT,
     _ESCAPE_THEN_EMIT,
     ADMIN,
+    _call_id,
     _candidate_count,
     _cluster_fallback,
     _code_analysis,
@@ -31,6 +32,7 @@ from tests.unit.advanced_generation.helpers import (
     _NoLibraryHashSandbox,
     _NoParquetHashSandbox,
     _progress,
+    _purchases_csv,
     _record_exists,
     _ScanSandbox,
     _start,
@@ -398,3 +400,186 @@ class TestDetailedAnalysisFailsClosed:
                     os.kill(pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
+
+
+_EMIT_PEOPLE = (
+    'p = person_profile(read_table("source_1"), "id")\n'
+    'p["seg"] = ["low" if v < 340 else "high" for v in p["amountの合計"]]\n'
+    'emit_result(p, "seg", "people:source_1", id_column="id")\n'
+)
+
+
+def _history_csv(people: int = 40, *, without_id: int = 2, extra: str = "") -> bytes:
+    """Only a history (two rows per person), with rows that name no one."""
+    data = _purchases_csv(people).decode() + ",999\n" * without_id + extra
+    return data.encode()
+
+
+def _rows_cluster(tools: dict, holder: dict, source_id: str) -> dict:
+    """The fixed cluster on the history's rows (no run_code result)."""
+    text = tools["cluster_segments"](columns=["amount"], source="source_1")
+    call_id = _call_id(text)
+    output = holder["service"].output_of(call_id)
+    segments, evidence = [], []
+    for cluster in output["clusters"]:
+        i = cluster["index"]
+        segments.append(
+            {
+                "id": f"seg-{i}",
+                "label": f"層 {i}",
+                "definition": {
+                    "kind": "cluster",
+                    "source": "source_1",
+                    "spec": {
+                        "tool_call_id": call_id,
+                        "cluster_index": i,
+                    },
+                },
+                "size": cluster["size"],
+                "share": cluster["share"],
+                "features": [],
+                "evidence_ids": [f"ev-{i}"],
+            }
+        )
+        evidence.append(
+            {
+                "id": f"ev-{i}",
+                "source_id": "x",
+                "location": call_id,
+                "kind": "attribute",
+                "claim": "金額",
+            }
+        )
+    return {"segments": segments, "evidence": evidence}
+
+
+class TestPeopleOfAHistory:
+    """With only a history table, its people are the population (people:)."""
+
+    def test_the_people_back_the_segments_and_the_record_tells_the_rows_left_out(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file(data=_history_csv()))
+        env.agents.analysis_fn = _code_analysis(code=_EMIT_PEOPLE)
+
+        manager.run(gid)
+
+        generation = _current(env, gid)
+        assert generation.status is GenerationStatus.DONE
+        params = generation.analysis_run.params
+        assert params["people_from_history"] == {
+            "table": "people.csv",
+            "id_column": "id",
+            "people": 40,
+            "source_rows": 82,
+            "rows_without_id": 2,
+            "one_id_holds_many_rows": False,
+        }
+        # the counts are of people now, not of rows
+        assert "rows_are_not_people" not in params
+        result = manager.get_result(ADMIN, gid)
+        assert sorted(s.size for s in result.segments) == [20, 20]
+
+    def test_one_id_with_a_large_share_of_the_rows_is_pointed_out(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        # an ID that may stand for "no one" (such as guests) holds many rows
+        data = _history_csv(extra="0,5\n" * 30)
+        gid = _start_detailed(manager, env.ready_file(data=data))
+        env.agents.analysis_fn = _code_analysis(code=_EMIT_PEOPLE)
+
+        manager.run(gid)
+
+        params = _current(env, gid).analysis_run.params["people_from_history"]
+        assert params["one_id_holds_many_rows"] is True
+
+    def test_fixed_functions_on_a_history_still_count_rows(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file(data=_history_csv()))
+        env.agents.analysis_fn = _rows_cluster
+
+        manager.run(gid)
+
+        params = _current(env, gid).analysis_run.params
+        assert params.get("rows_are_not_people") is True
+        assert "people_from_history" not in params
+
+
+_EMIT_HISTORY_AS_PEOPLE = (
+    'df = read_table("source_1")\ndf["seg"] = "a"\n'
+    'emit_result(df, "seg", "source_1", id_column="id")\n'
+)
+
+
+def _refused_then_rows(tools: dict, holder: dict, source_id: str) -> dict:
+    """A refused run_code result, then the fixed cluster on the rows."""
+    tools["run_code"](code=_EMIT_HISTORY_AS_PEOPLE)
+    return _rows_cluster(tools, holder, source_id)
+
+
+class TestRecordShowsWhatEachStepFound:
+    """The record keeps counted aggregates of each step, never rows."""
+
+    def test_an_accepted_result_and_the_tables_reading_are_in_the_record(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file(data=_history_csv()))
+        env.agents.analysis_fn = _code_analysis(code=_EMIT_PEOPLE)
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        (table,) = record.table_summaries
+        assert table["name"] == "people.csv" and table["rows_read"] == 82
+        assert table["missing"] == [{"name": "id", "count": 2}]
+        (run,) = [c for c in record.tool_calls if c["tool"] == "run_code"]
+        result = run["result"]
+        assert result["population"] == 40 and result["unit"] == "people"
+        assert result["history"] == {
+            "id_column": "id",
+            "source_rows": 82,
+            "rows_without_id": 2,
+        }
+        assert sorted(g["size"] for g in result["groups"]) == [20, 20]
+
+    def test_a_refused_result_keeps_its_reason_and_counts_only(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file(data=_history_csv()))
+        env.agents.analysis_fn = _refused_then_rows
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        refused, cluster = record.tool_calls[-2:]
+        assert refused["result"] == {
+            "failure": "POPULATION_ID_MISSING",
+            "counts": {"rows_without_id": 2},
+        }
+        # the fixed functions on a history count rows
+        assert cluster["result"]["unit"] == "rows"
+        assert cluster["result"]["population"] == 82
+
+    def test_what_the_code_printed_never_reaches_the_record(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis(failures=2)
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        # the steps' results (the accepted code itself is kept as code)
+        shown = json.dumps(
+            [record.tool_calls, record.table_summaries], ensure_ascii=False
+        )
+        for secret in ("print-secret", "77777", "boom-secret"):
+            assert secret not in shown
+        assert '"failure": "RUN_CODE_FAILED"' in shown

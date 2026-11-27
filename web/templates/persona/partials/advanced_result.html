@@ -120,6 +120,13 @@
     <section data-testid="advanced-segments" aria-labelledby="advanced-segments-title" class="mb-4">
         <h3 id="advanced-segments-title" class="font-medium text-gray-900 mb-2">セグメント（{{ result.segments | length }} つの層に分けました）</h3>
         {% set run_params = result.generation.analysis_run.params if result.generation.analysis_run else {} %}
+        {% set people_count = run_params.get("people_from_history") %}
+        {% if people_count %}
+        <p data-testid="advanced-people-notice" class="text-sm text-gray-800 border border-gray-300 rounded-md px-3 py-2 mb-2">人数と割合は、{{ people_count.table }} の「{{ people_count.id_column }}」ごとに数えた人の数です（{{ "{:,}".format(people_count.people) }} 人）。{% if people_count.rows_without_id %}「{{ people_count.id_column }}」が空の行 {{ "{:,}".format(people_count.rows_without_id) }} 行（全 {{ "{:,}".format(people_count.source_rows) }} 行の {{ "{:.1%}".format(people_count.rows_without_id / people_count.source_rows) }}）は、どの人にも数えていません。{% endif %}</p>
+        {% if people_count.one_id_holds_many_rows %}
+        <p data-testid="advanced-one-id-notice" class="text-sm text-gray-800 border border-gray-300 rounded-md px-3 py-2 mb-2">1 つの「{{ people_count.id_column }}」に、行の多くが集まっています。「非会員」など、決まった人を表さない値でないか、元のデータで確かめてください。</p>
+        {% endif %}
+        {% endif %}
         {% if run_params.get("rows_are_not_people") %}
         <p data-testid="advanced-rows-notice" class="text-sm text-gray-800 border border-gray-300 rounded-md px-3 py-2 mb-2">この表は 1 人に複数行（注文や履歴）があるため、人数や割合は、人でなく行の数です。</p>
         {% endif %}
@@ -150,7 +157,7 @@
         {# Only when there is one table (the population of a joined result differs from the first table's row count). #}
         {% set rows = report.rows_read if report and result.prepare_reports | length == 1 else none %}
         {% set sources = result.segments | map(attribute="definition") | map(attribute="source", default="") | list | unique | list %}
-        {% if rows and sources | length <= 1 and not (result.segments | selectattr("overlaps") | list) and not unverified %}
+        {% if rows and not people_count and sources | length <= 1 and not (result.segments | selectattr("overlaps") | list) and not unverified %}
         {% set rest = rows - (result.segments | sum(attribute="size")) %}
         {% if rest > 0 %}
         <p class="text-sm text-gray-700 mt-2" data-testid="advanced-segments-rest">どの層にも入らなかった人が {{ "{:,}".format(rest) }} 人（{{ '%.0f' | format(rest / rows * 100) }}%）います。</p>

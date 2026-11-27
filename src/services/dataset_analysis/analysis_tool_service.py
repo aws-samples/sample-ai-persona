@@ -131,7 +131,9 @@ _CHECK_HINTS: Dict[tuple[str, Optional[str]], str] = {
     ("DUPLICATE_IDS", "population"): (
         "The population table has several rows per person. Give "
         "population_source a table with one row per person (or join: with it), "
-        "as the playbook shows."
+        "as the playbook shows. When there is only a history table (kind "
+        "history in data_reading), make one row per person and use "
+        "people:source_n with its person_id."
     ),
     ("DUPLICATE_IDS", "result"): (
         "The frame repeats people. Check that a merge did not add rows, make it "
@@ -150,8 +152,19 @@ _CHECK_HINTS: Dict[tuple[str, Optional[str]], str] = {
         "count too). Give every row a segment."
     ),
     ("POPULATION_ID_MISSING", None): (
-        "The ID column of the population table is empty in some rows. Choose "
-        "another ID column or table, or continue with the fixed tools."
+        "The ID column of the population table is empty in some rows. For a "
+        "history table (kind history in data_reading), make one row per person "
+        "and use people:source_n with its person_id: rows without an ID are "
+        "then left out and counted. Otherwise choose another table, or continue "
+        "with the fixed tools."
+    ),
+    ("PEOPLE_SOURCE_INVALID", None): (
+        "people:source_n is only for a history table whose person_id is in "
+        "data_reading. Use source_n or join: for the other tables."
+    ),
+    ("ID_COLUMN_MISMATCH", None): (
+        "With people:source_n, id_column must be the person_id of that table "
+        "in data_reading."
     ),
 }
 
@@ -185,11 +198,17 @@ class AnalysisTable:
         alias: ``source_1``〜``source_3``, in the order the user chose.
         source_id: The source file (its prepared Parquet in the session).
         columns: Its profiled column names.
+        history_person_id: For a history table (several rows per person), the
+            person column the user confirmed; ``people:<alias>`` may then be
+            the population of a result. ``None`` for any other table.
+        skip: The columns the user confirmed are no trait of a person.
     """
 
     alias: str
     source_id: str
     columns: tuple[str, ...]
+    history_person_id: Optional[str] = None
+    skip: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -197,7 +216,10 @@ class ToolCall:
     """One tool call, kept for the Manager (IDs, counts and codes only).
 
     ``playbook`` is the name a successful ``load_playbook``
-    read: one of :data:`PLAYBOOK_NAMES`, never the user's data.
+    read: one of :data:`PLAYBOOK_NAMES`, never the user's data. ``table`` is
+    the alias of the table a fixed tool read. ``check_counts`` are the counts
+    the check of a refused ``run_code`` result sent (the known keys only, see
+    :func:`_check_context`).
     """
 
     tool_call_id: str
@@ -207,6 +229,8 @@ class ToolCall:
     elapsed_seconds: float
     output_chars: int
     playbook: Optional[str] = None
+    table: Optional[str] = None
+    check_counts: Optional[Dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -291,6 +315,7 @@ class AnalysisToolService:
         #: A sandbox failure seen during a tool call; the Manager fails on it.
         self.sandbox_error: Optional[CodedError] = None
         self._reading: Optional[str] = None  # the playbook being read
+        self._reading_table: Optional[str] = None  # the table a fixed tool reads
         self._on_call: Optional[Callable[[ToolCall], None]] = None
 
     # --- what the Manager reads ------------------------------------------------
@@ -345,6 +370,8 @@ class AnalysisToolService:
     def _record_call(self, call: ToolCall) -> None:
         if call.tool == "load_playbook" and call.ok and self._reading in PLAYBOOK_NAMES:
             call = replace(call, playbook=self._reading)
+        if self._reading_table is not None:
+            call = replace(call, table=self._reading_table)
         self.calls.append(call)
         if self._on_call is None:
             return
@@ -363,9 +390,21 @@ class AnalysisToolService:
         elapsed: float,
         context: Optional[Mapping[str, Any]] = None,
         detail: Optional[str] = None,
+        *,
+        check_counts: Optional[Mapping[str, Any]] = None,
     ) -> str:
         call_id = self._next_call_id()
-        self._record_call(ToolCall(call_id, tool_name, False, code, elapsed, 0))
+        self._record_call(
+            ToolCall(
+                call_id,
+                tool_name,
+                False,
+                code,
+                elapsed,
+                0,
+                check_counts=dict(check_counts) if check_counts else None,
+            )
+        )
         logger.info(
             "analysis tool failed: tool=%s tool_call_id=%s error_code=%s%s",
             tool_name,
@@ -474,7 +513,11 @@ class AnalysisToolService:
                 return self._fail(tool_name, "ANALYSIS_HALTED", 0.0)
             # An argument error: not a failure of run_code, nothing ran
             return self._fail(tool_name, table, 0.0, {"sources": sorted(self._tables)})
-        return self._run(tool_name, lambda: fn(table))
+        self._reading_table = table.alias
+        try:
+            return self._run(tool_name, lambda: fn(table))
+        finally:
+            self._reading_table = None
 
     # --- the three fixed tools -------------------------------------------------
 
@@ -738,7 +781,10 @@ class AnalysisToolService:
             are the tested functions (read their playbook first). Give the
             result to ``emit_result(frame, assign_column, population_source,
             id_column=...)`` exactly once: one row per person and the segment
-            of each row. The sizes and the population are counted again from
+            of each row. ``population_source`` is ``source_n`` (one row per
+            person), ``join:...`` or, when there is only a history table,
+            ``people:source_n`` with its person_id as ``id_column`` (rows
+            without an ID are left out). The sizes and the population are counted again from
             the data; numbers you print are never used. ``statistics`` and
             ``features`` you pass are shown back but not recounted, so they
             cannot back an evidence.
@@ -786,6 +832,15 @@ class AnalysisToolService:
         self._elapsed += elapsed
         return text
 
+    def _people_args(self) -> Dict[str, Any]:
+        """The history tables whose people may be a population (``people:``)."""
+        people = {
+            alias: {"person_id": t.history_person_id, "skip": list(t.skip)}
+            for alias, t in sorted(self._tables.items())
+            if t.history_person_id is not None
+        }
+        return {"people": people} if people else {}
+
     def _execute_code(self, code: str, timeout: float, started: float) -> str:
         assert self._gate is not None
         tool_name = "run_code"
@@ -811,7 +866,12 @@ class AnalysisToolService:
         checked = self._sandbox.call_verified(  # type: ignore[attr-defined]
             self._session,
             "finalize_ai_result",
-            {"work_dir": work_dir, "pgid_file": pgid_file, "sources": sources},
+            {
+                "work_dir": work_dir,
+                "pgid_file": pgid_file,
+                "sources": sources,
+                **self._people_args(),
+            },
         )
         value = checked.get("value") if checked.get("ok") else None
         elapsed = max(self._clock() - started, 0.0)
@@ -883,7 +943,14 @@ class AnalysisToolService:
                 if code_error == value.get("error")
                 else None
             )
-            return self._fail(tool_name, code_error, elapsed, context, detail=detail)
+            return self._fail(
+                tool_name,
+                code_error,
+                elapsed,
+                context,
+                detail=detail,
+                check_counts=context,
+            )
         self._gate.record(RunCodeOutcome(ok=True))
         self.code_runs.append(CodeRun(call_id, code, _sha(code), True, result))
         self._emitted[call_id] = result
