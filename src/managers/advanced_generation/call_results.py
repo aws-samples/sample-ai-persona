@@ -10,9 +10,12 @@ and groups:
 
 - groups (``cluster_segments``, ``profile_segments`` and an accepted
   ``run_code`` result): each group's size, share and its biggest differences
-  from the whole. A group of fewer than :data:`MIN_SHOWN_SIZE` is shown as
+  from the whole, of the features the library counted (not the metrics the
+  code computed). A group of fewer than :data:`MIN_SHOWN_SIZE` is shown as
   hidden, its name included (a layer by a column of names carries the person
-  in its key).
+  in its key); when only one is hidden, the next smallest is hidden too. A
+  group the analysis did not adopt is named by its number when its name is
+  the code's own text or a value of a history (whose sizes are rows).
 - a refused ``run_code`` result: the fixed reason and the counts the check
   sent. What the code printed and its error text are never kept: they may
   hold rows, and their numbers were not counted again.
@@ -118,10 +121,34 @@ def table_summary(
 
 
 def _features(items: Any, skip: Collection[str]) -> list[dict[str, Any]]:
+    """The library's own features: a metric the code computed (``derived``)
+    carries a name and values the code chose, so it is left out."""
+    counted = (
+        [
+            i
+            for i in items
+            if not (isinstance(i, Mapping) and i.get("kind") == "derived")
+        ]
+        if isinstance(items, (list, tuple))
+        else []
+    )
     return [
         {k: f[k] for k in _FEATURE_KEYS if k in f}
-        for f in ranked_features(items, skip)[:MAX_SHOWN_FEATURES]
+        for f in ranked_features(counted, skip)[:MAX_SHOWN_FEATURES]
     ]
+
+
+def _without_a_lone_hidden(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hide the smallest shown group too when only one is hidden.
+
+    Otherwise the population less the shown sizes tells the hidden size.
+    """
+    hidden = [g for g in groups if g.get("hidden")]
+    shown = [g for g in groups if not g.get("hidden")]
+    if len(hidden) != 1 or not shown:
+        return groups
+    smallest = min(shown, key=lambda g: int(g["size"]))
+    return [{"hidden": True} if g is smallest else g for g in groups]
 
 
 def _group(
@@ -183,8 +210,19 @@ def _cluster_groups(
 
 
 def _layer_groups(
-    call_id: str, output: Mapping[str, Any], segments: Sequence[Segment], skip: Any
+    call_id: str,
+    output: Mapping[str, Any],
+    segments: Sequence[Segment],
+    skip: Any,
+    *,
+    rows: bool,
 ) -> Optional[list[dict[str, Any]]]:
+    """The layers as groups; on a history a key is never shown.
+
+    The sizes of a history's layers are rows, so a layer of one person (by a
+    column of IDs or names) may pass :data:`MIN_SHOWN_SIZE`: its key would
+    name the person. Such a layer is shown by its number.
+    """
     layers = output.get("layers")
     population = _count(output.get("population"))
     if not isinstance(layers, list) or population is None:
@@ -198,7 +236,12 @@ def _layer_groups(
         def adopted(s: Segment, key: str = key) -> bool:
             return s.profile_tool_call_id == call_id and s.profile_key == key
 
-        fallback = "絞り込んだ人" if key == _FILTERED_KEY else key
+        if key == _FILTERED_KEY:
+            fallback = "絞り込んだ人"
+        elif rows:
+            fallback = f"グループ {len(groups) + 1}"
+        else:
+            fallback = key
         label = _label(segments, adopted, fallback)
         groups.append(
             _group(label, layer.get("size"), population, layer.get("features"), skip)
@@ -216,7 +259,8 @@ def _emitted_groups(
         def adopted(s: Segment, key: str = key) -> bool:
             return s.tool_call_id == call_id and s.segment_key == key
 
-        label = _label(segments, adopted, key)
+        # a key nobody adopted is the code's own text: only its number shows
+        label = _label(segments, adopted, f"層 {len(groups) + 1}")
         groups.append(
             _group(
                 label,
@@ -272,7 +316,9 @@ def call_result(
             result: dict[str, Any] = {
                 "population": int(emitted.population),
                 "unit": "people",
-                "groups": _emitted_groups(call_id, emitted, segments, skip),
+                "groups": _without_a_lone_hidden(
+                    _emitted_groups(call_id, emitted, segments, skip)
+                ),
             }
             if emitted.from_history:
                 alias = emitted.population_source.removeprefix("people:")
@@ -292,14 +338,14 @@ def call_result(
         made = (
             _cluster_groups(call_id, output, segments, skip)
             if tool == "cluster_segments"
-            else _layer_groups(call_id, output, segments, skip)
+            else _layer_groups(call_id, output, segments, skip, rows=unit == "rows")
         )
         if made is None:
             return None
         return {
             "population": int(output["population"]),
             "unit": unit,
-            "groups": made,
+            "groups": _without_a_lone_hidden(made),
         }
     if tool == "analyze_dataset":
         rows = output.get("rows")

@@ -83,9 +83,10 @@ _CLUSTERS = {
                 _feature("rank", 3.0, 1.0, spread=5.0),  # 0.4 spreads
             ],
         },
-        {"index": 1, "size": 395, "share": 0.395, "features": []},
-        # a group too small to show: its numbers could point at a person
-        {"index": 2, "size": MIN_SHOWN_SIZE - 1, "share": 0.005, "features": []},
+        {"index": 1, "size": 388, "share": 0.388, "features": []},
+        # groups too small to show: their numbers could point at a person
+        {"index": 2, "size": MIN_SHOWN_SIZE - 1, "share": 0.009, "features": []},
+        {"index": 3, "size": 3, "share": 0.003, "features": []},
     ],
 }
 
@@ -104,14 +105,14 @@ class TestGroups:
 
         assert result is not None
         assert result["population"] == 1000 and result["unit"] == "people"
-        first, second, hidden = result["groups"]
+        first, second, hidden, also_hidden = result["groups"]
         # the name the analysis gave the group, else its number
         assert first["label"] == "よく来る層" and second["label"] == "グループ 2"
         assert first["size"] == 600 and first["share"] == 0.6
         assert len(first["features"]) == MAX_SHOWN_FEATURES
         assert [f["name"] for f in first["features"]] == ["visits", "age", "points"]
         assert set(first["features"][0]) == {"name", "kind", "value", "baseline"}
-        assert hidden == {"hidden": True}
+        assert hidden == also_hidden == {"hidden": True}
 
     def test_the_rows_of_a_history_are_counted_as_rows(self) -> None:
         result = call_result(
@@ -164,6 +165,140 @@ class TestGroups:
         assert "山田" not in json.dumps(result, ensure_ascii=False)
 
 
+class TestNothingThatCanNameAPerson:
+    """What the security review found: a record must not name or single out anyone."""
+
+    def test_the_rows_of_a_history_never_label_a_group_with_its_value(self) -> None:
+        # a layer by the person column of a history: each key is one person,
+        # and that person may have many rows
+        output = {
+            "population": 400,
+            "layers": [
+                {"key": "M0007857", "size": 250, "share": 0.625, "features": []},
+                {"key": "山田 太郎", "size": 150, "share": 0.375, "features": []},
+            ],
+        }
+
+        result = call_result(
+            _call("profile_segments"),
+            output=output,
+            emitted=None,
+            segments=[],
+            history_tables={"source_1": "会員ID"},
+        )
+
+        assert result is not None
+        assert [g["label"] for g in result["groups"]] == ["グループ 1", "グループ 2"]
+        text = json.dumps(result, ensure_ascii=False)
+        assert "M0007857" not in text and "山田" not in text
+
+    def test_a_group_the_analysis_adopted_keeps_its_name_on_a_history(self) -> None:
+        output = {
+            "population": 400,
+            "layers": [{"key": "gold", "size": 400, "share": 1.0, "features": []}],
+        }
+        segment = Segment(
+            id="seg-1",
+            label="よく買う層",
+            definition={
+                "kind": "filter",
+                "spec": {
+                    "tool_call_id": "tc-9",
+                    "profile_tool_call_id": "tc-1",
+                    "profile_key": "gold",
+                },
+            },
+            size=400,
+            share=1.0,
+            features=(),
+            evidence_ids=("ev-1",),
+        )
+
+        result = call_result(
+            _call("profile_segments"),
+            output=output,
+            emitted=None,
+            segments=[segment],
+            history_tables={"source_1": "会員ID"},
+        )
+
+        assert result is not None and result["groups"][0]["label"] == "よく買う層"
+
+    def test_metrics_the_code_computed_are_not_kept(self) -> None:
+        # their names and values are the code's own, not counted by the library
+        emitted = EmittedResult(
+            population=100,
+            population_source="source_1",
+            segments=(
+                {
+                    "segment_key": "a",
+                    "size": 100,
+                    "features": [
+                        _feature("山田 年収", 9_000_000.0, 1.0, kind="derived"),
+                        _feature("age", 50.0, 40.0, spread=10.0),
+                    ],
+                },
+            ),
+        )
+
+        result = call_result(
+            _call("run_code"),
+            output=emitted.recounted(),
+            emitted=emitted,
+            segments=[],
+            history_tables={},
+        )
+
+        assert result is not None
+        assert [f["name"] for f in result["groups"][0]["features"]] == ["age"]
+
+    def test_one_hidden_group_hides_the_next_smallest_too(self) -> None:
+        # otherwise the population less the shown sizes tells the hidden size
+        output = {
+            "population": 1000,
+            "clusters": [
+                {"index": 0, "size": 700, "share": 0.7, "features": []},
+                {"index": 1, "size": 295, "share": 0.295, "features": []},
+                {"index": 2, "size": 5, "share": 0.005, "features": []},
+            ],
+        }
+
+        result = call_result(
+            _call("cluster_segments"),
+            output=output,
+            emitted=None,
+            segments=[],
+            history_tables={},
+        )
+
+        assert result is not None
+        assert result["groups"][0]["size"] == 700
+        assert result["groups"][1:] == [{"hidden": True}, {"hidden": True}]
+
+    def test_two_hidden_groups_are_enough(self) -> None:
+        output = {
+            "population": 1000,
+            "clusters": [
+                {"index": 0, "size": 600, "share": 0.6, "features": []},
+                {"index": 1, "size": 392, "share": 0.392, "features": []},
+                {"index": 2, "size": 5, "share": 0.005, "features": []},
+                {"index": 3, "size": 3, "share": 0.003, "features": []},
+            ],
+        }
+
+        result = call_result(
+            _call("cluster_segments"),
+            output=output,
+            emitted=None,
+            segments=[],
+            history_tables={},
+        )
+
+        assert result is not None
+        sizes = [g.get("size") for g in result["groups"]]
+        assert sizes == [600, 392, None, None]
+
+
 class TestDetailedAnalysis:
     def test_an_accepted_result_shows_the_recounted_people(self) -> None:
         emitted = EmittedResult(
@@ -202,7 +337,8 @@ class TestDetailedAnalysis:
         assert high["label"] == "離反リスク高" and high["size"] == 2221
         assert high["share"] == round(2221 / 7933, 4)
         assert high["features"][0]["name"] == "最後からの日数"
-        assert low["label"] == "low"
+        # a key nobody adopted is the code's own text: only its number is shown
+        assert low["label"] == "層 2"
 
     def test_a_refused_result_shows_its_reason_and_counts(self) -> None:
         call = _call(
