@@ -6,17 +6,29 @@ AgentDiscussionManager.
 
 import logging
 from dataclasses import replace
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from ...models.discussion import MAX_INSIGHTS, Discussion
 from ...models.insight import Insight
 from ...models.insight_category import InsightCategory
 from ...models.message import Message
+from ...models.persona import Persona
+from .participant_profiles import (
+    ParticipantProfile,
+    attach_profile_to_quote,
+    build_participant_profiles,
+)
+
+#: Quotes shown under "根拠となる発言を見る" per insight; more adds noise, not evidence.
+MAX_SUPPORTING_MESSAGES = 3
+#: Characters kept per quote, so a model that pastes a whole statement stays readable.
+MAX_SUPPORTING_MESSAGE_LENGTH = 200
 
 
 def normalize_and_deduplicate_insights(
     raw_insights: List[Dict],
     categories: Optional[List[InsightCategory]] = None,
+    profiles: Sequence[ParticipantProfile] = (),
 ) -> List[Dict]:
     """Normalize and de-duplicate the raw insight data returned by AIService.
 
@@ -25,10 +37,12 @@ def normalize_and_deduplicate_insights(
     - Clamp the confidence score to 0.0-1.0
     - Filter by description min-length (>10)
     - De-duplicate descriptions
+    - Cap the quoted statements and add each speaker's profile to them
 
     Args:
         raw_insights: Raw data returned by AIService.
         categories: Valid categories (None skips normalization).
+        profiles: Participants' profiles, added to the quotes they said.
 
     Returns:
         Normalized insight list.
@@ -59,10 +73,24 @@ def normalize_and_deduplicate_insights(
                 "category": category,
                 "description": description,
                 "confidence_score": confidence,
+                "supporting_messages": [
+                    attach_profile_to_quote(quote, profiles)
+                    for quote in _cap_supporting_messages(
+                        insight.get("supporting_messages")
+                    )
+                ],
             }
         )
 
     return _deduplicate_by_description(normalized)
+
+
+def _cap_supporting_messages(raw: object) -> List[str]:
+    """Keep at most MAX_SUPPORTING_MESSAGES quotes, each trimmed to the length limit."""
+    if not isinstance(raw, list):
+        return []
+    quotes = [q.strip() for q in raw if isinstance(q, str) and q.strip()]
+    return [q[:MAX_SUPPORTING_MESSAGE_LENGTH] for q in quotes[:MAX_SUPPORTING_MESSAGES]]
 
 
 def _normalize_category(category: str, valid_categories: List[str]) -> str:
@@ -91,6 +119,7 @@ def attach_insights_to_discussion(
     categories: Optional[List[InsightCategory]],
     ai_service: "AIService",  # type: ignore[name-defined]  # noqa: F821
     logger: logging.Logger,
+    personas: Optional[Sequence[Persona]] = None,
 ) -> Discussion:
     """Generate insights for a discussion, attach them and save the category settings.
 
@@ -106,12 +135,15 @@ def attach_insights_to_discussion(
         categories: Custom categories (defaults used if None).
         ai_service: AIService instance.
         logger: Logger.
+        personas: The participants, whose profiles go into the extraction.
 
     Returns:
         Discussion: The discussion with insights.
     """
     try:
-        insights = generate_insights(messages, discussion.topic, categories, ai_service)
+        insights = generate_insights(
+            messages, discussion.topic, categories, ai_service, personas=personas
+        )
         if len(insights) > MAX_INSIGHTS:
             logger.info(
                 f"Insights cut from {len(insights)} to {MAX_INSIGHTS}: {discussion.id}"
@@ -137,12 +169,24 @@ def generate_insights(
     topic: str,
     categories: Optional[List[InsightCategory]],
     ai_service: "AIService",  # type: ignore[name-defined]  # noqa: F821
+    personas: Optional[Sequence[Persona]] = None,
 ) -> List[Insight]:
-    """Extract insights from messages and return them normalized and de-duplicated (no truncation)."""
-    raw_insights = ai_service.extract_insights(
-        messages, categories=categories, topic=topic
+    """Extract insights from messages and return them normalized and de-duplicated (no truncation).
+
+    With ``personas``, the extraction knows who each participant is and the
+    quoted statements carry the speaker's profile. Without them (for example a
+    participant that can no longer be read) insights use the names only.
+    """
+    profiles = build_participant_profiles(personas)
+    options = (
+        {"participant_profiles": [p.prompt_line for p in profiles]} if profiles else {}
     )
-    return _parse_insights(normalize_and_deduplicate_insights(raw_insights, categories))
+    raw_insights = ai_service.extract_insights(
+        messages, categories=categories, topic=topic, **options
+    )
+    return _parse_insights(
+        normalize_and_deduplicate_insights(raw_insights, categories, profiles)
+    )
 
 
 def save_categories_to_config(

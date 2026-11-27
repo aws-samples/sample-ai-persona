@@ -871,6 +871,16 @@ class TestU6AgentDiscussion:
         assert u6_world.store.bodies[discussion.id]["owner_sub"] == OWNER.sub
         assert u6_world.store.bodies[discussion.id]["mode"] == "agent"
 
+    def test_insights_get_the_participants_profiles(self, u6_manager, u6_world):
+        u6_manager.run_agent_discussion_full(
+            OWNER, _personas(u6_world), U6_TOPIC, rounds=2
+        )
+        profiles = u6_manager._ai_service.extract_insights.call_args.kwargs[
+            "participant_profiles"
+        ]
+        names = {p.name for p in _personas(u6_world)}
+        assert {line.split(":")[0].removeprefix("- ") for line in profiles} == names
+
     def test_one_participant_check_per_statement(self, u6_manager, u6_world):
         before = u6_world.personas.calls
         u6_manager.run_agent_discussion_full(

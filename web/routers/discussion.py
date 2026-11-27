@@ -37,6 +37,7 @@ from src.models.errors import (
     ErrorKind,
     ParticipantNotFoundError,
 )
+from src.models.insight import split_observation_hypothesis
 from src.models.insight_category import InsightCategory
 from src.models.model_registry import (
     default_selectable_model_id,
@@ -75,6 +76,7 @@ templates.env.globals["country_name"] = country_service.country_name
 templates.env.globals["country_choices"] = country_service.country_choices
 templates.env.globals["gender_label"] = gender_label
 templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
+templates.env.globals["split_insight"] = split_observation_hypothesis
 templates.env.globals["persona_avatar_url"] = persona_avatar_url
 templates.env.globals["model_display_name"] = display_name_for
 

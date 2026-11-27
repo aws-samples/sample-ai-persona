@@ -261,6 +261,52 @@ class TestMessage:
         assert default_message.round_number is None
 
 
+class TestSplitObservationHypothesis:
+    """The "観察: …／仮説: …" description is split for display."""
+
+    @pytest.mark.parametrize(
+        "description",
+        [
+            "観察: 価格を気にする／仮説: 分割払いが効く",
+            "観察：価格を気にする / 仮説：分割払いが効く",
+            "観察: 価格を気にする\n仮説: 分割払いが効く",
+            "  観察: 価格を気にする。／仮説: 分割払いが効く  ",
+        ],
+    )
+    def test_split(self, description):
+        from src.models.insight import split_observation_hypothesis
+
+        observation, hypothesis = split_observation_hypothesis(description)
+        assert observation.startswith("価格を気にする")
+        assert hypothesis == "分割払いが効く"
+
+    @pytest.mark.parametrize(
+        "description", ["観察: 全員が価格を気にする", "  観察：全員が価格を気にする  "]
+    )
+    def test_observation_alone(self, description):
+        """A finding stated outright has no hypothesis."""
+        from src.models.insight import split_observation_hypothesis
+
+        assert split_observation_hypothesis(description) == (
+            "全員が価格を気にする",
+            None,
+        )
+
+    @pytest.mark.parametrize(
+        "description",
+        [
+            "UIの改善が必要",
+            "観察: ",
+            "仮説: 分割払いが効く",
+            "観察: ／仮説: 分割払いが効く",
+        ],
+    )
+    def test_other_text_is_not_split(self, description):
+        from src.models.insight import split_observation_hypothesis
+
+        assert split_observation_hypothesis(description) is None
+
+
 class TestInsight:
     """Test cases for Insight model."""
 

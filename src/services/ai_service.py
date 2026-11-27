@@ -681,6 +681,7 @@ class AIService:
         discussion_messages: List[Message],
         categories: Optional[List[InsightCategory]] = None,
         topic: str = "",
+        participant_profiles: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Extract insights from discussion messages
@@ -688,6 +689,8 @@ class AIService:
         Args:
             discussion_messages: List of discussion messages
             categories: List of insight categories (defaults are used if None)
+            topic: Discussion topic
+            participant_profiles: One prompt line per participant (who they are)
 
         Returns:
             List[Dict[str, Any]]: Structured data of the extracted insights
@@ -695,6 +698,7 @@ class AIService:
                 - category: str (category)
                 - description: str (description)
                 - confidence_score: float (confidence score 0.0-1.0)
+                - supporting_messages: list[str] (quoted statements)
 
         Raises:
             AIServiceError: Insight extraction error
@@ -709,11 +713,13 @@ class AIService:
         )
 
         prompt = self._create_insight_extraction_prompt(
-            discussion_messages, categories, topic
+            discussion_messages, categories, topic, participant_profiles
         )
 
         try:
-            response = self._retry_with_backoff(self.invoke_model, prompt)
+            response = self._retry_with_backoff(
+                self.invoke_model, prompt, max_tokens=config.INSIGHT_MAX_TOKENS
+            )
             self.logger.debug(f"Insight extraction AI response: {response[:500]}...")
             insights = self._parse_structured_insights_response(response, categories)
 
@@ -743,11 +749,14 @@ class AIService:
         messages: List[Message],
         categories: Optional[List[InsightCategory]],
         topic: str = "",
+        participant_profiles: Optional[List[str]] = None,
     ) -> str:
         """Build the prompt for insight extraction."""
         from ..prompts.insight_prompts import build_insight_extraction_prompt
 
-        return build_insight_extraction_prompt(messages, categories, topic)
+        return build_insight_extraction_prompt(
+            messages, categories, topic, participant_profiles=participant_profiles
+        )
 
     def _parse_discussion_response(
         self, response: str, personas: List[Persona]
@@ -889,10 +898,22 @@ class AIService:
         except (ValueError, TypeError):
             confidence_score = 0.5
 
+        raw_supporting = insight.get("supporting_messages")
+        supporting_messages = (
+            [
+                str(quote).strip()
+                for quote in raw_supporting
+                if isinstance(quote, str) and quote.strip()
+            ]
+            if isinstance(raw_supporting, list)
+            else []
+        )
+
         return {
             "category": str(insight["category"]).strip(),
             "description": description,
             "confidence_score": confidence_score,
+            "supporting_messages": supporting_messages,
         }
 
     def _fallback_to_text_parsing(self, response: str) -> List[Dict[str, Any]]:

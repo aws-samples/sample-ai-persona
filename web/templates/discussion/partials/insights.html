@@ -1,5 +1,6 @@
 <!-- Insight list partial -->
 {% from "components/dialog.html" import dialog %}
+{% from "components/insight_description.html" import insight_description %}
 <script>
     window.defaultCategories = {{ (default_categories|tojson|safe) if default_categories is defined and default_categories else '[]' }};
 </script>
@@ -58,7 +59,7 @@
                 </span>
                 {% endif %}
             </div>
-            <p class="text-gray-700">{{ insight.description }}</p>
+            {{ insight_description(insight.description) }}
             
             {% if insight.supporting_messages %}
             <details class="mt-3">

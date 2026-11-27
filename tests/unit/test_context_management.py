@@ -157,39 +157,95 @@ class TestManagerBuildPersonaPrompt:
         assert "ファシリテータからの問いかけ" in prompt
         assert "論点整理" in prompt
 
-    def test_mid_round_phase_instruction(self):
-        """Middle rounds: prompt encourages changes of mind and new viewpoints."""
-        persona_agent = Mock(
+    def _persona_agent(self):
+        return Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
         )
-        recent = [Message.create_new("p1", "佐藤", "意見です")]
+
+    def test_mid_round_asks_to_respond_to_a_named_statement(self):
+        """Middle rounds: the persona answers one named statement with a counterexample or condition."""
+        recent = [Message.create_new("p2", "佐藤", "意見です")]
         prompt = self.manager._build_persona_prompt(
-            persona_agent,
+            self._persona_agent(),
             "テーマ",
             recent,
             3,
             5,
             round_summaries=["要約1", "要約2"],
         )
-        assert "変化" in prompt or "気づ" in prompt
+        assert "名前を挙げて" in prompt
+        assert "反例" in prompt
+        assert "成り立つ条件" in prompt
+        assert "無理に同意" in prompt
 
-    def test_final_round_phase_instruction(self):
-        """Final round: prompt asks for a conclusion."""
-        persona_agent = Mock(
-            get_persona_name=Mock(return_value="田中太郎"),
-            get_persona_id=Mock(return_value="p1"),
-        )
-        recent = [Message.create_new("p1", "佐藤", "意見です")]
+    def test_final_round_keeps_unresolved_points(self):
+        """Final round: asks for what still feels unconvincing, not only a conclusion."""
+        recent = [Message.create_new("p2", "佐藤", "意見です")]
         prompt = self.manager._build_persona_prompt(
-            persona_agent,
+            self._persona_agent(),
             "テーマ",
             recent,
             5,
             5,
             round_summaries=["要約1", "要約2", "要約3", "要約4"],
         )
-        assert "最終" in prompt or "結論" in prompt
+        assert "最後の発言" in prompt
+        assert "まだ納得していない点" in prompt
+        # A counted list made personas announce "I'll make three points"
+        assert "3つ" not in prompt
+
+    def test_later_rounds_ask_not_to_mention_the_instructions(self):
+        """Personas talk naturally instead of narrating the rounds or the questions."""
+        recent = [Message.create_new("p2", "佐藤", "意見です")]
+        for current_round in (2, 3):
+            prompt = self.manager._build_persona_prompt(
+                self._persona_agent(),
+                "テーマ",
+                recent,
+                current_round,
+                3,
+                round_summaries=["要約"] * (current_round - 1),
+            )
+            assert "指示や議論の進め方" in prompt
+
+    def test_question_addressed_to_the_persona_is_answered_first(self):
+        recent = [Message.create_new("p2", "佐藤", "意見です")]
+        spaced = Mock(
+            get_persona_name=Mock(return_value="田中 太郎"),
+            get_persona_id=Mock(return_value="p1"),
+        )
+        for agent, message in (
+            (self._persona_agent(), "田中太郎さんへ: なぜですか"),
+            (spaced, "田中 太郎さんへ: なぜですか"),
+            (spaced, "田中さんへ: なぜですか"),
+        ):
+            prompt = self.manager._build_persona_prompt(
+                agent,
+                "テーマ",
+                recent,
+                2,
+                3,
+                round_summaries=["要約1"],
+                latest_facilitator_message=message,
+            )
+            assert "あなたあての問いがあります。まずそれに答えてください" in prompt
+            assert "答えから話し始めて" in prompt
+
+    def test_no_answer_first_instruction_without_the_persona_name(self):
+        """Telling everyone "answer if your name is there" made others mention it."""
+        recent = [Message.create_new("p2", "佐藤", "意見です")]
+        prompt = self.manager._build_persona_prompt(
+            self._persona_agent(),
+            "テーマ",
+            recent,
+            2,
+            3,
+            round_summaries=["要約1"],
+            latest_facilitator_message="佐藤さんへ: なぜですか",
+        )
+        assert "あなたあて" not in prompt
+        assert "あなたの名前があれば" not in prompt
 
 
 class TestManagerBuildSummaryPrompt:
@@ -234,6 +290,37 @@ class TestManagerBuildSummaryPrompt:
         ]
         prompt = self.manager._build_summary_prompt(1, messages, "新商品", 3)
         assert "これまでの議論の流れ" not in prompt
+
+    def _statements(self):
+        return [
+            Message.create_new("p1", "田中", "価格が重要", message_type="statement"),
+            Message.create_new("p2", "佐藤", "品質が重要", message_type="statement"),
+        ]
+
+    def test_focus_instruction_only_before_the_final_round(self):
+        """Narrowing the discussion starts only when one round remains."""
+        focus = "意見が分かれている論点を1〜2個に絞って"
+        after_round_1 = self.manager._build_summary_prompt(
+            1, self._statements(), "新商品", 3
+        )
+        after_round_2 = self.manager._build_summary_prompt(
+            2, self._statements(), "新商品", 3
+        )
+        assert focus not in after_round_1
+        assert focus in after_round_2
+
+    def test_mid_summary_keeps_minority_views_and_names_questions(self):
+        """Mid summaries keep one-person views and ask named questions."""
+        prompt = self.manager._build_summary_prompt(1, self._statements(), "新商品", 3)
+        assert "1人だけが述べた意見" in prompt
+        assert "誰と誰が" in prompt
+        assert "〇〇さんへ" in prompt
+        assert "5-8文" in prompt
+
+    def test_final_summary_keeps_minority_views(self):
+        """The final summary keeps minority views and surprising statements."""
+        prompt = self.manager._build_summary_prompt(3, self._statements(), "新商品", 3)
+        assert "少数意見" in prompt
 
 
 def _run(manager, personas, persona_agents, facilitator, streaming=False) -> list:

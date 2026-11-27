@@ -515,6 +515,14 @@ class TestRegenerateInsights:
         body = world.store.bodies[discussion.id]
         assert len(body["insights"]) == 5 and body["report_count"] == 1
 
+    def test_regeneration_uses_the_participants_profiles(self, manager, world, ai):
+        discussion = _seed(manager, world)
+        ai.extract_insights.return_value = _insights(3)
+        manager.regenerate_insights(OWNER, discussion.id)
+        profiles = ai.extract_insights.call_args.kwargs["participant_profiles"]
+        names = {world.persona_bodies[p].name for p in ("p1", "p2")}
+        assert {line.split(":")[0].removeprefix("- ") for line in profiles} == names
+
     def test_shared_reader_is_denied_before_the_ai(self, manager, world, ai):
         discussion = _seed(manager, world)
         world.share(discussion.id, "sales")

@@ -73,6 +73,10 @@ class Config:
 
     # AI generation settings
     MAX_TOKENS: int = 4000
+    # Output token limit for insight extraction. Adaptive thinking plus 5-10 insights
+    # with quoted evidence used about 7,300 tokens on a 4-persona, 3-round discussion,
+    # so MAX_TOKENS cut the JSON short (stopReason=max_tokens) and nothing parsed.
+    INSIGHT_MAX_TOKENS: int = 16000
     # Output token limit for calls through the Strands Agent (persona generation, reports, etc.).
     # When unset it sticks to the Bedrock/model default (4,096 on Sonnet 5), which is
     # exceeded by bulk generation of several items or adaptive thinking (MaxTokensReachedException).
