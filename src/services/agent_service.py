@@ -136,7 +136,10 @@ class SegmentOutput(BaseModel):
     )
     definition_source: Optional[str] = Field(
         default=None,
-        description="層が乗る表の名前（source_1 など。結合した表は join:... ）",
+        description=(
+            "層が乗る表の名前（source_1 など。結合した表は join:... 、"
+            "履歴の表の人は people:... ）"
+        ),
     )
     definition_segment_key: Optional[str] = Field(
         default=None, description="run_code の結果から作った層の segment_key"

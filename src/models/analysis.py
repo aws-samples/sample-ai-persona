@@ -34,10 +34,12 @@ LIMIT_RUN_CODE_MAX_CHARS = "run_code_max_chars"
 
 #: Names of the tables of one generation, in the order chosen.
 TABLE_ALIASES: tuple[str, ...] = ("source_1", "source_2", "source_3")
-#: ``source_n`` or ``join:<axis>+<table>[+<table>]``.
+#: ``source_n``, ``join:<axis>+<table>[+<table>]`` or ``people:source_n`` (the
+#: distinct people of a history table). Kept in step with the sandbox library.
 _POPULATION_SOURCE = re.compile(
-    r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$"
+    r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$|^people:(source_[1-3])$"
 )
+_PEOPLE_PREFIX = "people:"
 
 # ``<data``, ``</data``, ``< / DATA`` and the like inside the data.
 _DATA_MARKER = re.compile(r"<(\s*/?\s*data)", re.IGNORECASE)
@@ -820,8 +822,10 @@ class EmittedResult:
 
     Attributes:
         population: People of ``population_source`` (the axis table's people
-            for a joined table). Recounted.
-        population_source: ``source_n`` or ``join:<axis>+<table>[+<table>]``.
+            for a joined table, the distinct IDs for a history). Recounted.
+        population_source: ``source_n``, ``join:<axis>+<table>[+<table>]`` or
+            ``people:source_n`` (the people of a history table, by the person
+            column the user confirmed).
         segments: ``{segment_key, size, features}`` per segment. ``size`` is
             recounted; ``features`` is the code's own (not recounted).
         statistics: ``{name, value, p_value?, effect_size?}`` of tests, as the
@@ -829,6 +833,11 @@ class EmittedResult:
         joined_columns: The key and the columns used, for a joined table.
         tables_read: The table aliases the code read (``read_table`` /
             ``join_tables``), whether or not it joined them with join_tables.
+        source_rows: Rows of the history (``people:`` only). Counted.
+        rows_without_id: Rows of the history with no ID, so of no one in the
+            population (``people:`` only). Counted.
+        largest_id_rows: The most rows one ID has (``people:`` only); a value
+            that stands for "no one" shows here. Counted.
     """
 
     population: int
@@ -837,6 +846,9 @@ class EmittedResult:
     statistics: tuple[dict[str, Any], ...] = ()
     joined_columns: tuple[str, ...] = ()
     tables_read: tuple[str, ...] = ()
+    source_rows: Optional[int] = None
+    rows_without_id: Optional[int] = None
+    largest_id_rows: Optional[int] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "segments", tuple(dict(s) for s in self.segments))
@@ -849,9 +861,17 @@ class EmittedResult:
             raise ValueError("unknown population source")
         if int(self.population) < 0:
             raise ValueError("population must not be negative")
+        for count in (self.source_rows, self.rows_without_id, self.largest_id_rows):
+            if count is not None and int(count) < 0:
+                raise ValueError("row counts must not be negative")
         for segment in self.segments:
             if int(segment.get("size", -1)) < 0 or not segment.get("segment_key"):
                 raise ValueError("a segment has a key and a size of 0 or more")
+
+    @property
+    def from_history(self) -> bool:
+        """Whether the population is the people of a history table."""
+        return self.population_source.startswith(_PEOPLE_PREFIX)
 
     def size_of(self, segment_key: str) -> int | None:
         """The recounted size of ``segment_key``, or ``None`` when absent."""
@@ -883,6 +903,10 @@ class EmittedResult:
             data["joined_columns"] = list(self.joined_columns)
         if self.tables_read:
             data["tables_read"] = list(self.tables_read)
+        for key in ("source_rows", "rows_without_id", "largest_id_rows"):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = int(value)
         return data
 
     @classmethod
@@ -894,7 +918,14 @@ class EmittedResult:
             statistics=tuple(dict(s) for s in data.get("statistics") or []),
             joined_columns=tuple(str(c) for c in data.get("joined_columns") or []),
             tables_read=tuple(str(t) for t in data.get("tables_read") or []),
+            source_rows=_count_or_none(data.get("source_rows")),
+            rows_without_id=_count_or_none(data.get("rows_without_id")),
+            largest_id_rows=_count_or_none(data.get("largest_id_rows")),
         )
+
+
+def _count_or_none(value: Any) -> Optional[int]:
+    return None if value is None else int(value)
 
 
 #: ``RunCodeOutcome.changed`` when the check found processes the code left.

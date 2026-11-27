@@ -1211,6 +1211,62 @@ class TestSegmentNumbers:
         assert "行" in note and "人" in note
         ui.check_a11y()
 
+    def _with_people_of_history(self, **people: Any) -> Any:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        run = result.generation.analysis_run
+        counted = {
+            "table": "pos.csv",
+            "id_column": "会員ID",
+            "people": 220,
+            "source_rows": 5000,
+            "rows_without_id": 300,
+            "one_id_holds_many_rows": False,
+            **people,
+        }
+        marked = run.update(params={**run.params, "people_from_history": counted})
+        # the history's rows, many more than its people
+        report = replace(result.prepare_reports[0], rows_read=counted["source_rows"])
+        return replace(
+            result,
+            generation=result.generation.update(analysis_run=marked),
+            prepare_reports=(report,),
+        )
+
+    def test_people_of_a_history_tell_how_they_were_counted(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._with_people_of_history())
+
+        note = ui.page.inner_text("[data-testid='advanced-people-notice']")
+        assert "会員ID" in note and "pos.csv" in note and "220" in note
+        # the rows without an ID are shown as a count and a share, not refused
+        assert "300" in note and "5,000" in note and "6.0%" in note
+        assert ui.page.locator("[data-testid='advanced-one-id-notice']").count() == 0
+        ui.check_a11y()
+
+    def test_people_of_a_history_are_not_compared_with_its_rows(
+        self, ui: UiHarness
+    ) -> None:
+        # the rows read are many more than the people: no one is "left out"
+        self._open_with(ui, self._with_people_of_history())
+
+        assert ui.page.locator("[data-testid='advanced-segments-rest']").count() == 0
+
+    def test_no_row_without_an_id_tells_no_share(self, ui: UiHarness) -> None:
+        self._open_with(ui, self._with_people_of_history(rows_without_id=0))
+
+        note = ui.page.inner_text("[data-testid='advanced-people-notice']")
+        assert "空の行" not in note
+
+    def test_one_id_with_many_rows_is_pointed_out(self, ui: UiHarness) -> None:
+        self._open_with(ui, self._with_people_of_history(one_id_holds_many_rows=True))
+
+        note = ui.page.inner_text("[data-testid='advanced-one-id-notice']")
+        assert "会員ID" in note
+        ui.check_a11y()
+
     def test_a_result_counted_in_people_says_nothing_of_rows(
         self, ui: UiHarness
     ) -> None:

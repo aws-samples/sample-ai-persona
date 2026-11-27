@@ -101,6 +101,17 @@ class AnalysisStage:
         ]
 
     @staticmethod
+    def _history_person(reading: Optional[TableReading]) -> dict[str, Any]:
+        """The person column of a history table, as the user confirmed it.
+
+        Only such a table's people may be a result's population
+        (``people:source_n``); the check refuses any other column.
+        """
+        if reading is None or reading.kind != "history" or reading.person_id is None:
+            return {}
+        return {"history_person_id": reading.person_id, "skip": reading.skip}
+
+    @staticmethod
     def _skipped(state: Run) -> set[str]:
         """Columns of the guide table that are no trait (what the user confirmed)."""
         guide = next((t.alias for t in state.tables if t.source is state.source), None)
@@ -492,12 +503,14 @@ class AnalysisStage:
                 reason=REASON_MISSING_HASH,
                 failures=0,
             )
+        readings = {r.alias: r for r in state.reading}
         extra: dict[str, Any] = {
             "tables": [
                 AnalysisTable(
                     t.alias,
                     t.source.source_file_id,
                     tuple(str(c.get("name")) for c in t.profile.get("columns") or []),
+                    **self._history_person(readings.get(t.alias)),
                 )
                 for t in state.tables
             ]

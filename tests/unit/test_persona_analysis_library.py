@@ -1888,6 +1888,214 @@ class TestEmitAndFinalize:
         )
 
 
+# --- the people of a history table as the population ------------------------
+
+_HISTORY_SOURCES = {"source_1": "hist"}
+#: What the user confirmed for the history table (the app sends it).
+_HISTORY_PEOPLE = {"source_1": {"person_id": "利用者", "skip": ["利用者", "店舗"]}}
+_HISTORY_PEOPLE_COUNT = 20
+_HISTORY_ID_ROWS = 39
+#: Rows that name no person: two empty and one of blanks only.
+_HISTORY_NO_ID_ROWS = 3
+
+
+def _history_csv() -> bytes:
+    """A history with no people table: person i has 1 + i % 3 rows."""
+    lines = ["利用者,金額,日付,店舗"]
+    for i in range(_HISTORY_PEOPLE_COUNT):
+        for n in range(1 + i % 3):
+            lines.append(f"U{i:02d},{100 * (n + 1)},2026-0{1 + n}-1{i % 9},S{i % 2}")
+    lines += [",500,2026-03-01,S0", ",700,2026-03-02,S1", "  ,900,2026-03-03,S0"]
+    return ("\n".join(lines) + "\n").encode()
+
+
+@pytest.fixture()
+def history(lib: ModuleType, tmp_path: Path) -> None:
+    assert _prepare(lib, tmp_path, _history_csv(), source_id="hist")["ok"]
+    (tmp_path / "persona_analysis.py").write_bytes(_LIBRARY_PATH.read_bytes())
+
+
+def _finalize_history(
+    lib: ModuleType, workdir: Path, people: Any = _HISTORY_PEOPLE
+) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "work_dir": "ai_work/t1",
+        "pgid_file": "ai_work/t1.pgid",
+        "sources": _HISTORY_SOURCES,
+        "session_library": str(workdir / "persona_analysis.py"),
+    }
+    if people is not None:
+        args["people"] = people
+    result = lib.dispatch("finalize_ai_result", args, str(workdir))
+    assert result["ok"] is True
+    return result["value"]
+
+
+_EMIT_PEOPLE_BY_ROWS = """
+p = person_profile(read_table("source_1"), "利用者", skip=["店舗"])
+p["seg"] = ["many" if n >= 2 else "one" for n in p["回数（行）"]]
+emit_result(p, "seg", "people:source_1", id_column="利用者")
+"""
+
+
+class TestPeopleOfHistory:
+    """``people:source_n``: the distinct people of a history table are counted."""
+
+    def test_the_app_reads_the_same_population_sources(self, lib: ModuleType) -> None:
+        from src.models import analysis
+
+        assert lib._POPULATION_SOURCE.pattern == analysis._POPULATION_SOURCE.pattern
+
+    def test_the_people_with_an_id_are_the_population(
+        self, lib: ModuleType, tmp_path: Path, history: None
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_PEOPLE_BY_ROWS, sources=_HISTORY_SOURCES)
+
+        value = _finalize_history(lib, tmp_path)
+
+        assert value["error"] is None
+        result = value["result"]
+        assert result["population_source"] == "people:source_1"
+        assert result["population"] == _HISTORY_PEOPLE_COUNT
+        sizes = {s["segment_key"]: s["size"] for s in result["segments"]}
+        assert sizes == {"many": 13, "one": 7}
+
+    def test_rows_without_an_id_are_counted_not_refused(
+        self, lib: ModuleType, tmp_path: Path, history: None
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_PEOPLE_BY_ROWS, sources=_HISTORY_SOURCES)
+
+        result = _finalize_history(lib, tmp_path)["result"]
+
+        assert result["source_rows"] == _HISTORY_ID_ROWS + _HISTORY_NO_ID_ROWS
+        assert result["rows_without_id"] == _HISTORY_NO_ID_ROWS
+        # the most rows one ID has (a value standing for "no one" shows here)
+        assert result["largest_id_rows"] == 3
+
+    def test_features_count_each_person_once(
+        self, lib: ModuleType, tmp_path: Path, history: None
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_PEOPLE_BY_ROWS, sources=_HISTORY_SOURCES)
+
+        result = _finalize_history(lib, tmp_path)["result"]
+
+        by_key = {s["segment_key"]: s["features"] for s in result["segments"]}
+        rows = next(f for f in by_key["many"] if f["name"] == "回数（行）")
+        # per person, not per row: 7 people with 2 rows and 6 with 3
+        assert rows["kind"] == "mean"
+        assert rows["value"] == round(32 / 13, 4)
+        assert rows["baseline"] == round(_HISTORY_ID_ROWS / _HISTORY_PEOPLE_COUNT, 4)
+        names = {f["name"] for f in by_key["many"]}
+        assert {"金額の合計", "金額の平均", "最後からの日数"} <= names
+        # the person's ID and the columns the user skipped are no feature
+        assert not any(n.startswith(("利用者", "店舗")) for n in names)
+
+    def test_rfm_of_a_history_alone_is_accepted(
+        self, lib: ModuleType, tmp_path: Path, history: None
+    ) -> None:
+        # who may leave: the RFM scores of the history, with no people table
+        code = (
+            's = rfm(read_table("source_1"), "利用者", "日付", "金額")\n'
+            's["seg"] = ["離反の恐れ" if r <= 2 else "その他" for r in s["r_score"]]\n'
+            'emit_result(s, "seg", "people:source_1", id_column="利用者",'
+            ' metrics=["recency", "frequency", "monetary"])\n'
+        )
+        _run_ai(lib, tmp_path, code, sources=_HISTORY_SOURCES)
+
+        value = _finalize_history(lib, tmp_path)
+
+        assert value["error"] is None
+        result = value["result"]
+        assert result["population"] == _HISTORY_PEOPLE_COUNT
+        assert sum(s["size"] for s in result["segments"]) == _HISTORY_PEOPLE_COUNT
+
+    def test_the_id_column_must_be_the_confirmed_person_column(
+        self, lib: ModuleType, tmp_path: Path, history: None
+    ) -> None:
+        code = (
+            'h = read_table("source_1")\n'
+            'p = h.groupby("店舗").size().rename("n").reset_index()\n'
+            'p["seg"] = ["a", "b"]\n'
+            'emit_result(p, "seg", "people:source_1", id_column="店舗")\n'
+        )
+        _run_ai(lib, tmp_path, code, sources=_HISTORY_SOURCES)
+
+        value = _finalize_history(lib, tmp_path)
+
+        assert value["result"] is None and value["error"] == "ID_COLUMN_MISMATCH"
+
+    @pytest.mark.parametrize(
+        "people",
+        [
+            None,  # the app confirmed no history table
+            {"source_2": {"person_id": "利用者", "skip": []}},  # another table
+            {"source_1": {"person_id": None, "skip": []}},  # no person column
+        ],
+    )
+    def test_a_table_without_a_confirmed_person_column_is_refused(
+        self, lib: ModuleType, tmp_path: Path, history: None, people: Any
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_PEOPLE_BY_ROWS, sources=_HISTORY_SOURCES)
+
+        value = _finalize_history(lib, tmp_path, people=people)
+
+        assert value["result"] is None and value["error"] == "PEOPLE_SOURCE_INVALID"
+
+    @pytest.mark.parametrize(
+        ("code", "error", "context"),
+        [
+            (
+                'p = person_profile(read_table("source_1"), "利用者").iloc[1:]\n'
+                'p["seg"] = "a"\n'
+                'emit_result(p, "seg", "people:source_1", id_column="利用者")',
+                "ID_MISMATCH",
+                {
+                    "population_rows": 20,
+                    "result_rows": 19,
+                    "not_in_result": 1,
+                    "not_in_population": 0,
+                },
+            ),
+            (
+                'h = read_table("source_1")\n'
+                'p = h[h["利用者"].fillna("").str.strip() != ""][["利用者"]].copy()\n'
+                'p["seg"] = "a"\n'
+                'emit_result(p, "seg", "people:source_1", id_column="利用者")',
+                "DUPLICATE_IDS",
+                {"side": "result", "rows": _HISTORY_ID_ROWS, "distinct_ids": 20},
+            ),
+        ],
+    )
+    def test_the_result_must_still_hold_every_person_once(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        history: None,
+        code: str,
+        error: str,
+        context: dict[str, Any],
+    ) -> None:
+        _run_ai(lib, tmp_path, code, sources=_HISTORY_SOURCES)
+
+        value = _finalize_history(lib, tmp_path)
+
+        assert value["result"] is None
+        assert value["error"] == error and value["error_context"] == context
+
+    def test_the_history_itself_as_the_population_is_still_refused(
+        self, lib: ModuleType, tmp_path: Path, history: None
+    ) -> None:
+        code = (
+            'h = read_table("source_1")\nh["seg"] = "a"\n'
+            'emit_result(h, "seg", "source_1", id_column="利用者")\n'
+        )
+        _run_ai(lib, tmp_path, code, sources=_HISTORY_SOURCES)
+
+        value = _finalize_history(lib, tmp_path)
+
+        assert value["error"] == "POPULATION_ID_MISSING"
+
+
 # --- security review: a process that left the group (fork + setsid) --------
 
 _ESCAPE = (

@@ -805,10 +805,69 @@ def test_detailed_analysis_joins_two_tables_and_records_the_code(
         page.close()
 
 
+HISTORY_ONLY_CSV = DATA_DIR / "advanced_history_only.csv"
+#: Rows of HISTORY_ONLY_CSV whose customer_id is empty (purchases of no member).
+HISTORY_ROWS_WITHOUT_ID = 6
+
+
+def test_detailed_analysis_counts_the_people_of_a_history_alone(
+    session_context: BrowserContext, run_tag: str
+) -> None:
+    """③ Only a history (no people table): its customers are the population."""
+    page = session_context.new_page()
+    form = _open_section(page)
+    before = _section_state(form)
+    try:
+        switch = form.get_by_test_id("advanced-setting-detailed")
+        if switch.get_attribute("aria-checked") != "true":
+            if _vanished_checked(form):
+                pytest.skip(
+                    "the stored setting holds a department this environment does"
+                    " not have; turn the detailed analysis on by hand first"
+                )
+            switch.click()
+            _save_section(page, form)
+
+        _open_advanced_page(page)
+        expect(page.get_by_test_id("advanced-detailed-analysis")).to_be_checked()
+        _upload_named(page, HISTORY_ONLY_CSV)
+        page.get_by_test_id("advanced-purpose").fill(
+            f"{run_tag} 離反しそうな顧客の特徴を知りたい"
+        )
+        page.get_by_test_id("advanced-persona-count").select_option(str(PERSONA_COUNT))
+        page.get_by_test_id("advanced-generate-button").click()
+        page.locator(
+            '[data-testid="advanced-result"],'
+            ' [data-testid="advanced-failure"]:not([hidden])'
+        ).first.wait_for(timeout=GENERATION_TIMEOUT_MS)
+        failure = page.get_by_test_id("advanced-failure")
+        assert failure.is_hidden(), f"generation failed: {failure.inner_text()}"
+
+        # the counts are of customers, and the rows of no member are told
+        notice = page.get_by_test_id("advanced-people-notice")
+        expect(notice).to_contain_text("customer_id")
+        expect(notice).to_contain_text(f"空の行 {HISTORY_ROWS_WITHOUT_ID} 行")
+        expect(page.get_by_test_id("advanced-rows-notice")).to_have_count(0)
+        expect(page.get_by_test_id("advanced-segments-rest")).to_have_count(0)
+
+        page.get_by_test_id("advanced-result").get_by_role(
+            "button", name="分析の詳細"
+        ).click()
+        record = page.get_by_test_id("advanced-record")
+        expect(record).to_be_visible()
+        kinds = record.get_by_test_id("advanced-record-code-kind")
+        expect(kinds.filter(has_text="AI による詳細分析").first).to_be_visible()
+        page.keyboard.press("Escape")
+    finally:
+        _restore_section(page, before)
+        page.close()
+
+
 # Files this module uploads. Each user may hold only ADVANCED_UPLOAD_MAX_FILES
 # files, so leftovers from earlier runs stop later uploads from starting at all.
 _OWN_UPLOAD_NAME = re.compile(
-    r"^(E2E-\d+-|advanced_sample|interview_sample|advanced_customers|advanced_purchases)"
+    r"^(E2E-\d+-|advanced_sample|interview_sample|advanced_customers|advanced_purchases"
+    r"|advanced_history_only)"
 )
 
 

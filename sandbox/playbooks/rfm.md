@@ -14,10 +14,24 @@
    - `r_score`・`f_score`・`m_score`: 1〜5 の点（新しく、よく、多く買う人ほど高い）。
 3. 点の組み合わせで層を作る（例: R と F がどちらも 4 以上なら「優良」、R が 2 以下なら「離反の恐れ」）。
 4. 1 行 1 人の表として `emit_result` を 1 回だけ呼ぶ。
-   - 履歴の表は 1 人に複数行があるので、その表をそのまま母数にはできない。人ごとの表（1 行 1 人の表）があれば `join_tables` で結合し、結合した表で割り当てる。
-   - 履歴の表しかないときは、`rfm` の結果を人の一覧として使えない（母数の表と人が一致しない）。決まった関数で分析を続ける。
+   - 履歴の表は 1 人に複数行があるので、その表をそのまま母数（`source_n`）にはできない。人ごとの表（1 行 1 人の表）があれば `join_tables` で結合し、結合した表で割り当てる。
+   - 履歴の表しかないときは、`rfm` の結果をそのまま渡し、母数を `people:source_n`、`id_column` を `data_reading` の `person_id` にする。人の ID が空の行は、どの人にも数えない（件数は記録に出る）。
 
-## emit_result の形
+## 履歴の表しかないときの emit_result の形
+
+```python
+scores = rfm(read_table("source_1"), "customer_id", "bought_on", "amount")
+scores["segment"] = [
+    "優良" if r >= 4 and f >= 4 else ("離反の恐れ" if r <= 2 else "その他")
+    for r, f in zip(scores["r_score"], scores["f_score"])
+]
+emit_result(
+    scores, "segment", "people:source_1", id_column="customer_id",
+    metrics=["recency", "frequency", "monetary"],
+)
+```
+
+## 人ごとの表があるときの emit_result の形
 
 ```python
 scores = rfm(read_table("source_2"), "customer_id", "bought_on", "amount")
