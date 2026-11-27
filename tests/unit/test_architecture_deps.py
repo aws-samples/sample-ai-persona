@@ -436,6 +436,7 @@ _ADVANCED_LAYERS: dict[str, int] = {
     "join_planner": 0,
     "persona_check": 0,
     "segment_features": 0,
+    "call_results": 0,
 }
 #: The only import allowed between two stage classes (the reader's end
 #: goes through the finishing stage).

@@ -587,6 +587,16 @@ class TestSourceArgument:
 
         assert sandbox.calls == [("profile_dataset", {"source_id": "f1"})]
 
+    def test_the_call_names_the_table_it_read(self) -> None:
+        sandbox = _SpySandbox()
+        service = _detailed(sandbox)
+        tools = _by_name(service)
+
+        tools["profile_dataset"](source="source_2")
+        tools["load_playbook"](name="rfm")
+
+        assert [c.table for c in service.calls] == ["source_2", None]
+
 
 class TestRunCode:
     def test_runs_in_a_fresh_folder_and_returns_the_recounted_result(self) -> None:
@@ -634,6 +644,32 @@ class TestRunCode:
         assert verify_args["people"] == {
             "source_2": {"person_id": "id", "skip": ["id", "store"]}
         }
+
+    def test_a_refused_result_keeps_the_counts_of_the_check_on_the_call(
+        self,
+    ) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.final = {
+            "result": None,
+            "error": "DUPLICATE_IDS",
+            "error_context": {"side": "result", "rows": 31, "distinct_ids": 30},
+        }
+        service = _detailed(sandbox)
+
+        _by_name(service)["run_code"](code="x = 1")
+
+        (call,) = service.calls
+        assert call.error_code == "DUPLICATE_IDS"
+        assert call.check_counts == {"side": "result", "rows": 31, "distinct_ids": 30}
+
+    def test_a_code_error_keeps_no_counts(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.final = {"result": None, "error": "ID_MISMATCH"}
+        service = _detailed(sandbox)
+
+        _by_name(service)["run_code"](code="x = 1")
+
+        assert service.calls[0].check_counts is None
 
     def test_no_history_table_sends_no_people(self) -> None:
         sandbox = _CodeSandbox()

@@ -1524,6 +1524,187 @@ class TestRecordReadsAsTheFlowOfTheAnalysis:
         ui.check_a11y()
 
 
+_TABLE_READ = {
+    "name": "pos.csv",
+    "rows_read": 1_471_388,
+    "rows_excluded": 0,
+    "columns": 17,
+    "types": {"number": 6, "text": 9, "date": 1, "other": 1},
+    "missing": [{"name": "会員ID", "count": 87_568}],
+}
+_REFUSED = {
+    "tool_call_id": "tc-3",
+    "tool": "run_code",
+    "ok": False,
+    "error_code": "DUPLICATE_IDS",
+    "result": {
+        "failure": "DUPLICATE_IDS",
+        "counts": {"side": "result", "rows": 13_402, "distinct_ids": 7_933},
+    },
+}
+_ACCEPTED = {
+    "tool_call_id": "tc-4",
+    "tool": "run_code",
+    "ok": True,
+    "result": {
+        "population": 7_933,
+        "unit": "people",
+        "history": {
+            "id_column": "会員ID",
+            "source_rows": 1_471_388,
+            "rows_without_id": 87_568,
+        },
+        "groups": [
+            {
+                "label": "離反リスク高<script>alert(1)</script>",
+                "size": 2_221,
+                "share": 0.28,
+                "features": [
+                    {
+                        "name": "最後からの日数",
+                        "kind": "mean",
+                        "value": 100.6,
+                        "baseline": 43.9,
+                    }
+                ],
+            },
+            {"hidden": True},
+        ],
+    },
+}
+
+
+class TestRecordShowsWhatEachStepFound:
+    """Each step tells what it found: counted aggregates, never rows."""
+
+    def _open(self, ui: UiHarness, *calls: dict, tables: tuple = ()) -> str:
+        record = s.record().update(tool_calls=calls, table_summaries=tables)
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            fragment="<h2>分析の詳細</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html", record=record
+            ),
+        )
+        ui.settle()
+        return ui.page.inner_text("[data-testid='advanced-record-run']")
+
+    def _open_all_results(self, ui: UiHarness) -> None:
+        for summary in ui.page.locator(
+            "[data-testid='advanced-record-run'] details > summary"
+        ).all():
+            summary.click()
+
+    def test_the_reading_of_the_table_comes_first(self, ui: UiHarness) -> None:
+        self._open(ui, tables=(_TABLE_READ,))
+        self._open_all_results(ui)
+
+        table = ui.page.inner_text("[data-testid='advanced-record-table']")
+        assert "pos.csv" in table and "1,471,388 行" in table
+        assert "17 列" in table and "数値 6" in table and "日時 1" in table
+        assert "会員ID 87,568 行（6.0%）" in table
+        ui.check_a11y()
+
+    def test_an_accepted_result_shows_the_people_and_the_groups(
+        self, ui: UiHarness
+    ) -> None:
+        self._open(ui, _REFUSED, _ACCEPTED)
+        self._open_all_results(ui)
+
+        calls = ui.page.locator("[data-testid='advanced-record-call']")
+        results = ui.page.locator("[data-testid='advanced-record-call-result']")
+        accepted = calls.nth(1).inner_text()
+        assert "2 回目" in accepted and "受け付けました" in accepted
+        assert "会員ID ごとに数えた人" in accepted and "7,933 人" in accepted
+        assert "87,568 行" in accepted and "6.0%" in accepted
+        rows = results.nth(1).locator("tbody tr")
+        first = rows.nth(0).inner_text()
+        assert "2,221" in first and "28%" in first
+        assert "最後からの日数 100.6（全体 43.9）" in first
+        # a group's name is text, never markup
+        assert "<script>" in first
+        assert ui.page.query_selector("script:has-text('alert(1)')") is None
+        assert "人数が少ないため伏せています" in rows.nth(1).inner_text()
+        assert "システムがデータから数え直した値" in accepted
+        ui.check_a11y()
+
+    def test_a_refused_result_tells_why_in_words_with_its_counts(
+        self, ui: UiHarness
+    ) -> None:
+        self._open(ui, _REFUSED, _ACCEPTED)
+        self._open_all_results(ui)
+
+        text = (
+            ui.page.locator("[data-testid='advanced-record-call']").nth(0).inner_text()
+        )
+        assert "1 回目" in text and "受け付けませんでした" in text
+        assert "同じ人が重複" in text and "13,402 行に 7,933 人" in text
+        assert "ペルソナの根拠に使っていません" in text
+
+    def test_rows_of_a_history_are_counted_as_rows(self, ui: UiHarness) -> None:
+        cluster = {
+            "tool_call_id": "tc-1",
+            "tool": "cluster_segments",
+            "ok": True,
+            "result": {
+                "population": 500,
+                "unit": "rows",
+                "groups": [
+                    {"label": "グループ 1", "size": 500, "share": 1.0, "features": []}
+                ],
+            },
+        }
+        self._open(ui, cluster)
+        self._open_all_results(ui)
+
+        result = ui.page.inner_text("[data-testid='advanced-record-call-result']")
+        assert "行数" in result and "500 行" in result
+
+    def test_a_query_tells_the_rows_it_returned_only(self, ui: UiHarness) -> None:
+        query = {
+            "tool_call_id": "tc-1",
+            "tool": "analyze_dataset",
+            "ok": True,
+            "result": {"rows_returned": 12},
+        }
+        self._open(ui, query)
+        self._open_all_results(ui)
+
+        result = ui.page.inner_text("[data-testid='advanced-record-call-result']")
+        assert "12 行" in result and "値は記録していません" in result
+
+    def test_a_look_around_is_no_failure(self, ui: UiHarness) -> None:
+        # a run that ended without emit_result only looked at the data
+        look = {
+            "tool_call_id": "tc-1",
+            "tool": "run_code",
+            "ok": False,
+            "error_code": "NO_RESULT",
+        }
+        text = self._open(ui, look, _ACCEPTED)
+
+        assert "下見" in text
+        assert (
+            ui.page.locator("[data-testid='advanced-record-call-failed']").count() == 0
+        )
+        # the look is not counted as an attempt
+        assert "1 回目：結果を受け付けました" in text
+
+    def test_an_older_record_lists_the_steps_as_before(self, ui: UiHarness) -> None:
+        text = self._open(
+            ui,
+            {"tool_call_id": "t1", "tool": "profile_dataset", "ok": True},
+            {"tool_call_id": "t2", "tool": "run_code", "ok": False},
+        )
+
+        assert "データの全体像を確認" in text
+        assert (
+            ui.page.locator("[data-testid='advanced-record-call-result']").count() == 0
+        )
+        assert ui.page.locator("[data-testid='advanced-record-table']").count() == 0
+
+
 class TestRecordCodeKinds:
     def test_kinds_are_written_and_code_is_text(self, ui: UiHarness) -> None:
         ui.load_component(

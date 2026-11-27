@@ -88,6 +88,8 @@ def build_record(
     now: datetime,
     document_mode: Optional[DocumentMode] = None,
     ai_code: Sequence[tuple[str, str, str, Optional[str]]] = (),
+    call_results: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    table_summaries: Sequence[Mapping[str, Any]] = (),
 ) -> AnalysisRecord:
     """The analysis record: the code that ran and its hash.
 
@@ -97,6 +99,9 @@ def build_record(
     ``prepare`` per table, and ``ai_code`` (``tool_call_id``, code, sha256 of
     the successful ``run_code`` calls only) as ``ai_written`` blocks in the
     order they ran; failed calls stay in ``tool_calls`` with their code only.
+    ``call_results`` (call ID -> what the step found, counted aggregates only,
+    see ``call_results``) go on the calls as ``result``; ``table_summaries``
+    tell how each table was read.
     """
     blocks: list[dict[str, Any]] = []
     tables = [s for s in sources if s.kind is SourceKind.TABLE]
@@ -133,6 +138,7 @@ def build_record(
                 "sha256": library_sha256,
             }
         )
+    found = call_results or {}
     written = {call_id: (code, sha, title) for call_id, code, sha, title in ai_code}
     for c in calls:
         if c.tool == "run_code":
@@ -177,9 +183,15 @@ def build_record(
                 "ok": c.ok,
                 **({"error_code": c.error_code} if c.error_code else {}),
                 **_playbook_of(c),
+                **(
+                    {"result": dict(found[c.tool_call_id])}
+                    if c.tool_call_id in found
+                    else {}
+                ),
             }
             for c in calls
         ],
+        table_summaries=table_summaries,
     )
 
 

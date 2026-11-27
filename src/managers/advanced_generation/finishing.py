@@ -29,6 +29,7 @@ from ..shared.advanced_generation_log import log_advanced_event
 from . import documents, prompts
 from .analysis_policy import AnalysisPolicy
 from .analysis_verifier import AnalysisVerifier, VerificationResult
+from .call_results import call_result, table_summary
 from .errors import Cancelled, StopRun, fail
 from .results import build_analysis_run, build_candidates, build_record
 from .run_context import ENDED_REMOVES, RunContext, safe_context
@@ -139,6 +140,11 @@ class FinishingStage:
             now=now,
             document_mode=state.document_mode,
             ai_code=ai_code,
+            call_results=self._call_results(state),
+            table_summaries=[
+                table_summary(t.source.display_name, t.report, t.profile)
+                for t in state.tables
+            ],
         )
         candidates = build_candidates(
             generation=generation,
@@ -244,6 +250,26 @@ class FinishingStage:
         )
         columns = ", ".join(result.joined_columns) or "（なし）"
         return f"結合した列: {columns}" + (f"（{rates}）" if rates else "")
+
+    @staticmethod
+    def _call_results(state: Run) -> dict[str, dict[str, Any]]:
+        """What each tool call found, for the record (counted aggregates only)."""
+        emitted = state.tools.emitted_results() if state.budget is not None else {}
+        history = {r.alias: r.person_id for r in state.reading if r.kind == "history"}
+        skip = {c for r in state.reading for c in r.skip}
+        out: dict[str, dict[str, Any]] = {}
+        for call in state.tools.calls:
+            found = call_result(
+                call,
+                output=state.tools.output_of(call.tool_call_id),
+                emitted=emitted.get(call.tool_call_id),
+                segments=state.segments,
+                history_tables=history,
+                skip=skip,
+            )
+            if found is not None:
+                out[call.tool_call_id] = found
+        return out
 
     @staticmethod
     def _adopted_people_results(state: Run) -> list[tuple[Any, EmittedResult]]:

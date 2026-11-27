@@ -1022,6 +1022,9 @@ class AnalysisRecord:
             Empty in older records.
         source_display_names: Their display names, kept so the record can
             name a deleted file. Empty in older records.
+        table_summaries: How each table was read (rows, columns, their kinds
+            and the missing values; never a value of a row). Empty in older
+            records.
     """
 
     record_id: str
@@ -1036,6 +1039,7 @@ class AnalysisRecord:
     tool_calls: tuple[dict[str, Any], ...] = field(default=())
     source_file_ids: tuple[str, ...] = field(default=())
     source_display_names: tuple[str, ...] = field(default=())
+    table_summaries: tuple[dict[str, Any], ...] = field(default=())
 
     def __post_init__(self) -> None:
         for name in (
@@ -1044,6 +1048,7 @@ class AnalysisRecord:
             "tool_calls",
             "source_file_ids",
             "source_display_names",
+            "table_summaries",
         ):
             object.__setattr__(self, name, tuple(getattr(self, name)))
 
@@ -1063,6 +1068,7 @@ class AnalysisRecord:
         tool_calls: Sequence[Mapping[str, Any]] = (),
         source_file_ids: Sequence[str] = (),
         source_display_names: Sequence[str] = (),
+        table_summaries: Sequence[Mapping[str, Any]] = (),
     ) -> "AnalysisRecord":
         """A new record written at the end of a generation."""
         return cls(
@@ -1078,6 +1084,7 @@ class AnalysisRecord:
             tool_calls=tuple(dict(c) for c in tool_calls),
             source_file_ids=tuple(source_file_ids),
             source_display_names=tuple(source_display_names),
+            table_summaries=tuple(dict(t) for t in table_summaries),
         )
 
     def update(self, **changes: Any) -> "AnalysisRecord":
@@ -1102,6 +1109,8 @@ class AnalysisRecord:
             data["source_file_ids"] = list(self.source_file_ids)
         if self.source_display_names:
             data["source_display_names"] = list(self.source_display_names)
+        if self.table_summaries:
+            data["table_summaries"] = [dict(t) for t in self.table_summaries]
         return data
 
     @classmethod
@@ -1121,4 +1130,5 @@ class AnalysisRecord:
             source_display_names=tuple(
                 str(n) for n in data.get("source_display_names", [])
             ),
+            table_summaries=tuple(dict(t) for t in data.get("table_summaries", [])),
         )

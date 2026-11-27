@@ -508,3 +508,78 @@ class TestPeopleOfAHistory:
         params = _current(env, gid).analysis_run.params
         assert params.get("rows_are_not_people") is True
         assert "people_from_history" not in params
+
+
+_EMIT_HISTORY_AS_PEOPLE = (
+    'df = read_table("source_1")\ndf["seg"] = "a"\n'
+    'emit_result(df, "seg", "source_1", id_column="id")\n'
+)
+
+
+def _refused_then_rows(tools: dict, holder: dict, source_id: str) -> dict:
+    """A refused run_code result, then the fixed cluster on the rows."""
+    tools["run_code"](code=_EMIT_HISTORY_AS_PEOPLE)
+    return _rows_cluster(tools, holder, source_id)
+
+
+class TestRecordShowsWhatEachStepFound:
+    """The record keeps counted aggregates of each step, never rows."""
+
+    def test_an_accepted_result_and_the_tables_reading_are_in_the_record(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file(data=_history_csv()))
+        env.agents.analysis_fn = _code_analysis(code=_EMIT_PEOPLE)
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        (table,) = record.table_summaries
+        assert table["name"] == "people.csv" and table["rows_read"] == 82
+        assert table["missing"] == [{"name": "id", "count": 2}]
+        (run,) = [c for c in record.tool_calls if c["tool"] == "run_code"]
+        result = run["result"]
+        assert result["population"] == 40 and result["unit"] == "people"
+        assert result["history"] == {
+            "id_column": "id",
+            "source_rows": 82,
+            "rows_without_id": 2,
+        }
+        assert sorted(g["size"] for g in result["groups"]) == [20, 20]
+
+    def test_a_refused_result_keeps_its_reason_and_counts_only(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file(data=_history_csv()))
+        env.agents.analysis_fn = _refused_then_rows
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        refused, cluster = record.tool_calls[-2:]
+        assert refused["result"] == {
+            "failure": "POPULATION_ID_MISSING",
+            "counts": {"rows_without_id": 2},
+        }
+        # the fixed functions on a history count rows
+        assert cluster["result"]["unit"] == "rows"
+        assert cluster["result"]["population"] == 82
+
+    def test_what_the_code_printed_never_reaches_the_record(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis(failures=2)
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        # the steps' results (the accepted code itself is kept as code)
+        shown = json.dumps(
+            [record.tool_calls, record.table_summaries], ensure_ascii=False
+        )
+        for secret in ("print-secret", "77777", "boom-secret"):
+            assert secret not in shown
+        assert '"failure": "RUN_CODE_FAILED"' in shown

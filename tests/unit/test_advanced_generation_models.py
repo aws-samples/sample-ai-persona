@@ -837,6 +837,29 @@ class TestAnalysisRecordU2:
         assert again.source_file_ids == ("sf-1",)
         assert again.source_display_names == ("sales.csv (2)",)
 
+    def test_keeps_the_tables_read_and_each_steps_result(self):
+        tables = [{"name": "pos.csv", "rows_read": 10, "rows_excluded": 0}]
+        calls = [
+            {
+                "tool_call_id": "tc-1",
+                "tool": "cluster_segments",
+                "ok": True,
+                "result": {"population": 10, "unit": "people", "groups": []},
+            }
+        ]
+        record = self._record(table_summaries=tables, tool_calls=calls)
+
+        again = AnalysisRecord.from_dict(record.to_dict())
+
+        assert again.table_summaries == tuple(tables)
+        assert again.tool_calls[0]["result"]["population"] == 10
+
+    def test_an_older_record_has_no_table_summaries(self):
+        data = self._record().to_dict()
+
+        assert "table_summaries" not in data
+        assert AnalysisRecord.from_dict(data).table_summaries == ()
+
     def test_an_u1_record_has_neither(self):
         data = self._record().to_dict()
 

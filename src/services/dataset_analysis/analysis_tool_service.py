@@ -216,7 +216,10 @@ class ToolCall:
     """One tool call, kept for the Manager (IDs, counts and codes only).
 
     ``playbook`` is the name a successful ``load_playbook``
-    read: one of :data:`PLAYBOOK_NAMES`, never the user's data.
+    read: one of :data:`PLAYBOOK_NAMES`, never the user's data. ``table`` is
+    the alias of the table a fixed tool read. ``check_counts`` are the counts
+    the check of a refused ``run_code`` result sent (the known keys only, see
+    :func:`_check_context`).
     """
 
     tool_call_id: str
@@ -226,6 +229,8 @@ class ToolCall:
     elapsed_seconds: float
     output_chars: int
     playbook: Optional[str] = None
+    table: Optional[str] = None
+    check_counts: Optional[Dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -310,6 +315,7 @@ class AnalysisToolService:
         #: A sandbox failure seen during a tool call; the Manager fails on it.
         self.sandbox_error: Optional[CodedError] = None
         self._reading: Optional[str] = None  # the playbook being read
+        self._reading_table: Optional[str] = None  # the table a fixed tool reads
         self._on_call: Optional[Callable[[ToolCall], None]] = None
 
     # --- what the Manager reads ------------------------------------------------
@@ -364,6 +370,8 @@ class AnalysisToolService:
     def _record_call(self, call: ToolCall) -> None:
         if call.tool == "load_playbook" and call.ok and self._reading in PLAYBOOK_NAMES:
             call = replace(call, playbook=self._reading)
+        if self._reading_table is not None:
+            call = replace(call, table=self._reading_table)
         self.calls.append(call)
         if self._on_call is None:
             return
@@ -382,9 +390,21 @@ class AnalysisToolService:
         elapsed: float,
         context: Optional[Mapping[str, Any]] = None,
         detail: Optional[str] = None,
+        *,
+        check_counts: Optional[Mapping[str, Any]] = None,
     ) -> str:
         call_id = self._next_call_id()
-        self._record_call(ToolCall(call_id, tool_name, False, code, elapsed, 0))
+        self._record_call(
+            ToolCall(
+                call_id,
+                tool_name,
+                False,
+                code,
+                elapsed,
+                0,
+                check_counts=dict(check_counts) if check_counts else None,
+            )
+        )
         logger.info(
             "analysis tool failed: tool=%s tool_call_id=%s error_code=%s%s",
             tool_name,
@@ -493,7 +513,11 @@ class AnalysisToolService:
                 return self._fail(tool_name, "ANALYSIS_HALTED", 0.0)
             # An argument error: not a failure of run_code, nothing ran
             return self._fail(tool_name, table, 0.0, {"sources": sorted(self._tables)})
-        return self._run(tool_name, lambda: fn(table))
+        self._reading_table = table.alias
+        try:
+            return self._run(tool_name, lambda: fn(table))
+        finally:
+            self._reading_table = None
 
     # --- the three fixed tools -------------------------------------------------
 
@@ -919,7 +943,14 @@ class AnalysisToolService:
                 if code_error == value.get("error")
                 else None
             )
-            return self._fail(tool_name, code_error, elapsed, context, detail=detail)
+            return self._fail(
+                tool_name,
+                code_error,
+                elapsed,
+                context,
+                detail=detail,
+                check_counts=context,
+            )
         self._gate.record(RunCodeOutcome(ok=True))
         self.code_runs.append(CodeRun(call_id, code, _sha(code), True, result))
         self._emitted[call_id] = result

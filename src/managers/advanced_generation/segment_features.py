@@ -166,6 +166,13 @@ def _counted(items: Any, skip: Collection[str] = ()) -> tuple[dict[str, Any], ..
     return _ranked([f for f in made if f is not None and _column_of(f) not in skip])
 
 
+def ranked_features(
+    items: Any, skip: Collection[str] = ()
+) -> tuple[dict[str, Any], ...]:
+    """The counted features that are traits, the biggest differences first."""
+    return _counted(items, skip)
+
+
 def _cluster_features(segment: Segment, outputs: Mapping[str, Any]) -> Any:
     spec = segment.definition.get("spec")
     index = spec.get("cluster_index") if isinstance(spec, Mapping) else None
