@@ -3,14 +3,13 @@
 {% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
 {% from "components/status_label.html" import status_label %}
 {#
-  議論の一覧パーシャル（M6、U6）。タブ（list_tabpanel）の中身。
+  Discussion list partial. Content of the tab (list_tabpanel).
 
-  引数:
-    listing        ... src/models/sharing.py の TabbedList（items は Discussion の本体。
-                       発言は読まない。件数は message_count、名前は participant_names）
-    current_mode   ... mode の絞り込み
-    current_search ... 検索語
-    is_append      ... 「もっと見る」の追加分
+  Arguments:
+    listing        ... TabbedList from src/models/sharing.py (items are Discussion bodies; messages are not read. The count is message_count and names are participant_names)
+    current_mode   ... mode filter
+    current_search ... search term
+    is_append      ... the part added by "show more"
 #}
 {%- set tab = listing.tab.value -%}
 {%- set discussions = listing.items -%}
@@ -19,7 +18,7 @@
 {%- set extra = ("&mode=" ~ current_mode if current_mode else "") ~ ("&search=" ~ (current_search | urlencode) if current_search else "") -%}
 
 {%- if not is_append %}
-{# 絞り込みと検索がタブの中で動くよう、今のタブを持たせる（BR2.2） #}
+{# Carry the current tab so filtering and search work inside the tab. #}
 <input type="hidden" name="tab" value="{{ tab }}" data-discussion-tab>
 {%- if listing.search_truncated %}
 <p class="text-sm text-gray-700 mb-3" data-testid="discussion-search-truncated">新しい順に 500 件までを検索しました</p>
@@ -29,8 +28,7 @@
 {%- endif %}
 {%- endif %}
 
-{#- 種類で絞ると、続きがあっても読んだ範囲に該当がないことがある。そのときも「もっと見る」を出す。
-    「もっと見る」の追加分は、該当が 0 件でも件数の表示とボタン（続きがなければ消す）を返す #}
+{#- When filtering by kind, the range read so far may contain no match even though more remains. "Show more" is still shown in that case. The "show more" addition returns the count display and the button (removed when nothing remains) even when there are 0 matches. #}
 {% if discussions or listing.next_cursor or is_append %}
 {% if not is_append %}
 <div class="space-y-6" id="discussion-grid" data-busy-target>
@@ -97,7 +95,7 @@
             </div>
         </div>
 
-        <!-- 参加ペルソナ（保存したときの名前） -->
+        <!-- Participating personas (names at save time) -->
         {% if discussion.participants %}
         <div>
             <p class="text-sm text-gray-500 mb-2">参加ペルソナ ({{ discussion.participants|length }}名):</p>
@@ -117,7 +115,7 @@
 {% endif %}
 <p id="discussion-count-footer" class="text-sm text-gray-500 mt-4 text-center"
    {% if is_append %}hx-swap-oob="true"{% endif %}>
-    {#- 種類や検索で絞ったら、タブ全体の件数ではなく該当の数を出す。続きがあるか追加分のときは数が分からない #}
+    {#- When filtered by kind or search, show the number of matches instead of the count for the whole tab. The number is unknown when more remains or for an appended part. #}
     {%- if current_mode or current_search %}
     {%- if not listing.next_cursor and not is_append %}該当{{ discussions | length }}件{% endif %}
     {%- elif total is not none %}全{{ total }}件{% endif %}{% if listing.next_cursor %}（次あり）{% else %}（これで全て）{% endif %}

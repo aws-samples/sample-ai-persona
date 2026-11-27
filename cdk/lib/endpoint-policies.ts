@@ -1,40 +1,39 @@
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 /**
- * 閉域の VPC エンドポイントのポリシー（閉域対応 U2、NFR2、FR2.3、functional-spec.md §3、BR1.1〜BR1.9）。
+ * Policies for the closed-network VPC endpoints.
  *
- * アプリが使う 12 種のエンドポイントに、アクセス先をこのアプリの資源に絞るポリシーを付ける。
- * 使う人（プリンシパル）は絞らない（BR1.2）。資源の文は Action がそのサービスの `*`、一覧の API の
- * 文は Resource が `*` で Action がその API の名前だけ。ARN は手で書かず、AppStack がタスクロールの
- * 権限と同じ参照から EndpointAccessScope を作って渡す（BR1.3）。
+ * The 12 endpoints the app uses get a policy that limits access to this app's resources. The
+ * principal is not restricted. Resource statements allow the service's `*` action; list-API
+ * statements use Resource `*` with only that API's action. ARNs are never written by hand:
+ * AppStack builds an EndpointAccessScope from the same references as the task role permissions.
  *
- * ここは CDK の構成部品を作らない純粋な関数だけを置く（test/endpoint-policies.test.ts）。
- * ポリシーを付けるのは ClosedNetwork.restrictEndpoints。
+ * Only pure functions live here, with no CDK constructs (test/endpoint-policies.test.ts).
+ * ClosedNetwork.restrictEndpoints attaches the policies.
  */
 
 /**
- * リソースを指定できない一覧の API（タスクロールの `resources: ['*']` の文、U9 NFR7.16）。
- * AppStack.grantTaskRole とエンドポイントのポリシーの両方がこの定数を使う（BR1.3）。並びは
- * タスクロールの文のまま（公開構成のテンプレートを変えない、BR5.2）。
+ * List APIs that cannot take a resource (the task role's `resources: ['*']` statement).
+ * Both AppStack.grantTaskRole and the endpoint policies use this constant. The order matches
+ * the task role statement so the public template does not change.
  */
 export const TASK_LIST_ACTIONS: readonly string[] = Object.freeze([
   'dynamodb:ListTables',
-  // bedrock の一覧の 3 つ（ListFoundationModels など）はアプリのコードから呼ばないため外した
-  // （基盤設計 Q1 の A、NFR レビュー R-05）
+  // The three bedrock list APIs (ListFoundationModels etc.) are left out: the app code never calls them
   'bedrock-agentcore:ListMemories',
 ]);
 
-/** 実行ロールの一覧の API（CDK が ECR のイメージの取得に付ける。Resource は `*`）。 */
+/** List API of the execution role (CDK adds it for pulling ECR images; Resource is `*`). */
 export const EXECUTION_LIST_ACTIONS: readonly string[] = Object.freeze(['ecr:GetAuthorizationToken']);
 
 /**
- * アプリが呼ぶ、IAM で認可されない API（BR1.9）。ロールに文がないため、ここに別に持つ。
- * 今は cognito-idp:RevokeToken だけ（src/services/cognito/cognito_auth_service.py の revoke。
- * 要求はクライアントの ID と秘密で認可される）。
+ * APIs the app calls that IAM does not authorize. No role statement covers them, so they are
+ * kept here. Currently only cognito-idp:RevokeToken (revoke in
+ * src/services/cognito/cognito_auth_service.py; the request is authorized by the client ID and secret).
  */
 export const UNSIGNED_ACTIONS: readonly string[] = Object.freeze(['cognito-idp:RevokeToken']);
 
-/** ポリシーで絞るエンドポイント（ゲートウェイ型 2 とアプリが使うインターフェイス型 10、BR1.1）。 */
+/** Endpoints restricted by policy: 2 gateway types and the 10 interface types the app uses. */
 export type RestrictedEndpointService =
   | 's3'
   | 'dynamodb'
@@ -50,33 +49,33 @@ export type RestrictedEndpointService =
   | 'bedrock-agentcore-control';
 
 /**
- * エンドポイントのポリシーで許すアクセス先（entities.md の EndpointAccessScope）。
+ * Access targets the endpoint policies allow.
  *
- * 一覧の API と署名のない API は、ロールと同じ定数（TASK_LIST_ACTIONS・EXECUTION_LIST_ACTIONS・
- * UNSIGNED_ACTIONS）から取るため、ここには持たない。
+ * List APIs and unsigned APIs come from the same constants as the roles (TASK_LIST_ACTIONS,
+ * EXECUTION_LIST_ACTIONS, UNSIGNED_ACTIONS), so they are not held here.
  */
 export interface EndpointAccessScope {
-  /** アプリのアップロード用のバケット（オブジェクトは <ARN>/*）。 */
+  /** The app's upload bucket (objects are <ARN>/*). */
   readonly bucketArn: string;
-  /** ECR がイメージのレイヤーを置く AWS 管理のバケット（ecrLayerBucketArn）。読み取りだけ（BR1.5）。 */
+  /** AWS-managed bucket where ECR stores image layers (ecrLayerBucketArn); read-only. */
   readonly ecrLayerBucketArn: string;
-  /** タスクロールが読み書きするテーブルすべて（GSI は <ARN>/index/* を足す）。 */
+  /** All tables the task role reads and writes (GSIs add <ARN>/index/*). */
   readonly tableArns: readonly string[];
   readonly userPoolArn: string;
-  /** タスクの起動時に実行ロールが読む秘密すべて。 */
+  /** All secrets the execution role reads at task start. */
   readonly secretArns: readonly string[];
-  /** アプリのロググループの ARN（ロググループの ARN と、ログストリームを含む <ARN>:* の両方）。 */
+  /** The app's log group ARNs (both the log group ARN and <ARN>:* covering its log streams). */
   readonly logGroupArns: readonly string[];
   readonly repositoryArn: string;
-  /** この Stage の AgentCore Memory（子は <ARN>/* を足す）。 */
+  /** This Stage's AgentCore Memory (children add <ARN>/*). */
   readonly memoryArn: string;
-  /** BedrockArns の一覧そのもの（BR1.6）。 */
+  /** The BedrockArns list itself. */
   readonly inferenceArns: readonly string[];
-  /** このアカウント・リージョンの knowledge-base/*（タスクロールと同じ）。 */
+  /** knowledge-base/* in this account and region (same as the task role). */
   readonly knowledgeBaseArn: string;
-  /** アンケートのステートマシン（StartExecution、タスクロールと同じ）。 */
+  /** The survey state machine (StartExecution; same as the task role). */
   readonly stateMachineArn: string;
-  /** そのステートマシンの実行（DescribeExecution・StopExecution、タスクロールと同じ）。 */
+  /** Executions of that state machine (DescribeExecution, StopExecution; same as the task role). */
   readonly stateMachineExecutionsArn: string;
 }
 
@@ -108,7 +107,7 @@ const ecr: EndpointPolicyShape = {
   listActions: EXECUTION_LIST_ACTIONS,
 };
 
-/** functional-spec.md §3 の表（S3 のレイヤーのバケットの文は endpointPolicyStatements で足す）。 */
+/** Per-endpoint policy shapes (the S3 layer bucket statement is added in endpointPolicyStatements). */
 const POLICY_SHAPES: Readonly<Record<RestrictedEndpointService, EndpointPolicyShape>> = Object.freeze({
   s3: { prefix: 's3', resources: (s) => [s.bucketArn, `${s.bucketArn}/*`] },
   dynamodb: {
@@ -122,7 +121,7 @@ const POLICY_SHAPES: Readonly<Record<RestrictedEndpointService, EndpointPolicySh
   secretsmanager: { prefix: 'secretsmanager', resources: (s) => s.secretArns },
   'cognito-idp': { prefix: 'cognito-idp', resources: (s) => [s.userPoolArn], listActions: UNSIGNED_ACTIONS },
   'bedrock-runtime': { prefix: 'bedrock', resources: (s) => s.inferenceArns },
-  // アンケートの実行の開始・確認・停止（FR9.1、FR9.2、NFR6.2）。操作の絞り込みはタスクロールが受け持つ
+  // Starting, checking and stopping survey executions; narrowing the actions is left to the task role
   states: {
     prefix: 'states',
     resources: (s) => [s.stateMachineArn, s.stateMachineExecutionsArn],
@@ -132,15 +131,15 @@ const POLICY_SHAPES: Readonly<Record<RestrictedEndpointService, EndpointPolicySh
   'bedrock-agentcore-control': agentCore,
 });
 
-/** The endpoints that get a policy (BR1.1); the three SSM endpoints are not in it (BR1.7). */
+/** The endpoints that get a policy; the three SSM endpoints are not in it. */
 export const RESTRICTED_ENDPOINT_SERVICES: readonly RestrictedEndpointService[] = Object.freeze(
   Object.keys(POLICY_SHAPES) as RestrictedEndpointService[],
 );
 
 /**
- * The statements of one endpoint's policy (functional-spec.md §3): `<prefix>:*` on the app's
+ * The statements of one endpoint's policy: `<prefix>:*` on the app's
  * resources, the list or unsigned APIs on `*`, and for S3 `s3:GetObject` on the ECR layer bucket.
- * Every statement allows any principal (BR1.2).
+ * Every statement allows any principal.
  */
 export function endpointPolicyStatements(
   service: RestrictedEndpointService,
@@ -152,7 +151,7 @@ export function endpointPolicyStatements(
     statements.push(allow(shape.listActions, ['*']));
   }
   if (service === 's3') {
-    // BR1.5: タスクがイメージのレイヤーを取得するため（読み取りだけ）
+    // The task pulls image layers from here (read-only)
     statements.push(allow(['s3:GetObject'], [`${scope.ecrLayerBucketArn}/*`]));
   }
   return statements;

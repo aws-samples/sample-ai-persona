@@ -1,6 +1,5 @@
 """
-Cognito admin API client for the closed-network login (``AUTH_MODE=admin_api``,
-v1.0.0 U8, ``functional-spec.md`` "Cognito を呼ぶ層の約束").
+Cognito admin API client for the closed-network login (``AUTH_MODE=admin_api``).
 
 Calls ``AdminInitiateAuth`` (``ADMIN_USER_PASSWORD_AUTH`` and
 ``REFRESH_TOKEN_AUTH``), ``AdminRespondToAuthChallenge``
@@ -9,17 +8,17 @@ Calls ``AdminInitiateAuth`` (``ADMIN_USER_PASSWORD_AUTH`` and
 :class:`CognitoAuthError` with one of the closed-network login codes. The
 Manager never sees a boto3 exception.
 
-Timeouts (NFR9.39): connect 2 s + read 3 s, one attempt only; this layer never
+Timeouts: connect 2 s + read 3 s, one attempt only; this layer never
 retries, and ``AdminRespondToAuthChallenge`` is never resent because the
 Cognito session is single-use.
 
-Secrets (NFR3.15): passwords are only passed through to boto3. Exception
+Secrets: passwords are only passed through to boto3. Exception
 messages and logs carry the operation and Cognito's error *code* only; Cognito's
 message is read for the attempt-limit check and never copied, and the boto3
 exception chain is cut (``from None``) so a traceback cannot show the request.
 
-The ID token is returned as a string; its claims are checked by the Manager
-(BR3.1). No JWKS is fetched.
+The ID token is returned as a string; its claims are checked by the Manager.
+No JWKS is fetched.
 """
 
 import base64
@@ -40,7 +39,7 @@ from .circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
-#: botocore settings: at most 2 + 3 seconds and a single attempt (NFR9.39).
+#: botocore settings: at most 2 + 3 seconds and a single attempt.
 CLIENT_CONFIG = Config(
     connect_timeout=2,
     read_timeout=3,
@@ -59,7 +58,7 @@ _LOGIN_ERRORS: dict[str, ErrorCode] = {
     "TooManyRequestsException": ErrorCode.LOGIN_RATE_LIMITED,
     "LimitExceededException": ErrorCode.LOGIN_RATE_LIMITED,
 }
-#: Overrides for ``AdminRespondToAuthChallenge`` (BR2.6).
+#: Overrides for ``AdminRespondToAuthChallenge``.
 _RESPOND_ERRORS: dict[str, ErrorCode] = {
     **_LOGIN_ERRORS,
     "InvalidPasswordException": ErrorCode.PASSWORD_POLICY_NOT_MET,
@@ -168,7 +167,7 @@ class CognitoAuthService:
     # --- public API ------------------------------------------------------------
 
     def initiate_auth(self, email: str, password: str) -> AuthResult:
-        """Sign in with ``ADMIN_USER_PASSWORD_AUTH`` (BR1.2).
+        """Sign in with ``ADMIN_USER_PASSWORD_AUTH``.
 
         Raises:
             CognitoAuthError: ``LOGIN_FAILED`` / ``LOGIN_RATE_LIMITED`` /
@@ -193,7 +192,7 @@ class CognitoAuthService:
     def respond_new_password(
         self, username: str, new_password: str, session: str
     ) -> AuthResult:
-        """Answer ``NEW_PASSWORD_REQUIRED`` once; never resent (BR2.6, NFR9.39).
+        """Answer ``NEW_PASSWORD_REQUIRED`` once; never resent.
 
         Raises:
             CognitoAuthError: ``PASSWORD_POLICY_NOT_MET`` /
@@ -218,7 +217,7 @@ class CognitoAuthService:
         return self._result("new-password", response, previous_refresh_token=None)
 
     def refresh(self, username: str, refresh_token: str) -> CognitoTokens:
-        """Refresh with ``REFRESH_TOKEN_AUTH``; keeps the given refresh token (BR3.2).
+        """Refresh with ``REFRESH_TOKEN_AUTH``; keeps the given refresh token.
 
         Raises:
             CognitoAuthError: ``LOGIN_FAILED`` (permanent) or a TRANSIENT code.
@@ -246,7 +245,7 @@ class CognitoAuthService:
         return result
 
     def revoke(self, refresh_token: str) -> None:
-        """Revoke the refresh token (logout, BR3.3). Not behind the breaker.
+        """Revoke the refresh token (logout). Not behind the breaker.
 
         Raises:
             CognitoAuthError: The revocation did not succeed.
@@ -391,6 +390,6 @@ def _error_code_of(error: ClientError) -> str:
 
 
 def _attempts_exceeded(error: ClientError) -> bool:
-    """Whether ``NotAuthorizedException`` is Cognito's attempt limit (BR1.5)."""
+    """Whether ``NotAuthorizedException`` is Cognito's attempt limit."""
     message = str(error.response.get("Error", {}).get("Message", ""))
     return _ATTEMPTS_EXCEEDED in message.lower()

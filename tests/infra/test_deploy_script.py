@@ -1,7 +1,7 @@
-"""deploy.sh（v1.0.0）の検査（FR9.2、NFR9.9、cicd-pipeline.md、Infrastructure Design R-09・R-10）。
+"""Checks for deploy.sh.
 
-AWS・Docker・CDK には触れない。PATH の先頭に偽の aws・docker・npx・npm を置き、
-呼ばれたら記録して失敗するようにして、止まるべき所で止まることを確かめる。
+Does not touch AWS, Docker or CDK. Fake aws, docker, npx and npm are put at the head
+of PATH and record their calls and fail, to verify the script stops where it should.
 """
 
 import shutil
@@ -41,7 +41,7 @@ def _run(args: list[str], cwd: Path, path_prefix: Path) -> subprocess.CompletedP
 
 @pytest.fixture(scope="module")
 def template_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """deploy.sh と cdk/bin/app.ts だけを持つ Git の作業ツリー（1 度だけ作る）。"""
+    """A Git work tree holding only deploy.sh and cdk/bin/app.ts (built once)."""
     repo = tmp_path_factory.mktemp("template") / "repo"
     (repo / "cdk" / "bin").mkdir(parents=True)
     shutil.copy(SCRIPT, repo / "deploy.sh")
@@ -55,7 +55,7 @@ def template_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def workspace(tmp_path: Path, template_repo: Path) -> tuple[Path, Path, Path]:
-    """テストごとの作業ツリー（ひな形を複製するので、変更はほかのテストに残らない）。"""
+    """A per-test work tree (cloned from the template, so changes do not leak to other tests)."""
     repo = tmp_path / "repo"
     shutil.copytree(template_repo, repo, symlinks=True)
     calls = tmp_path / "calls.log"
@@ -77,7 +77,7 @@ def test_help_lists_the_three_options_without_touching_aws(workspace):
     assert result.returncode == 0
     for option in ("--restart-app", "--image-tag", "--region"):
         assert option in result.stdout
-    # v0 のオプションは消した
+    # v0 options were removed
     for removed in ("--skip-cognito", "--skip-memory", "--self-signup"):
         assert removed not in result.stdout
     assert calls.read_text() == ""
@@ -128,7 +128,7 @@ def test_changes_outside_the_image_do_not_stop_the_deploy(image_workspace, rel):
     result = _run([], repo, bin_dir)
 
     assert "未コミット" not in result.stdout + result.stderr
-    # 作業ツリーの検査を通り、AWS の呼び出しまで進む（偽の aws は失敗する）
+    # Passes the work tree check and reaches the AWS call (the fake aws fails)
     assert "aws sts get-caller-identity" in calls.read_text()
 
 
@@ -203,7 +203,7 @@ def test_region_option_reaches_every_cdk_deploy(workspace, tmp_path):
     deploys = [
         line for line in calls.read_text().splitlines() if " cdk deploy " in line
     ]
-    assert len(deploys) == 2  # ① Data・Edge と ③ App
+    assert len(deploys) == 2  # Data/Edge and App
     assert all("-c region=us-west-2" in line for line in deploys)
     bootstraps = [
         line for line in calls.read_text().splitlines() if "cdk bootstrap" in line
@@ -211,7 +211,7 @@ def test_region_option_reaches_every_cdk_deploy(workspace, tmp_path):
     assert any("aws://123/us-west-2" in line for line in bootstraps)
 
 
-# 閉域対応 U3（W6）: --nemotron-dataset-key は --closed のときだけ -c closedNemotronDatasetKey
+# --nemotron-dataset-key becomes -c closedNemotronDatasetKey only with --closed
 
 
 def _ok_tools(
@@ -299,9 +299,9 @@ def test_closed_deploy_without_the_key_passes_no_key_context(workspace, tmp_path
     assert "closedNemotronDatasetKey" not in calls.read_text()
 
 
-# 閉域対応 U5（BR1.9）: --inference-scope は対象の Stage のコンテキストだけに渡す。
-# 公開は -c inferenceScope=<値>、--closed は -c closedInferenceScope=<値>（閉域の synth は
-# 公開の Stage も組み立てるため、共通の名前だと公開にも効いてしまう）
+# --inference-scope is passed only to the context of the target Stage.
+# Public uses -c inferenceScope=<value>, --closed uses -c closedInferenceScope=<value> (the closed
+# synth also builds the public Stage, so a shared name would affect it too)
 
 
 def _deploys(calls: Path) -> list[str]:
@@ -368,8 +368,8 @@ def test_help_lists_inference_scope(workspace):
     assert calls.read_text() == ""
 
 
-# 閉域対応 U2（BR5.1）: --endpoint-az-count・--create-resolver-endpoint・--resolver-allowed-cidrs は
-# --closed のときだけ、2 回の cdk deploy にコンテキストとして渡す
+# --endpoint-az-count, --create-resolver-endpoint and --resolver-allowed-cidrs are passed to the
+# two cdk deploys as context only with --closed
 
 _U2_OPTIONS = [
     "--endpoint-az-count",
@@ -464,8 +464,8 @@ def test_redeploy_command_includes_the_closed_network_options(workspace, tmp_pat
     assert "--resolver-allowed-cidrs 10.1.0.0/16,10.2.0.0/16" in redeploy
 
 
-# コードレビューの指摘: Resolver と AZ の数は引数でしか渡らないため、付け忘れた再デプロイで
-# Resolver が消えたりエンドポイントが 1 AZ に寄ったりしないよう、デプロイ済みの App と比べて止める
+# The Resolver and AZ count are passed only as arguments, so compare with the deployed App and stop
+# to keep a redeploy that forgets them from removing the Resolver or collapsing endpoints into one AZ
 
 _RESOLVER = ["--create-resolver-endpoint", "--resolver-allowed-cidrs", "10.1.0.0/16"]
 

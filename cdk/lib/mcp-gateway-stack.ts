@@ -262,7 +262,7 @@ export class McpGatewayStack extends Stack {
     api.deploymentStage.node.addDependency(docVersion);
 
     // --- Cognito (M2M authentication for AgentCore Gateway) ---
-    // 全環境で RETAIN（project.md の Forbidden。v1.0.0 ではこのスタックを Stage から作らない）
+    // RETAIN in all environments (DESTROY is forbidden in this project; this stack is not created from the Stage in v1.0.0)
     const userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: `ai-persona-mcp-gw-${parameter.envName}`,
       signInCaseSensitive: false,

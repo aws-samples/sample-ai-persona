@@ -1,4 +1,4 @@
-"""Bulk selection (C5, WF6, NFR6.2, NFR6.5, NFR6.11, B10, B11)."""
+"""Bulk selection."""
 
 from typing import Any
 

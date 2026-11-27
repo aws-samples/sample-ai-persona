@@ -1,6 +1,6 @@
 """
 Persona Manager for AI Persona System.
-ペルソナのCRUD、バリデーション、KB/Datasetバインディング管理を担当する。
+Handles persona CRUD, validation and KB/Dataset binding management.
 """
 
 import logging
@@ -47,7 +47,11 @@ from ..services import country_service
 from ..services.stores.persona_store import PersonaStore, PersonaStoreError
 from ..services.service_factory import service_factory
 from ..models.asset_delivery import AssetHandle, DeliveryResult, SizeLimit
+from ..models.analysis import AnalysisRecord
+from ..models.source_file import SourceAvailability
 from .components.access_policy import AccessPolicy
+from .components.analysis_record_archive import AnalysisRecordArchive
+from .components.source_file_catalog import SourceFileCatalog
 from .components.asset_delivery import AssetDelivery
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
 from .components.participant_reader import ParticipantReader
@@ -86,7 +90,7 @@ def _utc_now() -> datetime:
 AVATAR_KEY_PREFIX = "persona_avatars"
 #: Lifetime of the presigned URL the avatar endpoint redirects to
 AVATAR_URL_EXPIRATION_SECONDS = 3600
-#: Most rows a search returns (BR3.8, unchanged from before v1.0.0)
+#: Most rows a search returns
 SEARCH_RESULT_LIMIT = 100
 
 _PERSONA = ResourceType.PERSONA
@@ -101,7 +105,7 @@ class PersonaManagerError(CodedError):
 
 @dataclass(frozen=True)
 class PersonaDetail:
-    """What the detail page shows (BR6.2, BR6.4).
+    """What the detail page shows.
 
     Attributes:
         persona: The persona (read with a strongly consistent read).
@@ -119,7 +123,7 @@ class PersonaDetail:
 
 @dataclass(frozen=True)
 class BindingRow:
-    """One binding as the detail page shows it (BR2.7, BR2.8).
+    """One binding as the detail page shows it.
 
     Attributes:
         target_id: The dataset or knowledge-base ID.
@@ -141,7 +145,7 @@ class BindingRow:
 
 @dataclass(frozen=True)
 class KbBindingView:
-    """The knowledge-base binding of a persona (BR2.1, BR4.2).
+    """The knowledge-base binding of a persona.
 
     Attributes:
         persona_id: The persona.
@@ -158,7 +162,7 @@ class KbBindingView:
 
 @dataclass(frozen=True)
 class DatasetBindingsView:
-    """The dataset bindings of a persona (BR2.1, BR4.2).
+    """The dataset bindings of a persona.
 
     Attributes:
         persona_id: The persona.
@@ -175,7 +179,7 @@ class DatasetBindingsView:
 
 @dataclass(frozen=True)
 class PersonaExport:
-    """A persona as a Markdown file (entities.md PersonaExport, BR7.1).
+    """A persona as a Markdown file.
 
     Attributes:
         filename: ``{name}.md`` with unusable characters replaced.
@@ -196,14 +200,14 @@ _UNSET: Any = object()
 
 class PersonaManager:
     """
-    ペルソナのCRUD操作とバインディング管理を行うManager。
-    記憶管理はPersonaMemoryManagerに委譲済み。
+    Manager for persona CRUD operations and binding management.
+    Memory management is delegated to PersonaMemoryManager.
 
-    v1.0.0 U4: 保存した人を所有者にし（BR6.1）、一覧・検索・詳細・編集・削除は
-    利用者（Principal）を受け取って ResourceSharing と AccessPolicy で判定する。
+    The saver becomes the owner, and list, search, detail, edit and delete
+    take the user (Principal) and are decided with ResourceSharing and AccessPolicy.
 
-    v1.0.0 U5: 紐付け（PersonaBindings）・プレビュー・候補からの保存・削除の後始末・
-    エクスポート・アバターの判定を持つ。
+    It also handles bindings (PersonaBindings), previews, saving from
+    candidates, cleanup after delete, export and avatar decisions.
     """
 
     def __init__(
@@ -222,6 +226,8 @@ class PersonaManager:
         clock: Callable[[], datetime] = _utc_now,
         participants: Optional[ParticipantReader] = None,
         asset_delivery: Optional[AssetDelivery] = None,
+        analysis_records: Optional[AnalysisRecordArchive] = None,
+        source_files: Optional[SourceFileCatalog] = None,
     ):
         """
         Args:
@@ -244,14 +250,19 @@ class PersonaManager:
             preview_service: Runs dataset previews (``SurveyBatchService``;
                 optional, built on first use)
             candidate_store: ``PersonaCandidates``; each candidate's hold is
-                confirmed right before it is saved (R-04; optional, built on
+                confirmed right before it is saved (optional, built on
                 first use)
             clock: UTC clock for the hold checks (tests pass a fake one)
             participants: Reads discussion / interview participants after the
-                decision (U6; built on first use)
-            asset_delivery: Serves the avatar (closed network U4; built from
+                decision (built on first use)
+            asset_delivery: Serves the avatar (built from
                 this Manager's S3 service and ``Config.ASSET_DELIVERY`` when
                 omitted)
+            analysis_records: The analysis records of advanced generation
+                candidates (built from this Manager's S3 service when
+                omitted, unused for ordinary candidates)
+            source_files: Whether the source files of an analysis record are
+                still there (built on first use)
         """
         self.logger = logging.getLogger(__name__)
         self._personas = persona_store or service_factory.get_persona_store()
@@ -274,6 +285,28 @@ class PersonaManager:
         self._clock = clock
         self._reader = participants
         self._delivery = asset_delivery
+        self._records = analysis_records
+        self._source_files = source_files
+
+    @property
+    def _source_file_catalog(self) -> SourceFileCatalog:
+        """The source file component (read only here; never deletes)."""
+        if self._source_files is None:
+            self._source_files = SourceFileCatalog(
+                service_factory.get_source_file_store(),
+                error_type=PersonaManagerError,
+                clock=self._clock,
+            )
+        return self._source_files
+
+    @property
+    def _analysis_records(self) -> Optional[AnalysisRecordArchive]:
+        """The record archive, or ``None`` without S3 (an advanced save then fails)."""
+        if self._records is None and self.s3_service is not None:
+            self._records = AnalysisRecordArchive(
+                self.s3_service, error_type=PersonaManagerError
+            )
+        return self._records
 
     @property
     def _asset_delivery(self) -> AssetDelivery:
@@ -364,7 +397,7 @@ class PersonaManager:
 
     def save_persona(self, principal: Principal, persona: Persona) -> str:
         """
-        Save a new persona owned by ``principal`` (BR6.1).
+        Save a new persona owned by ``principal``.
 
         The persona starts unshared; ``owner_sub`` never changes afterwards.
 
@@ -414,7 +447,7 @@ class PersonaManager:
 
     def get_persona(self, principal: Principal, persona_id: str) -> Persona:
         """
-        Read one persona the user may read (BR4.5).
+        Read one persona the user may read.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
@@ -431,10 +464,10 @@ class PersonaManager:
         self, principal: Principal, persona_ids: Sequence[str]
     ) -> List[Persona]:
         """
-        The personas a discussion or interview starts with (U6 BR2.8).
+        The personas a discussion or interview starts with.
 
         The personas are used to run AI, so ``ai:execute`` is checked first
-        (C12: the permission before the existence, so a missing persona is not
+        (the permission before the existence, so a missing persona is not
         told to a user without the permission). Every participant is decided
         next (one ``ResourceLookup`` read); the bodies are read only when all
         of them passed.
@@ -443,7 +476,7 @@ class PersonaManager:
             The personas in the given order (duplicates dropped).
 
         Raises:
-            AccessDeniedError: ``ai:execute`` がない
+            AccessDeniedError: No ``ai:execute``
             PersonaManagerError: ``PERSONA_ID_INVALID`` (no ID given)
             CodedError: ``PERSONA_NOT_FOUND`` when any is unreadable or missing
             LookupUnavailableError: The decision or the body read failed
@@ -459,7 +492,7 @@ class PersonaManager:
         return self._participant_reader.read_for_use(principal, ids)
 
     # ------------------------------------------------------------------
-    # Tabbed lists, search, detail (BR3, BR6.2〜BR6.4)
+    # Tabbed lists, search, detail
     # ------------------------------------------------------------------
 
     def list_personas(
@@ -469,8 +502,8 @@ class PersonaManager:
         One page of a tab, newest first (``all`` is in scan order).
 
         ``all`` without ``resource:read_all`` (and an unknown tab) is
-        ``mine`` (BR3.1). The rows are read again with a strongly consistent
-        batch read and rows the user can no longer read are left out (BR3.7).
+        ``mine``. The rows are read again with a strongly consistent
+        batch read and rows the user can no longer read are left out.
         Counts are only computed for the first page.
 
         Raises:
@@ -491,7 +524,7 @@ class PersonaManager:
         self, principal: Principal, tab: str | None, query: str
     ) -> TabbedList[Persona]:
         """
-        Search names, occupations and backgrounds inside one tab (BR3.8).
+        Search names, occupations and backgrounds inside one tab.
 
         ``mine`` / ``shared`` look at the newest 500 items of their index
         (``search_truncated`` tells when more existed); ``all`` scans the
@@ -517,7 +550,7 @@ class PersonaManager:
             )
             # The index read above already holds the whole tab unless it was
             # cut off; then the count is unknown and the truncation notice
-            # is shown instead (R-06: no second read for the count).
+            # is shown instead (no second read for the count).
             total = None if truncated else len(ids)
             personas = self._readable(principal, ids)
         matched = [p for p in personas if _matches(p, query)][:SEARCH_RESULT_LIMIT]
@@ -556,7 +589,7 @@ class PersonaManager:
         self, principal: Principal, persona_id: str
     ) -> PersonaDetail:
         """
-        The detail page of a persona the user may read (BR6.2, BR6.4).
+        The detail page of a persona the user may read.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
@@ -570,10 +603,10 @@ class PersonaManager:
 
     def describe_persona(self, principal: Principal, persona: Persona) -> PersonaDetail:
         """
-        The detail rows (owner and shares, BR6.4) of a persona already read.
+        The detail rows (owner and shares) of a persona already read.
 
         Used by the detail page and by the response to an edit, so the
-        header shows the same rows before and after saving (R-07). Nothing is
+        header shows the same rows before and after saving. Nothing is
         read again: the owner name comes from the owner copy and the
         department names from the department directory (display only).
 
@@ -599,7 +632,7 @@ class PersonaManager:
 
     def get_persona_for_edit(self, principal: Principal, persona_id: str) -> Persona:
         """
-        The persona for the edit form; the user must manage it (BR6.2).
+        The persona for the edit form; the user must manage it.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
@@ -638,7 +671,7 @@ class PersonaManager:
         )
 
     def _readable(self, principal: Principal, ids: List[str]) -> List[Persona]:
-        """Bodies of ``ids`` (in order) that the user can still read (BR3.7)."""
+        """Bodies of ``ids`` (in order) that the user can still read."""
         if not ids:
             return []
         found = self._read_bodies(lambda: self._personas.get_many(ids))
@@ -681,7 +714,7 @@ class PersonaManager:
         return counts
 
     def _owner_labels(self, personas: Iterable[Persona]) -> Dict[str, str] | None:
-        """Row id -> owner label (BR5.2); ``None`` when the copy is unavailable."""
+        """Row id -> owner label; ``None`` when the copy is unavailable."""
         rows = list(personas)
         subs = {p.owner_sub for p in rows if p.owner_sub}
         labels = self._owners.labels(subs)
@@ -738,7 +771,7 @@ class PersonaManager:
 
     def delete_persona(self, principal: Principal, persona_id: str) -> bool:
         """
-        Delete a persona the user manages, with its department shares (BR4).
+        Delete a persona the user manages, with its department shares.
 
         ``ResourceSharing.delete_with_shares`` reads the persona strongly,
         judges ``ensure_manageable`` on that body and deletes it together with
@@ -754,7 +787,7 @@ class PersonaManager:
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or already
-                missing (the same answer, NFR1.14)
+                missing (the same answer)
             AccessDeniedError: Readable but not manageable (403)
             PersonaManagerError: If deletion operation fails
         """
@@ -785,10 +818,11 @@ class PersonaManager:
         return True
 
     def _clean_up_after_delete(self, persona_id: str, deleted: Dict[str, Any]) -> None:
-        """Remove what belonged to a deleted persona (BR3.1〜BR3.3).
+        """Remove what belonged to a deleted persona.
 
         Bindings (after noting the dedicated datasets), long-term memory, the
-        dedicated datasets and the avatar, in that order. Every step runs even
+        dedicated datasets, the avatar and the analysis record copy of an
+        advanced generation's persona, in that order. Every step runs even
         when an earlier one failed; failures are ``persona.cleanup_failed``
         lines, never errors to the user.
         """
@@ -810,8 +844,8 @@ class PersonaManager:
 
         memory = self._memory_service
         if memory is None and config.ENABLE_LONG_TERM_MEMORY:
-            # R-03: memory is on but its service could not be built, so the
-            # records stay behind; make that visible (BR3.3)
+            # Memory is on but its service could not be built, so the
+            # records stay behind; make that visible
             self._cleanup_failed(persona_id, "memory", None, reason="error")
         if memory is not None:
             try:
@@ -844,10 +878,16 @@ class PersonaManager:
             except Exception as e:
                 self._cleanup_failed(persona_id, "avatar", e)
 
+        context = deleted.get("generation_context")
+        record_id = _advanced_record_id(context if isinstance(context, dict) else None)
+        if record_id is not None:
+            # Only this persona's copy; other personas keep theirs.
+            self._discard_record_copy(deleted.get("owner_sub"), record_id)
+
     def _dedicated_datasets(
         self, persona_id: str, bindings: List[PersonaBinding]
     ) -> List[Dataset]:
-        """The bound datasets whose ``owner_persona_id`` is this persona (BR6.4)."""
+        """The bound datasets whose ``owner_persona_id`` is this persona."""
         found: List[Dataset] = []
         for binding in bindings:
             if not binding.is_dataset:
@@ -900,11 +940,11 @@ class PersonaManager:
         tags: List[str] | None = None,
     ) -> Persona:
         """
-        Edit a persona the user manages (BR6.2, BR6.7).
+        Edit a persona the user manages.
 
         The persona is read strongly and judged with ``ensure_manageable``;
         only the editable columns are written (a partial update), so the
-        owner, the shares and ``ResourceShares`` never change (BR6.6).
+        owner, the shares and ``ResourceShares`` never change.
 
         Args:
             principal: The user
@@ -991,7 +1031,7 @@ class PersonaManager:
         self, principal: Principal, persona_id: str, content: bytes
     ) -> Persona:
         """
-        Normalize an uploaded image and set it as the persona's avatar (BR4.3).
+        Normalize an uploaded image and set it as the persona's avatar.
 
         The path is written with a compare-and-set condition (see
         ``_compare_and_set_avatar``). The previous avatar object is deleted only
@@ -1029,7 +1069,7 @@ class PersonaManager:
             raise PersonaManagerError(
                 "avatar image exceeds the pixel limit",
                 code=ErrorCode.PERSONA_AVATAR_TOO_MANY_PIXELS,
-                # 万画素単位の表示値（例: "1,600"）
+                # Display value in units of 10,000 pixels (e.g. "1,600")
                 context={"max_pixels_10k": f"{e.max_pixels // 10_000:,}"},
             ) from e
         except AvatarImageError as e:
@@ -1067,7 +1107,7 @@ class PersonaManager:
 
     def delete_avatar(self, principal: Principal, persona_id: str) -> Persona:
         """
-        Remove the persona's avatar image and revert to the auto-generated avatar (BR4.3).
+        Remove the persona's avatar image and revert to the auto-generated avatar.
 
         Args:
             principal: The user (must manage the persona)
@@ -1095,7 +1135,7 @@ class PersonaManager:
 
     def deliver_avatar(self, principal: Principal, persona_id: str) -> DeliveryResult:
         """
-        Serve the persona's avatar image after the read check (BR4.4, U4 BR3.1).
+        Serve the persona's avatar image after the read check.
 
         Returns a presigned URL to redirect to, or a stream through the app,
         depending on ``Config.ASSET_DELIVERY`` (this Manager does not look).
@@ -1331,8 +1371,8 @@ class PersonaManager:
             )
 
         if persona.country and not country_service.is_valid_country(persona.country):
-            # ISO 3166-1 alpha-2 として実在する国コードのみ許可（架空コード XX や
-            # alpha-3 JPN を弾く）。検証は pycountry ベースの country_service に委譲。
+            # Allow only country codes that really exist as ISO 3166-1 alpha-2 (reject
+            # fictional codes such as XX and alpha-3 such as JPN). Validation is delegated to the pycountry-based country_service.
             raise PersonaManagerError(
                 f"country {persona.country!r} is not a valid ISO 3166-1 alpha-2 code",
                 code=ErrorCode.PERSONA_COUNTRY_INVALID,
@@ -1358,7 +1398,7 @@ class PersonaManager:
                         code=ErrorCode.PERSONA_LIST_ITEM_TOO_LONG,
                         context={"field": "tags", "max_length": 50},
                     )
-                # data属性ではカンマ区切りでフィルタに渡すため、タグ内のカンマを禁止
+                # Tags are passed to the filter comma-separated in a data attribute, so commas inside a tag are forbidden
                 if "," in tag:
                     raise PersonaManagerError(
                         "tag contains a comma",
@@ -1366,7 +1406,7 @@ class PersonaManager:
                     )
 
     # ------------------------------------------------------------------
-    # Bindings (U5, ADR-007, BR2)
+    # Bindings
     # ------------------------------------------------------------------
 
     def _readable_target(
@@ -1397,7 +1437,7 @@ class PersonaManager:
         return self._resource_lookup.get_many(resource_type, ids[:500])
 
     def get_kb_binding(self, principal: Principal, persona_id: str) -> KbBindingView:
-        """The knowledge-base binding of a persona the user may read (BR2.1).
+        """The knowledge-base binding of a persona the user may read.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
@@ -1418,7 +1458,7 @@ class PersonaManager:
                 ResourceType.KNOWLEDGE_BASE, [binding.target_id]
             )
             kb_target = found.get(binding.target_id)
-            if kb_target is not None and kb_target.exists:  # BR2.8
+            if kb_target is not None and kb_target.exists:  # skip if gone
                 row = BindingRow(
                     target_id=binding.target_id,
                     name=kb_target.display_name or "",
@@ -1448,13 +1488,13 @@ class PersonaManager:
         kb_id: str,
         metadata_filters: Optional[Dict[str, Any]] = None,
     ) -> PersonaBinding:
-        """Bind a knowledge base, replacing the previous one in one write (BR2.9).
+        """Bind a knowledge base, replacing the previous one in one write.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
             AccessDeniedError: Readable but not manageable (403)
             PersonaManagerError: ``KB_BINDING_NOT_FOUND`` when the knowledge
-                base is missing or the user may not use it (BR2.3)
+                base is missing or the user may not use it
         """
         self._manageable_persona(principal, persona_id)
         kb_target = self._asset_targets(ResourceType.KNOWLEDGE_BASE, [kb_id]).get(kb_id)
@@ -1474,7 +1514,7 @@ class PersonaManager:
         return binding
 
     def delete_kb_binding(self, principal: Principal, persona_id: str) -> None:
-        """Remove the persona's knowledge-base binding (BR2.2, BR2.5).
+        """Remove the persona's knowledge-base binding.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
@@ -1491,7 +1531,7 @@ class PersonaManager:
     def get_dataset_bindings(
         self, principal: Principal, persona_id: str
     ) -> DatasetBindingsView:
-        """The dataset bindings of a persona the user may read (BR2.1, BR2.7).
+        """The dataset bindings of a persona the user may read.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
@@ -1506,7 +1546,7 @@ class PersonaManager:
         for b in bindings:
             t = found.get(b.target_id)
             if t is None or not t.exists:
-                continue  # the dataset is gone (BR2.8)
+                continue  # the dataset is gone
             rows.append(
                 BindingRow(
                     target_id=b.target_id,
@@ -1541,10 +1581,10 @@ class PersonaManager:
         key_name: str = "",
         key_value: str = "",
     ) -> PersonaBinding:
-        """Bind a dataset to a persona the user manages (BR2.2〜BR2.4).
+        """Bind a dataset to a persona the user manages.
 
         Organization assets must be usable by the user (``can_use_asset``;
-        admin only until U7). A persona-dedicated dataset binds only to its
+        admin only unless a scope is set). A persona-dedicated dataset binds only to its
         own persona.
 
         Raises:
@@ -1596,7 +1636,7 @@ class PersonaManager:
     def delete_dataset_binding(
         self, principal: Principal, persona_id: str, dataset_id: str
     ) -> None:
-        """Remove one dataset binding; a dedicated dataset goes with it (BR6.4).
+        """Remove one dataset binding; a dedicated dataset goes with it.
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
@@ -1625,7 +1665,7 @@ class PersonaManager:
         dataset_id: str,
         limit: int = 10,
     ) -> Dict[str, Any]:
-        """Rows of a bound dataset narrowed by the binding keys (BR2.6).
+        """Rows of a bound dataset narrowed by the binding keys.
 
         Returns:
             ``{"columns": [...], "rows": [[...], ...], "total_count": int}``
@@ -1725,7 +1765,7 @@ class PersonaManager:
             ) from e
 
     # ------------------------------------------------------------------
-    # Saving generated candidates (U5, BR1.4, BR1.5, BR1.9, BR6.1)
+    # Saving generated candidates
     # ------------------------------------------------------------------
 
     def save_generated_personas(
@@ -1748,7 +1788,7 @@ class PersonaManager:
         Bulk save (no ``edited``): every candidate is saved as generated; one
         failure does not stop the others.
 
-        R-04: right before each candidate is saved, the request's hold on it is
+        Right before each candidate is saved, the request's hold on it is
         confirmed (and renewed) with one conditional update; a hold that went
         stale and was taken over by another request is not saved here (bulk:
         it goes to the failed ones; one-by-one: ``GENERATION_PERSONA_CACHE_
@@ -1784,7 +1824,7 @@ class PersonaManager:
                 persona = base
             try:
                 self._confirm_hold(claim, candidate)
-                persona_id = self.save_persona(principal, persona)
+                persona_id = self._save_candidate_persona(principal, candidate, persona)
             except (PersonaManagerError, AccessDeniedError):
                 if edited is not None:
                     raise
@@ -1799,7 +1839,7 @@ class PersonaManager:
                 continue
             for behavior in candidate.behavior_datasets:
                 if behavior.temp_id not in selected:
-                    continue  # only what the candidate holds (BR1.5)
+                    continue  # only what the candidate holds
                 if not self._make_dedicated_dataset(persona_id, behavior):
                     failed_datasets.append(behavior.name)
         return CandidateSaveResult(
@@ -1809,6 +1849,92 @@ class PersonaManager:
             failed_names=tuple(failed_names),
             failed_datasets=tuple(failed_datasets),
         )
+
+    def _save_candidate_persona(
+        self, principal: Principal, candidate: PersonaCandidate, persona: Persona
+    ) -> str:
+        """Save one candidate's persona; an advanced one with its record copy.
+
+        The record is copied to the new persona's ID first and the persona then
+        points at that copy. When the persona cannot be saved the copy is
+        removed (a removal failure is ``persona.cleanup_failed``; the orphan
+        copy never shows in any list).
+
+        Raises:
+            PersonaManagerError: ``GENERATION_OPERATION_FAILED`` when the copy
+                failed, or the save's own error.
+            AccessDeniedError: The user may not create resources.
+        """
+        record_id = _advanced_record_id(persona.generation_context)
+        if record_id is None:
+            return self.save_persona(principal, persona)
+        archive = self._analysis_records
+        try:
+            if archive is None:
+                raise PersonaManagerError("no storage for the analysis record")
+            archive.commit_copy(candidate.owner_sub, record_id, persona.id)
+        except CodedError as e:
+            raise PersonaManagerError(
+                f"analysis record copy failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
+            ) from e
+        linked = replace(
+            persona,
+            generation_context={
+                **(persona.generation_context or {}),
+                "analysis_record_id": persona.id,
+            },
+        )
+        try:
+            return self.save_persona(principal, linked)
+        except (PersonaManagerError, AccessDeniedError):
+            self._discard_record_copy(candidate.owner_sub, persona.id)
+            raise
+
+    def _discard_record_copy(self, owner_sub: Optional[str], persona_id: str) -> None:
+        """Remove one persona's record copy; a failure is only logged."""
+        archive = self._analysis_records
+        if archive is None or not owner_sub:
+            return
+        try:
+            archive.discard_copy(owner_sub, persona_id)
+        except Exception as e:
+            self._cleanup_failed(persona_id, "analysis_record", e)
+
+    def get_analysis_record(
+        self, principal: Principal, persona_id: str
+    ) -> Optional[tuple[AnalysisRecord, tuple[SourceAvailability, ...]]]:
+        """The analysis record of a persona the user may read.
+
+        Each source file of the record is judged too: the record
+        owner's live file with the recorded checksum is ``available``,
+        anything else ``deleted``; an older record without file IDs is
+        ``unknown``. The plan and the segments are shown either way.
+
+        Returns:
+            The record and the judgement of its files, or ``None`` for an
+            ordinary persona and when the record is gone
+            ("分析の詳細は残っていません").
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing.
+            PersonaManagerError: The record could not be read.
+        """
+        found = self._read_consistent(persona_id)
+        AccessPolicy.ensure_readable(
+            principal, self._target_of(found, persona_id), ErrorCode.PERSONA_NOT_FOUND
+        )
+        assert found is not None
+        persona = found
+        record_id = _advanced_record_id(persona.generation_context)
+        archive = self._analysis_records
+        if record_id is None or archive is None or not persona.owner_sub:
+            return None
+        record = archive.read_committed(persona.owner_sub, record_id)
+        if record is None:
+            return None
+        sources = self._source_file_catalog.availability(persona.owner_sub, record)
+        return record, sources
 
     def _confirm_hold(self, claim: CandidateClaim, candidate: PersonaCandidate) -> None:
         """Check that ``claim`` still holds the candidate, right before its save.
@@ -1837,7 +1963,7 @@ class PersonaManager:
     def _mark_candidate_saved(
         self, claim: CandidateClaim, candidate: PersonaCandidate
     ) -> None:
-        """Write ``saved_at`` under the same hold right after the save (R-04).
+        """Write ``saved_at`` under the same hold right after the save.
 
         A failure is only logged: the cleanup deletes the candidate anyway, and
         its fallback marks it saved.
@@ -1861,7 +1987,7 @@ class PersonaManager:
     def _make_dedicated_dataset(
         self, persona_id: str, behavior: BehaviorDatasetCandidate
     ) -> bool:
-        """Copy the CSV, register the dataset and bind it (BR6.1).
+        """Copy the CSV, register the dataset and bind it.
 
         Returns:
             Whether the dataset was made. On failure what was made is removed
@@ -1908,11 +2034,11 @@ class PersonaManager:
             return False
 
     # ------------------------------------------------------------------
-    # Export (U5, BR7)
+    # Export
     # ------------------------------------------------------------------
 
     def export_persona(self, principal: Principal, persona_id: str) -> PersonaExport:
-        """The persona as Markdown for anyone who may read it (BR7.1〜BR7.3).
+        """The persona as Markdown for anyone who may read it.
 
         Memory, bindings, the owner and the shares are never included.
 
@@ -1926,8 +2052,16 @@ class PersonaManager:
         )
 
 
+def _advanced_record_id(context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The analysis record of an advanced generation's persona, if any."""
+    if not context or context.get("mode") != "advanced":
+        return None
+    record_id = context.get("analysis_record_id")
+    return str(record_id) if record_id else None
+
+
 def _matches(persona: Persona, query: str) -> bool:
-    """Partial match on the name, occupation and background (BR3.8)."""
+    """Partial match on the name, occupation and background."""
     needle = query.strip().lower()
     return (
         needle in persona.name.lower()

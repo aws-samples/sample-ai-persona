@@ -1,6 +1,6 @@
 <script>
-// ペルソナ一覧のクライアントサイド属性フィルタ。
-// .persona-filter-item の data 属性（gender/country/tags/age/occupation）で表示/非表示を切り替える。
+// Client-side attribute filter for the persona list.
+// Toggles visibility by the data attributes of .persona-filter-item (gender/country/tags/age/occupation).
 function applyPersonaFilters() {
     const gender = (document.getElementById('filter-gender')?.value || '').trim();
     const country = (document.getElementById('filter-country')?.value || '').trim();
@@ -32,7 +32,7 @@ function applyPersonaFilters() {
     if (empty) empty.style.display = visible === 0 ? '' : 'none';
 }
 
-// htmx で一覧が差し替わった後もフィルタを再適用する
+// Re-apply the filter after htmx swaps the list
 document.body.addEventListener('htmx:afterSwap', (e) => {
     if (e.target && (e.target.id === 'persona-list' || e.target.id === 'persona-grid')) {
         applyPersonaFilters();

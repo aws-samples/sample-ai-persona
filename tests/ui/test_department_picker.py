@@ -1,4 +1,4 @@
-"""Department picker (C6, WF7, NFR6.2, NFR6.5, NFR6.11, B12, B24)."""
+"""Department picker."""
 
 from typing import Any
 
@@ -7,7 +7,7 @@ import pytest
 from src.models.authz import Department
 from tests.ui.conftest import UiHarness
 
-# 約束 C6 の choices は list[Department]（src/models/authz.py）。実物を渡す
+# choices is a list[Department] (src/models/authz.py); pass the real type
 DEPARTMENTS = [
     Department(group_id="sales", display_name="営業部"),
     Department(group_id="plan", display_name="企画部"),
@@ -30,7 +30,7 @@ def _load(ui: UiHarness, **overrides: Any) -> None:
 
 
 def _load_mixed(ui: UiHarness) -> None:
-    # 5 件を対象に開いた: 営業部は全件、企画部は 2 件、人事部はどれにもない
+    # Opened with 5 targets: sales covers all, planning covers 2, HR covers none
     _load(ui, selected=frozenset(), mixed={"sales": (5, 5), "plan": (2, 5)})
 
 
@@ -64,7 +64,7 @@ def test_fieldset_legend_and_labels(ui: UiHarness) -> None:
 
 
 def test_department_model_gives_value_name_and_selection(ui: UiHarness) -> None:
-    """The macro reads Department.group_id / display_name (contract C6)."""
+    """The macro reads Department.group_id / display_name."""
     _load(ui)
 
     options = ui.page.locator("[data-department-option]").evaluate_all(
@@ -119,7 +119,7 @@ def test_mixed_option_cycles_checked_unchecked_mixed(ui: UiHarness) -> None:
     assert ui.page.is_disabled(SAVE)
 
 
-#: Departments that were checked or mixed when the mixed picker opened (BR1.12).
+#: Departments that were checked or mixed when the mixed picker opened.
 INITIAL = [("departments_initial", "plan"), ("departments_initial", "sales")]
 
 
@@ -143,7 +143,7 @@ def test_sent_values_follow_the_states(ui: UiHarness) -> None:
 
 
 def test_initial_values_are_the_departments_shared_when_opened(ui: UiHarness) -> None:
-    """{name}_initial は開いたときに選択か中間だった部署だけ。押しても変わらない（U4、C6）。"""
+    """{name}_initial holds only departments checked or mixed on open, and does not change on click."""
     _load(ui)
     initial = [("departments_initial", "sales")]
     assert [tuple(v) for v in _sent(ui) if v[0] == "departments_initial"] == initial
@@ -155,7 +155,7 @@ def test_initial_values_are_the_departments_shared_when_opened(ui: UiHarness) ->
 
 
 def test_vanished_department_comes_last_and_can_be_removed(ui: UiHarness) -> None:
-    """消えた部署（admin のとき）は「（存在しないグループ）」として最後に出る（U4）。"""
+    """A deleted department (for admin) is listed last as "（存在しないグループ）"."""
     _load(ui, selected=frozenset({"sales", "old-dept"}), vanished=["old-dept"])
 
     labels = ui.page.locator("[data-department-picker] label").all_inner_texts()

@@ -1,7 +1,4 @@
-"""
-Memory Entry Model
-長期記憶エントリのデータモデル
-"""
+"""Memory Entry Model: data model of long-term memory entries."""
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -10,21 +7,21 @@ from typing import Any, Dict, Optional
 
 @dataclass
 class MemoryEntry:
-    """記憶エントリのデータモデル"""
+    """Data model of a memory entry"""
 
     id: str
-    actor_id: str  # ペルソナID
-    session_id: str  # 議論ID
-    content: str  # 記憶の内容
-    metadata: Dict[str, Any] = field(default_factory=dict)  # 追加メタデータ
+    actor_id: str  # Persona ID
+    session_id: str  # Discussion ID
+    content: str  # Content of the memory
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional metadata
     created_at: datetime = field(default_factory=datetime.now)
-    relevance_score: Optional[float] = None  # 検索時の関連度スコア
-    parsed_topic: Optional[Dict[str, Any]] = None  # パース済みトピック情報（表示用）
+    relevance_score: Optional[float] = None  # Relevance score at search time
+    parsed_topic: Optional[Dict[str, Any]] = None  # Parsed topic (for display)
 
 
 @dataclass(frozen=True)
 class DeleteAllResult:
-    """Outcome of deleting every long-term memory of one actor (U5, NFR2.11).
+    """Outcome of deleting every long-term memory of one actor.
 
     ``MemoryService.delete_all`` never raises; it reports here instead.
 

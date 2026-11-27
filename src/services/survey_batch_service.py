@@ -1,10 +1,10 @@
 """
 SurveyBatchService
-DuckDB/Parquetクエリ（ペルソナの抽出）+ 統計の要約 + HuggingFace DL に特化した
-Service層クラス。他のServiceに依存しない。回答の生成（推論）は Step Functions で行い、
-SurveyRunnerService が受け持つ（バッチ推論の呼び出しは外した、FR8.1）。
+A Service-layer class specialized in DuckDB/Parquet queries (persona extraction), statistical summaries and HuggingFace downloads.
+It does not depend on other Services. Generating answers (inference) is done by Step Functions and
+handled by SurveyRunnerService (the batch inference call was removed).
 
-S3への読み書きはManager層が担当し、本Serviceは純粋なSDK操作のみを行う。
+Reads and writes to S3 are done by the Manager layer; this Service only does pure SDK operations.
 """
 
 import io
@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 def _load_httpfs(conn: duckdb.DuckDBPyConnection) -> None:
-    """httpfs を LOAD する（実行時ダウンロードはしない）。
+    """LOAD httpfs (no download at run time).
 
-    autoinstall/autoload を無効化したうえで LOAD のみ行う。httpfs はコンテナ
-    ／ローカルとも事前 INSTALL 済みが前提（コンテナはビルド時、ローカルは
-    docs/local_development.md のセットアップ手順）。閉域では欠落時に LOAD で
-    即失敗させ、実行時ダウンロードで隠蔽しない。
+    Disables autoinstall/autoload and only does LOAD. httpfs is assumed to be pre-INSTALLed
+    in both container and local (container at build time, local via the setup steps in
+    docs/local_development.md). In a closed network a missing one
+    fails fast at LOAD instead of being hidden by a run-time download.
     """
     conn.execute("SET autoinstall_known_extensions=false;")
     conn.execute("SET autoload_known_extensions=false;")
@@ -42,12 +42,12 @@ def _load_httpfs(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 class SurveyBatchServiceError(CodedError):
-    """SurveyBatchService層の基底例外"""
+    """Base exception of the SurveyBatchService layer."""
 
     pass
 
 
-# ペルソナデータセットのフィルタ可能な属性カラムマッピング
+# Filterable attribute column mapping of the persona dataset
 FILTER_COLUMN_MAP: Dict[str, str] = {
     "性別": "sex",
     "年齢": "age",
@@ -87,15 +87,15 @@ PERSONA_PROFILE_COLUMNS: List[str] = [
     "career_goals_and_ambitions",
 ]
 
-# Hugging Face データセット名
+# Hugging Face dataset name
 DATASET_NAME = "nvidia/Nemotron-Personas-Japan"
 
-# Nemotron の Parquet のキーはこの Service では持たない（閉域対応 U3 BR2.1）。
-# Manager が Config.NEMOTRON_DATASET_KEY から URI を作って set_parquet_s3_uri で渡す。
+# This Service does not hold the Nemotron Parquet key (closed-network support).
+# The Manager builds the URI from Config.NEMOTRON_DATASET_KEY and passes it via set_parquet_s3_uri.
 
 CUSTOM_DATASET_PREFIX = CUSTOM_FILE_PREFIX
 
-# DuckDBクエリで使用する有効なカラム名（SQLインジェクション防止用）
+# Valid column names for DuckDB queries (to prevent SQL injection)
 _VALID_COLUMNS = frozenset(
     list(FILTER_COLUMN_MAP.values())
     + PERSONA_ATTRIBUTE_COLUMNS
@@ -105,10 +105,10 @@ _VALID_COLUMNS = frozenset(
 
 
 class SurveyBatchService:
-    """DuckDB/Parquetクエリ + 統計の要約 + HuggingFace DL
+    """DuckDB/Parquet queries + statistical summaries + HuggingFace download.
 
-    他のServiceに依存しない。S3操作はManager層が担当する。
-    DuckDB接続に必要な bucket_name / region_name はコンストラクタで受け取る。
+    Does not depend on other Services. S3 operations are the Manager layer's job.
+    bucket_name / region_name needed for the DuckDB connection are taken in the constructor.
     """
 
     _CACHE_TTL_SECONDS: int = 300
@@ -121,20 +121,20 @@ class SurveyBatchService:
         self._filter_values_cache: Dict[
             str, Tuple[float, Dict[str, Dict[str, Any]]]
         ] = {}
-        # このサービスはシングルトンで、Routerが ThreadPoolExecutor 上から並行に
-        # クエリを投げる。キャッシュした DuckDBPyConnection を複数スレッドで
-        # 同時に execute すると結果の混線やクラッシュが起きるため、接続の取得・
-        # 生成とカーソル発行をこのロックで直列化する（Issue #118）。
+        # This service is a singleton, and the Router issues queries concurrently from a ThreadPoolExecutor.
+        # Executing on one cached DuckDBPyConnection from several threads at once
+        # mixes up results or crashes, so getting/creating the connection and issuing cursors are
+        # serialized with this lock (Issue #118).
         self._conn_lock = threading.Lock()
 
     # =========================================================================
-    # HuggingFace データセット
+    # HuggingFace dataset
     # =========================================================================
 
     def download_nemotron_dataset(self) -> bytes:
-        """HuggingFaceからNemotronデータセットをダウンロードしてParquetバイト列を返す。
+        """Download the Nemotron dataset from HuggingFace and return Parquet bytes.
 
-        S3へのアップロードはManager層が担当する。
+        Uploading to S3 is the Manager layer's job.
         """
         self._parquet_s3_uri = None
         self._duckdb_conns.pop("nemotron", None)
@@ -163,7 +163,7 @@ class SurveyBatchService:
             ) from e
 
     # =========================================================================
-    # カスタムデータセット Parquet変換
+    # Custom dataset Parquet conversion
     # =========================================================================
 
     def convert_csv_to_parquet(
@@ -171,11 +171,11 @@ class SurveyBatchService:
         csv_bytes: bytes,
         column_mapping: Optional[Dict[str, str]] = None,
     ) -> Tuple[pl.DataFrame, bytes]:
-        """CSVをバリデーション・マッピング・Parquet変換する。
+        """Validate, map and convert a CSV to Parquet.
 
         Returns:
-            (DataFrame, parquet_bytes): 変換後のDataFrameとParquetバイト列。
-            S3へのアップロードはManager層が担当する。
+            (DataFrame, parquet_bytes): The converted DataFrame and Parquet bytes.
+            Uploading to S3 is the Manager layer's job.
         """
         try:
             df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000)
@@ -229,31 +229,31 @@ class SurveyBatchService:
         return df, parquet_bytes
 
     # =========================================================================
-    # DuckDB/Parquet クエリ
+    # DuckDB/Parquet queries
     # =========================================================================
 
     def set_parquet_s3_uri(self, s3_uri: str) -> None:
-        """Manager層がS3上のParquet存在確認後に呼ぶ。DuckDB接続キャッシュをリセット。"""
+        """Called by the Manager layer after checking the Parquet exists on S3. Resets the DuckDB connection cache."""
         self._parquet_s3_uri = s3_uri
 
     def has_parquet_uri(self) -> bool:
-        """Parquet S3 URIがセット済みかを返す。"""
+        """Return whether the Parquet S3 URI has been set."""
         return self._parquet_s3_uri is not None
 
     def invalidate_datasource(self, datasource: str) -> None:
-        """指定datasourceのDuckDB接続・フィルタキャッシュを破棄する。"""
+        """Discard the DuckDB connection and filter cache for the given datasource."""
         self._duckdb_conns.pop(datasource, None)
         self._filter_values_cache.pop(datasource, None)
 
     def _get_duckdb_conn(
         self, datasource: str = "nemotron"
     ) -> duckdb.DuckDBPyConnection:
-        """DuckDB接続を取得する（datasourceごとにキャッシュ）。"""
+        """Get the DuckDB connection (cached per datasource)."""
         if datasource in self._duckdb_conns:
             return self._duckdb_conns[datasource]
 
         if datasource.startswith("custom:"):
-            # U7 BR4.3: custom:{id} だけを受け付け、キーは ID から作る（名前やパスは使わない）
+            # Only custom:{id} is accepted and the key is built from the ID (names and paths are not used)
             try:
                 ref = PersonaDataRef.parse(datasource)
             except ValueError as e:
@@ -272,7 +272,7 @@ class SurveyBatchService:
             s3_uri = self._parquet_s3_uri
 
         if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/　-鿿＀-￯]+", s3_uri):
-            # URI は診断情報。ユーザー向けには汎用文言に落とす（Issue #118）。
+            # The URI is diagnostic information. For users it is reduced to generic wording (Issue #118).
             logger.error("Invalid S3 URI format: %s", s3_uri)
             raise SurveyBatchServiceError(
                 "invalid s3 uri format",
@@ -280,9 +280,9 @@ class SurveyBatchService:
             )
 
         conn = duckdb.connect(":memory:")
-        # httpfs はコンテナビルド時に組込済み。実行時ダウンロードを避けるため
-        # autoinstall/autoload を無効化し LOAD のみ行う（INSTALL はしない。
-        # 未組込環境では LOAD で即失敗させる）。
+        # httpfs is built in at container build time. To avoid run-time downloads,
+        # autoinstall/autoload are disabled and only LOAD is done (no INSTALL;
+        # in environments where it is not built in, fail fast at LOAD).
         _load_httpfs(conn)
         self._set_s3_credentials(conn)
         conn.execute(
@@ -295,32 +295,32 @@ class SurveyBatchService:
     def _query_duckdb(
         self, sql: str, params: Optional[List[Any]] = None, datasource: str = "nemotron"
     ) -> pl.DataFrame:
-        """DuckDBでS3上のParquetに対してSQLクエリを実行し、Polars DataFrameで返す。
+        """Run a SQL query on Parquet on S3 with DuckDB and return a Polars DataFrame.
 
-        接続はdatasourceごとにキャッシュした単一の :class:`DuckDBPyConnection` を
-        共有するが、並行実行できない。スレッドごとに ``cursor()`` を発行すると、
-        VIEW と接続設定（S3認証情報等）を継承しつつ実行だけが分離される
-        （DuckDB公式の並行アクセス手法）。接続の取得・生成と ``cursor()`` 発行は
-        ロックで直列化し、クエリ実行自体はロック外で行う（Issue #118）。
+        The connection is a single :class:`DuckDBPyConnection` cached per datasource and
+        shared, but it cannot run concurrently. Issuing a ``cursor()`` per thread
+        inherits the VIEW and connection settings (S3 credentials etc.) while isolating only execution
+        (DuckDB's official approach to concurrent access). Getting/creating the connection and issuing ``cursor()`` are
+        serialized with a lock, and the query itself runs outside the lock (Issue #118).
         """
         cursor = self._acquire_cursor(datasource)
         try:
             return self._run(cursor, sql, params)
         except duckdb.IOException:
-            # 接続が切れている可能性。破棄して張り直し、新しいカーソルで再試行する。
+            # The connection may have dropped. Discard it, reconnect and retry with a new cursor.
             with self._conn_lock:
                 self._duckdb_conns.pop(datasource, None)
             cursor = self._acquire_cursor(datasource)
             return self._run(cursor, sql, params)
 
     def _acquire_cursor(self, datasource: str) -> duckdb.DuckDBPyConnection:
-        """スレッド専用のカーソルを発行する（接続の生成・取得ごとロックする）。
+        """Issue a thread-dedicated cursor (locks around connection creation/retrieval).
 
-        ``cursor()`` はメイン接続のカタログ（VIEW定義など）を共有するが、
-        ``SET s3_access_key_id`` 等のセッションスコープの設定は継承しない。
-        継承されるという前提で書くと、キャッシュ済み接続から発行したカーソルは
-        認証情報を持たず、S3アクセスが常に403で失敗する。カーソルには毎回
-        明示的に設定し直す。
+        ``cursor()`` shares the main connection's catalog (VIEW definitions etc.)
+        but does not inherit session-scoped settings such as ``SET s3_access_key_id``.
+        Assuming they are inherited makes a cursor from a cached connection
+        have no credentials, so S3 access always fails with 403. Set them
+        explicitly on every cursor.
         """
         with self._conn_lock:
             conn = self._get_duckdb_conn(datasource)
@@ -329,10 +329,10 @@ class SurveyBatchService:
             return cursor
 
     def _set_s3_credentials(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """boto3のクレデンシャルチェーンからS3認証情報をDuckDB接続に設定する。
+        """Set S3 credentials on the DuckDB connection from the boto3 credential chain.
 
-        ``cursor()`` はこれを継承しないため、メイン接続の初期化時と、カーソル
-        発行時の両方で呼ぶ必要がある。
+        ``cursor()`` does not inherit them, so this must be called both when initializing
+        the main connection and when issuing a cursor.
         """
         import boto3
 
@@ -367,7 +367,7 @@ class SurveyBatchService:
     def _build_where_clause(
         self, filters: Dict[str, Any]
     ) -> Tuple[str, List[Any], int]:
-        """フィルタ辞書からWHERE句・パラメータ・次のパラメータインデックスを返す。"""
+        """Return the WHERE clause, parameters and next parameter index from a filter dict."""
         where_clauses: List[str] = []
         params: List[Any] = []
         param_idx = 1
@@ -410,7 +410,7 @@ class SurveyBatchService:
         return where_sql, params, param_idx
 
     def get_total_count(self, datasource: str = "nemotron") -> int:
-        """データセットの総レコード数を取得する。"""
+        """Get the total number of records in the dataset."""
         df = self._query_duckdb(
             "SELECT count(*) AS cnt FROM personas", datasource=datasource
         )
@@ -422,7 +422,7 @@ class SurveyBatchService:
         count: int,
         datasource: str = "nemotron",
     ) -> pl.DataFrame:
-        """フィルタリングとサンプリングをDuckDB SQL内で1クエリで実行する。"""
+        """Run filtering and sampling in a single query inside DuckDB SQL."""
         where_sql, params, param_idx = self._build_where_clause(filters)
         sql = (
             f"SELECT * FROM personas WHERE {where_sql} "
@@ -440,7 +440,7 @@ class SurveyBatchService:
     def get_available_filter_values(
         self, datasource: str = "nemotron"
     ) -> Dict[str, Dict[str, Any]]:
-        """フィルタ可能な属性値の一覧をフィルタタイプ情報付きで取得する（TTLキャッシュ）。"""
+        """Get the filterable attribute values with filter-type info (TTL cache)."""
         now = time.monotonic()
         if datasource in self._filter_values_cache:
             cached_at, cached_result = self._filter_values_cache[datasource]
@@ -489,7 +489,7 @@ class SurveyBatchService:
     def get_filtered_count(
         self, filters: Optional[Dict[str, Any]] = None, datasource: str = "nemotron"
     ) -> int:
-        """フィルタ条件に合致するペルソナ数を取得する。"""
+        """Get the number of personas that match the filter."""
         if not filters:
             return self.get_total_count(datasource)
 
@@ -506,7 +506,7 @@ class SurveyBatchService:
         filters: Optional[Dict[str, Any]] = None,
         datasource: str = "nemotron",
     ) -> Dict[str, Dict[str, Any]]:
-        """プレビュー用の属性分布統計を取得する（DuckDB集計）。"""
+        """Get attribute distribution stats for the preview (DuckDB aggregation)."""
         if filters:
             where_sql, params, _ = self._build_where_clause(filters)
         else:
@@ -531,7 +531,7 @@ class SurveyBatchService:
                 )
                 stats[label] = dict(zip(df["val"].to_list(), df["cnt"].to_list()))
             except Exception:
-                continue  # カラム不在・型不一致時はこの属性をスキップ
+                continue  # If the column is missing or the type mismatches, skip this attribute
 
         try:
             df = self._query_duckdb(
@@ -549,12 +549,12 @@ class SurveyBatchService:
                     "最大": int(df["max_age"][0]),
                 }
         except Exception:
-            pass  # 年齢統計取得失敗は無視して他の統計を返す
+            pass  # Ignore a failure to get age stats and return the other stats
 
         return stats
 
     # =========================================================================
-    # 統計要約生成（Polars/DataFrame操作）
+    # Statistical summary generation (Polars/DataFrame operations)
     # =========================================================================
 
     def generate_statistical_summary(
@@ -562,15 +562,15 @@ class SurveyBatchService:
         results_csv: str,
         questions: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """CSV結果から統計要約を生成する。
+        """Generate a statistical summary from CSV results.
 
         Args:
-            results_csv: CSV形式の結果テキスト
-            questions: 質問メタデータのリスト。各要素は
+            results_csv: Result text in CSV format
+            questions: List of question metadata. Each item is
                 {"id": str, "text": str, "question_type": str, "options": list, "allow_multiple": bool}
 
         Returns:
-            統計要約辞書
+            Statistical summary dict
         """
         import io
 
@@ -632,7 +632,7 @@ class SurveyBatchService:
 
     @staticmethod
     def _summarize_demographics(df: pl.DataFrame) -> Dict[str, Any]:
-        """人口統計情報を集計する。"""
+        """Aggregate demographic information."""
         demo: Dict[str, Any] = {}
 
         if "sex" in df.columns:
@@ -671,7 +671,7 @@ class SurveyBatchService:
 
     @staticmethod
     def _answered(df: pl.DataFrame, answer_col: str) -> pl.DataFrame:
-        """Rows that answered the question (a blank answer is no answer, BR4.6)."""
+        """Rows that answered the question (a blank answer is no answer)."""
         column = pl.col(answer_col)
         return df.filter(
             column.is_not_null() & (column.cast(pl.Utf8).str.strip_chars() != "")
@@ -684,7 +684,7 @@ class SurveyBatchService:
         options: List[str],
         allow_multiple: bool = False,
     ) -> Dict[str, Any]:
-        """選択式質問の分析。分母は回答のあった人数（BR4.6）。"""
+        """Analysis of a choice question. The denominator is the number of respondents."""
         df = SurveyBatchService._answered(df, answer_col)
         total = len(df)
         if allow_multiple:
@@ -715,7 +715,7 @@ class SurveyBatchService:
 
     @staticmethod
     def _analyze_scale_rating(df: pl.DataFrame, answer_col: str) -> Dict[str, Any]:
-        """スケール評価質問の分析。"""
+        """Analysis of a scale-rating question."""
         numeric_col = df[answer_col].cast(pl.Float64, strict=False)
         valid_df = df.filter(numeric_col.is_not_null())
 
@@ -742,7 +742,7 @@ class SurveyBatchService:
         answer_col: str,
         allow_multiple: bool = False,
     ) -> Dict[str, Any]:
-        """選択式質問の属性別クロス集計（空欄の回答は外す、BR4.6）。"""
+        """Cross-tabulation of a choice question by attribute (blank answers are excluded)."""
         df = SurveyBatchService._answered(df, answer_col)
         if df.is_empty():
             return {}
@@ -790,7 +790,7 @@ class SurveyBatchService:
     def _cross_tabulate_numeric_for_report(
         df: pl.DataFrame, answer_col: str
     ) -> Dict[str, Any]:
-        """数値質問の属性別クロス集計。"""
+        """Cross-tabulation of a numeric question by attribute."""
         cross_tab: Dict[str, Any] = {}
 
         if "sex" in df.columns:
@@ -829,13 +829,13 @@ class SurveyBatchService:
     def _sample_free_text(
         df: pl.DataFrame, answer_col: str, limit: int = 10
     ) -> List[str]:
-        """自由記述のサンプル抽出（空欄は外す、BR4.6）。"""
+        """Sample extraction of free-text answers (blank ones excluded)."""
         responses = SurveyBatchService._answered(df, answer_col)[answer_col].to_list()
         responses.sort(key=len, reverse=True)
         return responses[:limit]
 
     # =========================================================================
-    # 汎用データセットプレビュー
+    # Generic dataset preview
     # =========================================================================
 
     def execute_dataset_preview(
@@ -845,10 +845,10 @@ class SurveyBatchService:
         data_sql: str,
         params: Optional[List[Any]] = None,
     ) -> Tuple[int, List[str], List[List[Any]]]:
-        """任意のデータセットファイルに対してCOUNT + SELECTプレビューを実行する。
+        """Run a COUNT + SELECT preview on any dataset file.
 
-        DuckDB接続を作成し、S3/ローカルファイルをVIEW "dataset" として登録後、
-        指定されたSQLを実行する。接続はキャッシュせず都度closeする。
+        Creates a DuckDB connection, registers an S3/local file as the VIEW "dataset",
+        then runs the given SQL. The connection is closed each time, not cached.
 
         Returns:
             (total_count, column_names, rows)
@@ -856,8 +856,8 @@ class SurveyBatchService:
         conn = duckdb.connect(":memory:")
         try:
             if s3_path.startswith("s3://"):
-                # httpfs はビルド時組込。実行時ダウンロードを避け LOAD のみ行う
-                # （INSTALL はしない。未組込環境では LOAD で即失敗させる）。
+                # httpfs is built in at build time. To avoid run-time downloads only LOAD is done
+                # (no INSTALL; in environments where it is not built in, fail fast at LOAD).
                 _load_httpfs(conn)
 
                 import boto3

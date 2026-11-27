@@ -1,15 +1,14 @@
 {% from "components/dialog.html" import dialog %}
 {% from "components/department_picker.html" import department_picker %}
 {#
-  組織資産の利用範囲のダイアログ（M10、U7 BR5.2）。htmx で body に差し込まれて開き、
-  閉じたら消える。部署の選択は U3 の department_picker（mode="scope"）。
-  保存は開いたときの部署との差分だけ（departments / departments_initial）。
-  開いたときの部署を外すと、保存の前に role="alert" の注意を出す（app.js の AssetScope）。
+  Dialog for the usage scope of an organization asset. Inserted into body by htmx, opens, and is removed when closed. The department selection is department_picker (mode="scope").
+  Saving sends only the difference from the departments at open time (departments / departments_initial).
+  Removing a department that was set at open time shows a role="alert" warning before saving (AssetScope in app.js).
 
-  引数:
-    scope     ... src/models/sharing.py の AssetScopeDialog（dialog はマクロの名前と重なるため使わない）
-    dialog_id ... ダイアログの id（画面に 1 つ）
-    save_url  ... 保存先（POST）
+  Arguments:
+    scope     ... AssetScopeDialog from src/models/sharing.py (named so because "dialog" collides with a macro name)
+    dialog_id ... dialog id (one per page)
+    save_url  ... save target (POST)
 #}
 {% call dialog(dialog_id, "利用範囲を設定: " ~ scope.name, describedby=dialog_id ~ "-note", autoopen=True, remove_on_close=True, panel_class="max-w-lg") %}
 <form hx-post="{{ save_url }}" hx-target="find [data-scope-error]" hx-swap="innerHTML" data-asset-scope-form data-testid="asset-scope-form">

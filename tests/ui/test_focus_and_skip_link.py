@@ -1,4 +1,4 @@
-"""Focus ring and skip link (NFR6.7, NFR6.10, A6, A9)."""
+"""Focus ring and skip link."""
 
 import pytest
 

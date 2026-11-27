@@ -12,18 +12,18 @@ import { acknowledgeAll, NAG_REASONS } from './nag-reasons';
 export interface DataStackProps extends StackProps {
   parameter: AppParameter;
   /**
-   * Cognito の Managed Login のドメインを作るか（既定 true。ResolvedProfile.createCognitoDomain）。
-   * 閉域構成では false（U1 閉域、BR3.1）。
+   * Whether to create the Cognito Managed Login domain (default true; ResolvedProfile.createCognitoDomain).
+   * false in the closed configuration.
    */
   createCognitoDomain?: boolean;
 }
 
 /**
- * Data スタック: 状態を持つもの（FR9.1、ADR-001、約束 C10）。
+ * Data stack: everything that holds state.
  *
- * テーブル・S3・ECR・AgentCore Memory・Cognito User Pool・KMS キー・
- * トークンの暗号化鍵とログイン途中の Cookie の署名鍵を持つ。すべて RETAIN。
- * App スタックはここから参照で受け取る（App → Data の一方向）。
+ * Holds tables, S3, ECR, AgentCore Memory, the Cognito User Pool, KMS keys, the
+ * token encryption keys and the signing key for the in-login cookie. All RETAIN.
+ * The App stack receives them by reference (one way, App -> Data).
  */
 export class DataStack extends Stack {
   public readonly database: Database;
@@ -54,8 +54,8 @@ export class DataStack extends Stack {
       createDomain: props.createCognitoDomain ?? true,
     });
 
-    // トークンの暗号化鍵の一覧（security-design.md「暗号化と鍵」）。CDK は初期値を
-    // 作るだけで、版の追加・切り替えは手で値を書き換える。
+    // List of token encryption keys. CDK only creates the initial value;
+    // adding and switching versions is done by rewriting the value by hand.
     this.tokenEncryptionKeys = new secretsmanager.Secret(this, 'TokenEncryptionKeys', {
       description: 'AI Persona v1 token encryption keys ({"current": "v1", "k_v1": ...})',
       generateSecretString: {
@@ -71,12 +71,12 @@ export class DataStack extends Stack {
       generateSecretString: { passwordLength: 64, excludePunctuation: true },
       removalPolicy: RemovalPolicy.RETAIN,
     });
-    // 2 つの鍵は手で版を足して切り替える（SMG4 の抑止、NFR3.14）
+    // The two keys are rotated by adding versions by hand (SMG4 suppression)
     for (const secret of [this.tokenEncryptionKeys, this.loginCookieSigningKey]) {
       acknowledgeAll(secret, ['SMG4'], NAG_REASONS.manualKeyRotation);
     }
 
-    // deploy.sh がイメージを送る先と、最初の admin を作る手順の表示に使う
+    // Used by deploy.sh for the image push target and the first-admin instructions
     new CfnOutput(this, 'EcrRepositoryUri', { value: this.ecr.repository.repositoryUri });
     new CfnOutput(this, 'UserPoolId', { value: this.cognito.userPool.userPoolId });
     new CfnOutput(this, 'AgentCoreMemoryId', { value: this.memory.memoryId });

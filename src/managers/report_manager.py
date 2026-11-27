@@ -1,15 +1,20 @@
-"""レポート生成・管理Manager。
+"""Report generation and management Manager.
 
-議論結果からのレポート生成、CRUD、フォローアップ分析を担当する。
-classic/agent両モードの議論で共通利用される。
+Handles report generation from discussion results, CRUD and follow-up analysis.
+Shared by both classic and agent discussions.
 
-v1.0.0 U6（``functional-design/rules.md`` BR4.1〜BR4.4）:
+Rules:
 
-- 生成は ``ai:execute`` と議論の ``ensure_readable``（共有された人も生成して見られる）
-- 保存・内容の更新・削除は議論の ``ensure_manageable``（``DiscussionRecords`` が判定する）
-- 追加生成の短期記憶は、議論と利用者の組ごとに分ける（:func:`report_session_id`）
-- レポートの ID はサーバーが振り、件数の上限は本体の件数と同じトランザクションで守る
-- 参加者のプロフィールは、利用者が読めるペルソナだけを ``ParticipantReader`` で読む
+- Generation requires ``ai:execute`` and the discussion's ``ensure_readable``
+  (people it is shared with can also generate and see)
+- Saving, updating content and deleting require the discussion's
+  ``ensure_manageable`` (decided by ``DiscussionRecords``)
+- The short-term memory of follow-up generation is separated per discussion and
+  user pair (:func:`report_session_id`)
+- Report IDs are assigned by the server, and the count limit is enforced in the
+  same transaction as the body's count
+- Participant profiles are read with ``ParticipantReader``, only for personas
+  the user can read
 """
 
 import hashlib
@@ -38,13 +43,13 @@ from .components.sharing_runtime import DiscussionParts, discussion_parts_from
 
 
 class ReportManagerError(CodedError):
-    """レポートManager固有の例外。"""
+    """Exception specific to the report Manager."""
 
     pass
 
 
 def report_session_id(discussion_id: str, sub: str) -> str:
-    """The short-term memory session of ``sub``'s reports on a discussion (BR4.3).
+    """The short-term memory session of ``sub``'s reports on a discussion.
 
     The sub is hashed so that the session ID (which reaches the browser and the
     logs of the memory service) does not carry the user's identifier.
@@ -58,7 +63,7 @@ def _discussion_parts() -> DiscussionParts:
 
 
 class ReportManager:
-    """レポート生成・管理を担当するManager。"""
+    """Manager responsible for report generation and management."""
 
     def __init__(
         self,
@@ -95,9 +100,9 @@ class ReportManager:
         """
         return self._discussion_records.get(principal, discussion_id)
 
-    # =========================================================================
-    # 生成（BR4.1、BR4.3）
-    # =========================================================================
+    # ==========================================================================
+    # Generation
+    # ==========================================================================
 
     def _readable_for_generation(
         self, principal: Principal, discussion_id: str
@@ -110,7 +115,7 @@ class ReportManager:
     def _get_report_context(
         self, principal: Principal, view: DiscussionView
     ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """レポート生成用のインサイトデータと、読めるペルソナのプロフィールを返す。"""
+        """Return the insight data for report generation and the profiles of readable personas."""
         insights_data = [
             {
                 "category": ins.category,
@@ -125,7 +130,7 @@ class ReportManager:
             try:
                 personas = self._participant_reader.read_for_use(principal, readable)
             except ParticipantNotFoundError:
-                # 読み直しの間に読めなくなった。プロフィールなしで続ける
+                # It became unreadable between the re-reads. Continue without the profile
                 self.logger.info("Report context: a participant became unreadable")
         personas_data = [
             {
@@ -147,7 +152,7 @@ class ReportManager:
         topic: str,
         personas: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        """レポート生成用のユーザーコンテキストをMarkdown形式で構築する。"""
+        """Build the user context for report generation in Markdown."""
         context_parts = [f"## 議論トピック\n{topic}\n"]
 
         if personas:
@@ -173,7 +178,7 @@ class ReportManager:
         return "\n".join(context_parts)
 
     def ensure_data_agent_allowed(self, principal: Principal) -> None:
-        """Refuse a data-driven report before the router starts streaming (BR3.7).
+        """Refuse a data-driven report before the router starts streaming.
 
         Raises:
             AccessDeniedError: The user lacks ``ai:execute``.
@@ -192,21 +197,22 @@ class ReportManager:
         custom_prompt: Optional[str] = None,
         event_queue: Any = None,
     ) -> Iterator[str]:
-        """議論からレポートをストリーミング生成する。
+        """
+        Stream-generate a report from a discussion.
 
         Args:
-            principal: 生成する人（議論を読めること）
-            discussion_id: 議論ID
-            template_type: テンプレート種別 (summary/review/custom/data_driven)
-            custom_prompt: カスタムプロンプト
-            event_queue: リアルタイムイベント用queue（data_driven時）
+            principal: The person generating (must be able to read the discussion)
+            discussion_id: Discussion ID
+            template_type: Template type (summary/review/custom/data_driven)
+            custom_prompt: Custom prompt
+            event_queue: Queue for real-time events (data_driven)
 
         Yields:
-            str: テキストチャンク
+            str: Text chunks
 
         Raises:
-            AccessDeniedError: ``ai:execute`` がない
-            CodedError: ``DISCUSSION_NOT_FOUND``（読めない・ない）
+            AccessDeniedError: No ``ai:execute``
+            CodedError: ``DISCUSSION_NOT_FOUND`` (unreadable or missing)
         """
         view = self._readable_for_generation(principal, discussion_id)
         yield from self._generate(
@@ -229,7 +235,7 @@ class ReportManager:
         is_followup: bool,
     ) -> Iterator[str]:
         if template_type == "data_driven":
-            # Closed network U3 BR3.2 (5): before AgentService is called
+            # Closed network: before AgentService is called
             DataAgentPolicy.ensure_allowed(ReportManagerError)
         insights_data, personas_data = self._get_report_context(principal, view)
         if template_type == "data_driven":
@@ -267,7 +273,7 @@ class ReportManager:
         session_id: Optional[str] = None,
         is_followup: bool = False,
     ) -> Iterator[str]:
-        """データドリブンレポートの生成をAgentServiceに委譲する。"""
+        """Delegate data-driven report generation to AgentService."""
         if is_followup:
             system_prompt = build_data_driven_followup_system_prompt(
                 topic, custom_prompt
@@ -294,15 +300,16 @@ class ReportManager:
         previous_report: str,
         event_queue: Any = None,
     ) -> Iterator[str]:
-        """前回レポートを踏まえたフォローアップ分析をストリーミング生成する。
+        """
+        Stream-generate a follow-up analysis based on the previous report.
 
-        短期記憶のセッションは議論と利用者の組から決まる（BR4.3。画面から受け取らない）。
-        STMセッションが有効なら前回履歴が自動復元されるため追加指示のみ渡す。
-        STMが期限切れの場合はprevious_reportをフォールバックとしてプロンプトに注入。
+        The short-term memory session is determined from the discussion and user pair (not received from the screen).
+        If the STM session is valid, the previous history is restored automatically, so only the extra instruction is passed.
+        If the STM has expired, previous_report is injected into the prompt as a fallback.
 
         Raises:
-            AccessDeniedError: ``ai:execute`` がない
-            CodedError: ``DISCUSSION_NOT_FOUND``（読めない・ない）
+            AccessDeniedError: No ``ai:execute``
+            CodedError: ``DISCUSSION_NOT_FOUND`` (unreadable or missing)
         """
         view = self._readable_for_generation(principal, discussion_id)
         session_id = report_session_id(view.id, principal.sub)
@@ -335,12 +342,12 @@ class ReportManager:
         )
 
     def _check_stm_session(self, session_id: str) -> bool:
-        """AgentCore Memory STMにセッション履歴が存在するか確認する。"""
+        """Check whether session history exists in AgentCore Memory STM."""
         return bool(service_factory.check_stm_session_exists(session_id))
 
-    # =========================================================================
-    # 参照・エクスポート（NFR1.44）
-    # =========================================================================
+    # ==========================================================================
+    # Reading and export
+    # ==========================================================================
 
     def get_report(
         self, principal: Principal, discussion_id: str, report_id: str
@@ -370,16 +377,16 @@ class ReportManager:
         extension = "txt" if fmt == "txt" else "md"
         content = report.content
         if extension == "txt":
-            # Markdown記法を除去
+            # Strip Markdown syntax
             content = re.sub(r"#{1,6}\s*", "", content)
             content = re.sub(r"\*{1,2}(.*?)\*{1,2}", r"\1", content)
             content = re.sub(r"_{1,2}(.*?)_{1,2}", r"\1", content)
         timestamp = report.created_at.strftime("%Y%m%d_%H%M%S")
         return f"report_{report.template_type}_{timestamp}.{extension}", content
 
-    # =========================================================================
-    # 保存・更新・削除（BR4.2、BR4.4）
-    # =========================================================================
+    # ==========================================================================
+    # Saving, updating and deleting
+    # ==========================================================================
 
     def save_report(
         self,
@@ -389,15 +396,17 @@ class ReportManager:
         content: str,
         custom_prompt: Optional[str] = None,
     ) -> DiscussionReport:
-        """生成済みレポートを保存する（ID はサーバーが振る）。
+        """
+        Save a generated report (the ID is assigned by the server).
 
-        権限の確認はテンプレート種別の検証より先に部品側で行う（議論に触れない人の
-        入力をプレビューに描画させない）。
+        The permission check is done in the component before the template type
+        is validated (so input from people who cannot touch the discussion is
+        never rendered in the preview).
 
         Raises:
-            CodedError: ``DISCUSSION_NOT_FOUND``、``REPORT_LIMIT_REACHED``、
-                ``REPORT_OPERATION_FAILED``（テンプレート種別が不正）
-            AccessDeniedError: 読めるが管理できない
+            CodedError: ``DISCUSSION_NOT_FOUND``, ``REPORT_LIMIT_REACHED``,
+                ``REPORT_OPERATION_FAILED`` (invalid template type)
+            AccessDeniedError: Readable but not manageable
         """
         return self._discussion_records.save_report(
             principal, discussion_id, template_type, content, custom_prompt
@@ -406,11 +415,12 @@ class ReportManager:
     def update_report_content(
         self, principal: Principal, discussion_id: str, report_id: str, content: str
     ) -> None:
-        """既存レポートの内容を更新する。
+        """
+        Update the content of an existing report.
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` / ``REPORT_NOT_FOUND``
-            AccessDeniedError: 読めるが管理できない
+            AccessDeniedError: Readable but not manageable
         """
         self._discussion_records.update_report(
             principal, discussion_id, report_id, content
@@ -419,14 +429,15 @@ class ReportManager:
     def delete_report(
         self, principal: Principal, discussion_id: str, report_id: str
     ) -> bool:
-        """議論からレポートを削除する。
+        """
+        Delete a report from a discussion.
 
         Returns:
             True if deleted
 
         Raises:
             CodedError: ``DISCUSSION_NOT_FOUND`` / ``REPORT_NOT_FOUND``
-            AccessDeniedError: 読めるが管理できない
+            AccessDeniedError: Readable but not manageable
         """
         self._discussion_records.delete_report(principal, discussion_id, report_id)
         return True

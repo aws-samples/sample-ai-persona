@@ -3,14 +3,14 @@
 {% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
 {% from "components/status_label.html" import status_label %}
 {#
-  ペルソナ一覧パーシャル（M6、U4）。タブ（list_tabpanel）の中身。
+  Persona list partial. Content of the tab (list_tabpanel).
 
-  引数:
-    listing    ... src/models/sharing.py の TabbedList（items は Persona）
-    selectable ... 議論・インタビューで選ぶ一覧（?selectable=1）
-    search     ... 検索語
-    is_append  ... 「もっと見る」の追加分（グリッドの中身だけを返す）
-  ルーターのグローバル: persona_avatar_url
+  Arguments:
+    listing    ... TabbedList from src/models/sharing.py (items are Persona)
+    selectable ... list used for choosing in discussions and interviews (?selectable=1)
+    search     ... search term
+    is_append  ... the part added by "show more" (returns only the grid content)
+  Router global: persona_avatar_url
 #}
 {%- set tab = listing.tab.value -%}
 {%- set personas = listing.items -%}
@@ -37,7 +37,7 @@
 {%- endmacro -%}
 
 {%- if not is_append %}
-{# 検索欄がタブの中で絞り込めるよう、今のタブを持たせる（BR3.8） #}
+{# Carry the current tab so the search box filters inside the tab. #}
 <input type="hidden" name="tab" value="{{ tab }}" data-persona-tab>
 {%- if selectable %}
 <div class="flex gap-2 mb-3" role="group" aria-label="一覧の切り替え">
@@ -102,14 +102,14 @@
                             <span class="flex-shrink-0">/ {{ persona.age }}歳</span>
                         </p>
                         {%- if tab == "shared" %}
-                        {#- M13: 共有されたペルソナは文字で示す（選んで使える。記憶には書き込まれない） #}
+                        {#- Personas shared with the user are marked in text (they can be chosen and used; nothing is written to their memory). #}
                         <p class="mt-1">{{ status_label("共有") }}</p>
                         {%- endif %}
                         {{ owner_line(persona, tab, listing) }}
                     </div>
                 </div>
                 <div class="flex items-center gap-2 flex-shrink-0">
-                    <!-- 詳細を別タブで開く（label選択への伝播を止める） -->
+                    <!-- Open details in a new tab (stops propagation to the label selection) -->
                     <a href="/persona/{{ persona.id }}" target="_blank" rel="noopener"
                        @click.stop
                        title="詳細を別タブで開く"
@@ -123,12 +123,12 @@
                     </div>
                 </div>
             </div>
-            <!-- プロフィール（背景）。flex-1 で余白を吸収しカード高さをグリッドで統一 -->
+            <!-- Profile (background). flex-1 absorbs spare space so card heights are uniform in the grid. -->
             <p class="text-xs text-gray-600 mt-2 line-clamp-3 flex-1">
                 {{ persona.background }}
             </p>
             {% if persona.tags %}
-            <!-- タグ行はカード下端に固定 -->
+            <!-- The tag row is pinned to the bottom of the card -->
             <div class="flex flex-wrap gap-1 mt-2">
                 {% for tag in persona.tags[:5] %}
                 <span class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 rounded-full">#{{ tag }}</span>
@@ -145,7 +145,7 @@
          data-persona-gender="{{ persona.gender or '' }}"
          data-persona-country="{{ persona.country or '' }}"
          data-persona-tags="{{ persona.tags | join(',') }}">
-        <!-- ヘッダー -->
+        <!-- Header -->
         <div class="flex items-start justify-between mb-4">
             <div class="flex items-center gap-3 min-w-0">
                 {%- if bulk %}
@@ -169,7 +169,7 @@
                     詳細
                 </a>
                 {%- if manageable %}
-                {#- 見える文字は短く「共有」。読み上げではどのペルソナかが分かるよう名前を足す（見える文字を名前に含める） #}
+                {#- The visible text is just "共有". For screen readers the name is added so the persona is identifiable (the visible text is included in the name). #}
                 <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
                         aria-label="{{ persona.name }} を共有"
                         data-share-url="/share/persona/{{ persona.id }}/dialog"
@@ -188,12 +188,12 @@
             </div>
         </div>
 
-        <!-- 背景（省略表示） -->
+        <!-- Background (truncated) -->
         <p class="text-gray-600 text-sm mb-4 line-clamp-3">
             {{ persona.background[:150] }}{% if persona.background|length > 150 %}...{% endif %}
         </p>
 
-        <!-- タグ表示 -->
+        <!-- Tag display -->
         <div class="flex flex-wrap gap-2">
             {% for value in persona.values[:2] %}
             <span class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
@@ -208,7 +208,7 @@
         </div>
 
         {% if persona.tags %}
-        <!-- フィルタ用タグ -->
+        <!-- Tags for filtering -->
         <div class="flex flex-wrap gap-2 mt-2">
             {% for tag in persona.tags[:5] %}
             <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full">#{{ tag }}</span>
@@ -216,7 +216,7 @@
         </div>
         {% endif %}
 
-        <!-- 作成日時 -->
+        <!-- Created at -->
         <p class="text-xs text-gray-500 mt-4">
             作成: {% if persona.created_at %}<time datetime="{{ iso_datetime(persona.created_at) }}">{{ persona.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
         </p>
@@ -242,7 +242,7 @@
     </button>
 </div>
 {% elif is_append %}
-{# 追加ページで次がない場合、既存のボタンを消す #}
+{# When an added page has no next page, remove the existing button #}
 <div id="load-more-persona" hx-swap-oob="true"></div>
 {% endif %}
 {% else %}

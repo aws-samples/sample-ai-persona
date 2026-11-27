@@ -1,7 +1,6 @@
 {#
-  アンケートの状態の札（一覧と詳細で共通）。色だけでなく文言で状態を示す。
-  queued は「待ち」、権限・設定の失敗で開始できないときは「開始できずに待っています」
-  （NFR4.9b）。pending は切り替え前の記録だけが持つ（BR8.1）。順番や予定時刻は出さない（BR2.5）。
+  Survey status badge (shared by the list and the detail). The status is conveyed in words, not only by color.
+  queued is shown as "待ち"; when it cannot start because of a permission or setting failure, "開始できずに待っています". pending is held only by records from before the switch. Order and scheduled time are not shown.
 #}
 {% macro survey_status_badge(survey, size_classes="px-2 py-0.5 text-xs", testid=none) -%}
 {%- set blocked = survey.status == 'queued' and survey.start_blocked_since -%}

@@ -1,15 +1,15 @@
-"""Values of one file delivery (closed network U4, FR5.3).
+"""Values of one file delivery (closed network).
 
 ``AssetDelivery`` (``src/managers/components/asset_delivery.py``) turns an
 :class:`AssetHandle` into a :class:`DeliveryResult`: a presigned URL to redirect
 to (``presigned``, the public behaviour) or an opened S3 body to stream through
 the app (``proxy``, the closed network).
 
-Rules (``construction/u4-asset-delivery/functional-design/rules.md``):
+Rules:
 
-- BR2.3: ``upload`` files stop above the upload limit (``MAX_FILE_SIZE``), the
+- ``upload`` files stop above the upload limit (``MAX_FILE_SIZE``), the
   survey result CSV above 200 MiB.
-- BR2.7: only PNG, JPEG, WebP and PDF open inline; everything else is an
+- Only PNG, JPEG, WebP and PDF open inline; everything else is an
   attachment. The type always comes from the stored metadata.
 
 Standard library only: the body is an iterator of bytes and a close callable,
@@ -23,24 +23,24 @@ from typing import Optional
 
 from .errors import ErrorCode
 
-#: Content types the browser may open inside the page (BR2.7).
+#: Content types the browser may open inside the page.
 INLINE_CONTENT_TYPES: frozenset[str] = frozenset(
     {"image/png", "image/jpeg", "image/webp", "application/pdf"}
 )
 
-#: The largest survey result CSV streamed through the app (BR2.3, Q1 A).
+#: The largest survey result CSV streamed through the app.
 SURVEY_CSV_MAX_BYTES = 200 * 1024 * 1024
 
 
 class AssetDeliveryMode(StrEnum):
-    """How files reach the browser (``Config.ASSET_DELIVERY``, BR1.1)."""
+    """How files reach the browser (``Config.ASSET_DELIVERY``)."""
 
     PRESIGNED = "presigned"
     PROXY = "proxy"
 
 
 class SizeLimit(StrEnum):
-    """Which size limit applies when a file is streamed (BR2.3)."""
+    """Which size limit applies when a file is streamed."""
 
     UPLOAD = "upload"
     SURVEY_CSV = "survey_csv"
@@ -66,14 +66,14 @@ def max_bytes(limit: SizeLimit, *, upload_max_bytes: int) -> int:
 
 
 def disposition_for(content_type: str) -> str:
-    """``inline`` for images and PDF, ``attachment`` for anything else (BR2.7)."""
+    """``inline`` for images and PDF, ``attachment`` for anything else."""
     base = content_type.split(";", 1)[0].strip().lower()
     return "inline" if base in INLINE_CONTENT_TYPES else "attachment"
 
 
 @dataclass(frozen=True)
 class AssetHandle:
-    """One delivery request, made by a Manager after its authorization (BR2.4).
+    """One delivery request, made by a Manager after its authorization.
 
     Attributes:
         s3_path: ``s3://`` path taken from stored metadata, never user input.
@@ -104,7 +104,7 @@ class AssetHandle:
 class AssetStream:
     """An opened S3 object: its body in chunks, its size and how to close it.
 
-    ``close`` may be called any number of times (BR4.5).
+    ``close`` may be called any number of times.
     """
 
     chunks: Iterator[bytes]
@@ -125,14 +125,14 @@ class DeliveryResult:
 
     @classmethod
     def redirect(cls, url: str) -> "DeliveryResult":
-        """A result that sends the browser to a presigned URL (BR2.1)."""
+        """A result that sends the browser to a presigned URL."""
         return cls(kind=DeliveryKind.REDIRECT, presigned_url=url)
 
     @classmethod
     def stream(
         cls, asset: AssetStream, content_type: str, download_name: str
     ) -> "DeliveryResult":
-        """A result that streams ``asset`` through the app (BR2.2, BR2.7)."""
+        """A result that streams ``asset`` through the app."""
         return cls(
             kind=DeliveryKind.STREAM,
             asset=asset,

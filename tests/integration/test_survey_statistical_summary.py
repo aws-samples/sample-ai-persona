@@ -1,7 +1,8 @@
-"""SurveyBatchService.generate_statistical_summary の空欄の扱い（BR4.6、FR5.5）。
+"""Handling of blanks in SurveyBatchService.generate_statistical_summary.
 
-取れなかった人は CSV で回答の列が空欄になる（BR4.3）。設問ごとに空欄の行を除いてから
-数え、割合の分母は回答のあった人数にする。行は捨てず、属性の集計には残す。
+A person who could not be reached has a blank answer column in the CSV. Blank rows
+are excluded per question before counting, and the denominator for ratios is the
+number of people who answered. Rows are not dropped; they stay in attribute aggregation.
 """
 
 import pytest
@@ -40,7 +41,7 @@ def _csv() -> str:
         "p1,男,30,会社員,日本,関東,東京都,未婚,単一,A,複数,X|Y,5段階,4,自由,良い",
         "p2,女,40,会社員,日本,関西,大阪府,既婚,単一,B,複数,Y,5段階,2,自由,普通",
         "p3,女,50,自営業,日本,関東,東京都,既婚,単一,A,複数,X,5段階,5,自由,楽しい",
-        # 取れなかった人（回答の列が空欄）
+        # People who could not be reached (blank answer column)
         "p4,男,20,学生,日本,関東,東京都,未婚,単一,,複数,,5段階,,自由,",
     ]
     return "\n".join([header, *rows]) + "\n"

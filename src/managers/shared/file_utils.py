@@ -1,6 +1,6 @@
-"""ファイル操作ユーティリティ（純粋関数 — I/Oなし）
+"""File operation utilities (pure functions, no I/O).
 
-テキスト抽出、エンコーディング検出、CSV解析、一時ファイル管理を提供する。
+Provides text extraction, encoding detection, CSV parsing and temp file management.
 """
 
 import csv
@@ -15,7 +15,7 @@ from ...models.dataset import DatasetColumn
 
 
 def detect_encoding(content: bytes) -> str:
-    """バイト列のエンコーディングを検出する。検出失敗時はValueErrorを送出。"""
+    """Detect the encoding of a byte string. Raises ValueError if detection fails."""
     for encoding in ("utf-8", "shift_jis", "euc-jp"):
         try:
             content.decode(encoding)
@@ -26,9 +26,9 @@ def detect_encoding(content: bytes) -> str:
 
 
 def extract_text_from_bytes(content: bytes, filename: str) -> str:
-    """ファイル内容からテキストを抽出する。
+    """Extract text from file contents.
 
-    PDF/DOCX/PPTX はmarkitdownで変換、テキスト系はデコードする。
+    PDF/DOCX/PPTX are converted with markitdown; text formats are decoded.
     """
     file_ext = Path(filename).suffix.lower()
 
@@ -50,7 +50,7 @@ def extract_text_from_bytes(content: bytes, filename: str) -> str:
 
 
 def get_csv_preview(content: bytes, max_lines: int = 20) -> str:
-    """CSVバイト列から先頭N行のプレビュー文字列を生成する。"""
+    """Build a preview string of the first N rows from CSV bytes."""
     encoding = detect_encoding(content)
     decoded = content.decode(encoding)
     lines = decoded.splitlines()
@@ -61,7 +61,7 @@ def get_csv_preview(content: bytes, max_lines: int = 20) -> str:
 
 
 def save_temp_csv(content: bytes) -> str:
-    """CSVをUTF-8で/tmpに保存し、パスを返す。"""
+    """Save the CSV to /tmp as UTF-8 and return the path."""
     encoding = detect_encoding(content)
     decoded = content.decode(encoding)
     csv_path = f"/tmp/persona_csv_{uuid.uuid4().hex[:8]}.csv"
@@ -71,16 +71,16 @@ def save_temp_csv(content: bytes) -> str:
 
 
 def cleanup_temp_files(paths: list[str]) -> None:
-    """一時ファイルを削除する（存在しなくてもエラーにしない）。"""
+    """Delete a temp file (no error if it does not exist)."""
     for p in paths:
         try:
             os.unlink(p)
         except OSError:
-            continue  # ベストエフォート削除: ファイル不存在・権限不足は無視
+            continue  # Best-effort delete: ignore missing file or insufficient permission
 
 
 def normalize_csv_headers(headers: list[str]) -> list[str]:
-    """CSVヘッダー名を正規化し、クエリ不能な列名なら ValueError を送出する。
+    """Normalize CSV header names; raise ValueError for names that cannot be queried.
 
     Strips surrounding whitespace to match DuckDB ``read_csv_auto`` (which trims
     header names). Raises ``ValueError`` when a name is empty/whitespace-only or
@@ -106,9 +106,10 @@ def normalize_csv_headers(headers: list[str]) -> list[str]:
 def analyze_csv_schema(
     csv_bytes: bytes, sample_rows: int = 100
 ) -> tuple[list[DatasetColumn], int]:
-    """CSVバイト列からスキーマ（カラム情報）と行数を解析する。
+    """Parse the schema (column info) and row count from CSV bytes.
 
-    ヘッダー名は正規化（前後空白除去）し、空・重複がある場合は ValueError を送出する。
+    Header names are normalized (surrounding whitespace removed); empty or
+    duplicate names raise ValueError.
     """
     text = csv_bytes.decode("utf-8-sig")
     reader = csv.reader(io.StringIO(text))
@@ -121,7 +122,7 @@ def analyze_csv_schema(
     rows: list[list[str]] = []
     row_count = 0
     for row in reader:
-        # 空行は csv.reader が [] で返す。DuckDB は空行を行として読まないため数えない
+        # csv.reader returns [] for a blank line. DuckDB does not read blank lines as rows, so they are not counted
         if not row:
             continue
         row_count += 1
@@ -138,7 +139,7 @@ def analyze_csv_schema(
 
 
 def detect_binding_key(columns: list[str], csv_bytes: bytes) -> tuple[str, str]:
-    """CSVから識別キーカラムと先頭行の値を検出する。"""
+    """Detect the identifying key column and first-row values from a CSV."""
     id_candidates = ["user_id", "customer_id", "member_id", "uid", "cid"]
     header_lower = [c.lower().strip() for c in columns]
     key_col = ""
@@ -159,7 +160,7 @@ def detect_binding_key(columns: list[str], csv_bytes: bytes) -> tuple[str, str]:
 
 
 def infer_behavior_data_type(columns: list[str]) -> str:
-    """CSVカラム名からデータ種別を推定する（全カラムのヒット数で最多種別を返す）。"""
+    """Infer the data type from CSV column names (return the type with the most column hits)."""
     hints: dict[str, str] = {
         "purchase": "購買履歴",
         "order": "購買履歴",
@@ -190,7 +191,7 @@ def infer_behavior_data_type(columns: list[str]) -> str:
 def parse_csv_columns_with_samples(
     csv_bytes: bytes, standard_columns: dict | None = None
 ) -> dict[str, Any]:
-    """CSVカラム一覧 + サンプル値 + 行数 + 自動マッピング候補を返す。"""
+    """Return the CSV column list + sample values + row count + auto-mapping candidates."""
     try:
         import polars as pl
 
@@ -227,7 +228,7 @@ def parse_csv_columns_with_samples(
 def parse_csv_first_row_with_mapping(
     csv_bytes: bytes, column_mapping: dict[str, str]
 ) -> dict[str, str]:
-    """CSVの最初の行をマッピング適用後の辞書として返す（プレビュー用）。"""
+    """Return the first CSV row as a dict after applying the mapping (for preview)."""
     text = csv_bytes.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
     first_row = next(reader, None)
@@ -243,7 +244,7 @@ def parse_csv_first_row_with_mapping(
 
 
 def count_csv_rows(csv_bytes: bytes) -> int:
-    """CSVの全行数を返す。"""
+    """Return the total number of CSV rows."""
     import polars as pl
 
     df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000)
@@ -251,7 +252,7 @@ def count_csv_rows(csv_bytes: bytes) -> int:
 
 
 def build_results_csv_bytes(headers: list[str], rows: list[list[str]]) -> bytes:
-    """CSVヘッダーと行データからCSVバイト列を生成する（BOM付きUTF-8）。"""
+    """Build CSV bytes from CSV headers and row data (UTF-8 with BOM)."""
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_ALL)
     writer.writerow(headers)
@@ -261,7 +262,7 @@ def build_results_csv_bytes(headers: list[str], rows: list[list[str]]) -> bytes:
 
 
 def parse_results_csv(csv_bytes: bytes) -> list[dict[str, str]]:
-    """CSVバイト列を回答データ構造にパースする。"""
+    """Parse CSV bytes into the answer data structure."""
     text = csv_bytes.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
     return [dict(row) for row in reader]
@@ -270,7 +271,7 @@ def parse_results_csv(csv_bytes: bytes) -> list[dict[str, str]]:
 def compress_image_for_batch(
     image_bytes: bytes, max_side: int = 768, quality: int = 50
 ) -> tuple[bytes, str]:
-    """画像をリサイズ・JPEG圧縮してバイト列とメディアタイプを返す。"""
+    """Resize and JPEG-compress an image and return the bytes and media type."""
     from PIL import Image
     from PIL.Image import Resampling
 
@@ -284,20 +285,21 @@ def compress_image_for_batch(
     return buf.getvalue(), "image/jpeg"
 
 
-# Bedrock 上の Claude が受け付ける画像の上限（Issue #217）。
-# 1 枚 3.75 MB（base64 後 5 MB）まで。1 リクエストの画像が 20 枚を超えると、1 枚あたりの
-# 寸法の上限が厳しくなる。会話の履歴に画像が溜まっていくため、常に長辺 2000 px に収める。
-# 縮めるときもこの長辺にする（Claude 4.7 以降は長辺 2576 px まで読むため、小さくしすぎない）
+# Image limits Claude on Bedrock accepts (Issue #217).
+# Up to 3.75 MB per image (5 MB after base64). Above 20 images in one request, the
+# per-image dimension limit gets stricter. Images pile up in conversation history,
+# so always fit the long side to 2000 px.
+# Shrink to this long side too (Claude 4.7+ reads up to 2576 px on the long side, so do not go smaller)
 MODEL_IMAGE_MAX_BYTES = 3_750_000
 MODEL_IMAGE_MAX_SIDE = 2000
 _MODEL_IMAGE_QUALITIES = (85, 70, 50, 30)
-# 展開する画素数の上限。PNG などは原寸で展開するため、これで一時的なメモリを抑える
-# （25MP の RGBA で約 100 MiB）。JPEG は縮小しながら展開する（draft）ので、アバター画像と
-# 同じく 50MP まで受ける（4800 万画素のスマートフォン写真を含む）
+# Upper limit of pixels to decode. PNG etc. decode at full size, so this caps
+# temporary memory (about 100 MiB for 25MP RGBA). JPEG is decoded while shrinking
+# (draft), so up to 50MP is accepted, as for avatar images (48-megapixel phone photos included)
 MODEL_IMAGE_MAX_SOURCE_PIXELS = 25_000_000
 MODEL_IMAGE_MAX_JPEG_SOURCE_PIXELS = 50_000_000
-# 中身から判定した形式 → Bedrock の image.format。カメラの JPEG の多くは MPO（JPEG に
-# 別の画像を付け足した形式）と判定されるが、先頭は普通の JPEG として読める
+# Format detected from content -> Bedrock image.format. Many camera JPEGs are detected as
+# MPO (JPEG with another image appended), but their start reads as a normal JPEG
 _MODEL_IMAGE_FORMATS = {
     "PNG": "png",
     "JPEG": "jpeg",
@@ -306,7 +308,7 @@ _MODEL_IMAGE_FORMATS = {
     "WEBP": "webp",
 }
 _JPEG_FORMATS = frozenset({"JPEG", "MPO"})
-# EXIF の向き → 正しい向きに戻す変換。モデルはメタデータを読まないため画素を回す
+# EXIF orientation -> transform that restores the correct orientation. The model does not read metadata, so rotate the pixels
 _EXIF_ORIENTATION = 0x0112
 _ORIENTATION_TRANSPOSE = {
     2: "FLIP_LEFT_RIGHT",
@@ -417,7 +419,7 @@ def _flatten_for_jpeg(img: Any) -> Any:
 
 
 def _infer_column_type(values: list[str]) -> str:
-    """値リストからカラムの型を推定する。"""
+    """Infer a column type from a list of values."""
     non_empty = [v for v in values if v.strip()]
     if not non_empty:
         return "string"

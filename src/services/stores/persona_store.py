@@ -1,24 +1,25 @@
-"""DynamoDB reads and writes of persona bodies (U4, U5).
+"""DynamoDB reads and writes of persona bodies.
 
-``Personas``: PK ``id``. ``owner_sub`` is the creator (BR6.1);
+``Personas``: PK ``id``. ``owner_sub`` is the creator;
 ``shared_group_ids`` is the copy of the shares, written only by
-``ResourceSharing`` together with ``ResourceShares`` (BR1.6).
+``ResourceSharing`` together with ``ResourceShares``.
 
 - A new persona is written only when the ``id`` does not exist yet, so a save
-  never overwrites a stored owner or shares (R-02).
-- An edit writes only the columns the edit screen can change (BR6.7); the
+  never overwrites a stored owner or shares.
+- An edit writes only the columns the edit screen can change; the
   owner, the shares, the avatar, the generation log and ``created_at`` stay.
   Optional columns that became empty are removed.
 - The avatar path changes with a compare-and-set on the path read before.
 - Batch reads are strongly consistent; unprocessed keys are read again and
-  are never silently dropped (NFR2.5).
-- Only the admin's ``all`` tab search scans the table (U4 BR3.5).
+  are never silently dropped.
+- Only the admin's ``all`` tab search scans the table.
 
 Who may save, read or edit a persona is decided by ``PersonaManager``.
 """
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Mapping, Optional, Sequence
 
 import boto3
@@ -34,6 +35,28 @@ logger = logging.getLogger(__name__)
 BATCH_LIMIT = 100
 #: Re-reads of ``UnprocessedKeys`` before giving up.
 UNPROCESSED_REREADS = 3
+
+
+def _to_dynamo(value: Any) -> Any:
+    """Floats become ``Decimal`` (``TypeSerializer`` refuses floats)."""
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, Mapping):
+        return {k: _to_dynamo(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_dynamo(v) for v in value]
+    return value
+
+
+def _from_dynamo(value: Any) -> Any:
+    """``Decimal`` back to ``int`` / ``float``."""
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {k: _from_dynamo(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_from_dynamo(v) for v in value]
+    return value
 
 
 class PersonaStoreError(CodedError):
@@ -104,7 +127,7 @@ class PersonaStore:
         """One persona, or ``None`` when it does not exist.
 
         Authorization reads pass ``consistent=True`` so a share removed a
-        moment ago is never seen (NFR1.12).
+        moment ago is never seen.
         """
         response = self._call(
             "get_item",
@@ -132,7 +155,7 @@ class PersonaStore:
         return found
 
     def scan_all(self) -> list[Persona]:
-        """Every persona, every scan page (the admin's ``all`` tab, BR3.5)."""
+        """Every persona, every scan page (the admin's ``all`` tab)."""
         params: dict[str, Any] = {"TableName": self.table_name}
         found: list[Persona] = []
         while True:
@@ -144,7 +167,7 @@ class PersonaStore:
             params["ExclusiveStartKey"] = last
 
     def update_editable(self, persona: Persona) -> bool:
-        """Write the columns the edit screen can change (BR6.7).
+        """Write the columns the edit screen can change.
 
         Returns:
             ``False`` when the persona does not exist (nothing is created).
@@ -248,7 +271,7 @@ class PersonaStore:
         raise PersonaStoreError("personas left unprocessed after three re-reads")
 
     def _item(self, values: Mapping[str, Any]) -> dict[str, Any]:
-        return {k: self._serializer.serialize(v) for k, v in values.items()}
+        return {k: self._serializer.serialize(_to_dynamo(v)) for k, v in values.items()}
 
     def _persona(self, item: Mapping[str, Any]) -> Persona:
         data = {k: self._deserializer.deserialize(v) for k, v in item.items()}
@@ -269,7 +292,7 @@ class PersonaStore:
             city=data.get("city"),
             tags=data.get("tags", []),
             generation_log=data.get("generation_log"),
-            generation_context=data.get("generation_context"),
+            generation_context=_from_dynamo(data.get("generation_context")),
             avatar_path=data.get("avatar_path"),
             owner_sub=data.get("owner_sub") or None,
             shared_group_ids=frozenset(data.get("shared_group_ids") or ()),

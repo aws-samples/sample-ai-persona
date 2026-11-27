@@ -10,11 +10,11 @@ import uuid
 
 @dataclass
 class TemplateImage:
-    """テンプレートに添付する画像"""
+    """Image attached to a template"""
 
     id: str
-    name: str  # ユーザーが付けるラベル名
-    file_path: str  # S3パスまたはローカルパス
+    name: str  # Label given by the user
+    file_path: str  # S3 path or local path
     mime_type: str
     original_filename: str
 
@@ -52,7 +52,7 @@ class TemplateImage:
 
 @dataclass
 class Question:
-    """アンケートの個別質問"""
+    """One survey question"""
 
     id: str
     text: str
@@ -60,8 +60,8 @@ class Question:
     options: List[str] = field(default_factory=list)
     scale_min: int = 1
     scale_max: int = 5
-    allow_multiple: bool = False  # 複数回答を許可するか（選択式のみ）
-    max_selections: int = 0  # 最大選択数（0=無制限、選択式+複数回答時のみ有効）
+    allow_multiple: bool = False  # Multiple answers allowed (choice only)
+    max_selections: int = 0  # Max selections (0 = unlimited; multi-answer choice only)
 
     @classmethod
     def create_multiple_choice(
@@ -71,7 +71,7 @@ class Question:
         allow_multiple: bool = False,
         max_selections: int = 0,
     ) -> "Question":
-        """選択式質問を作成する"""
+        """Create a choice question"""
         return cls(
             id=str(uuid.uuid4()),
             text=text,
@@ -83,7 +83,7 @@ class Question:
 
     @classmethod
     def create_free_text(cls, text: str) -> "Question":
-        """自由記述質問を作成する"""
+        """Create a free-text question"""
         return cls(
             id=str(uuid.uuid4()),
             text=text,
@@ -92,7 +92,7 @@ class Question:
 
     @classmethod
     def create_scale_rating(cls, text: str) -> "Question":
-        """スケール評価質問を作成する"""
+        """Create a scale-rating question"""
         return cls(
             id=str(uuid.uuid4()),
             text=text,
@@ -132,10 +132,11 @@ class Question:
 
 @dataclass
 class SurveyTemplate:
-    """アンケートテンプレート
+    """Survey template.
 
-    U7（約束 C8）: ``owner_sub`` は作った人（v1.0.0 より前のテンプレートにはない）、
-    ``shared_group_ids`` は共有先の部署で、書くのは ``ResourceSharing`` だけ。
+    ``owner_sub`` is its creator (absent for templates created before owners
+    were recorded); ``shared_group_ids`` are the departments it is shared with,
+    written only by ``ResourceSharing``.
     """
 
     id: str
@@ -166,7 +167,7 @@ class SurveyTemplate:
         )
 
     def owned_by(self, owner_sub: str) -> "SurveyTemplate":
-        """Return a new instance owned by ``owner_sub`` and unshared (BR1.1)."""
+        """Return a new instance owned by ``owner_sub`` and unshared."""
         return replace(self, owner_sub=owner_sub, shared_group_ids=frozenset())
 
     def edited(
@@ -176,7 +177,7 @@ class SurveyTemplate:
         images: List[TemplateImage],
         now: Optional[datetime] = None,
     ) -> "SurveyTemplate":
-        """Return the edited template; owner, shares and ``created_at`` stay (BR1.5)."""
+        """Return the edited template; owner, shares and ``created_at`` stay."""
         return replace(
             self,
             name=name,

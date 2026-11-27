@@ -1,4 +1,4 @@
-"""Share dialog (U4, M7, WF1, WF2, BR7.1〜BR7.5, NFR6.13〜NFR6.15, AC3.2.1, AC3.2.2, AC3.3.3)."""
+"""Share dialog."""
 
 import json
 from typing import Any

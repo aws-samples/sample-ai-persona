@@ -1,8 +1,8 @@
 """
-システム設定ルーター - データセット管理、MCP設定、ナレッジベース管理
+System settings router - dataset management, MCP settings, knowledge base management
 
-U7: 設定は admin だけ（settings:manage）。判定は Manager が行い、member には
-共通の例外ハンドラが 404 を返す（BR3.1）。組織資産の利用範囲のダイアログ（M10、BR5.2）。
+Settings are admin-only (settings:manage). The Manager decides, and members get
+a 404 from the shared exception handler. Also the usage-scope dialog of organization assets.
 """
 
 import asyncio
@@ -31,6 +31,7 @@ from src.models.sharing import ScopedAssets
 from web import asset_scope_views
 from web.error_messages import (
     error_kind_of,
+    error_payload,
     is_correctable,
     mark_renderable,
     toast_response,
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
-# 表示ヘルパー: KB の種類の表示名（選択肢の並びと一覧の表示に使う）
+# Display helper: display name of a KB type (used for the option order and the list)
 templates.env.globals["kb_type_labels"] = KB_TYPE_LABELS
 templates.env.globals["kb_type_recommended"] = KB_TYPE_RECOMMENDED
 
@@ -54,7 +55,7 @@ _ACCESS_KINDS = (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN, ErrorKind.UNAUTHORIZE
 #: The list each asset kind reloads after a scope save (its ``data-reload-url``).
 _SCOPE_LISTS = {"datasets": "#dataset-list", "knowledge-bases": "#kb-list"}
 
-# シングルトンマネージャー
+# Singleton managers
 _dataset_manager: Optional[DatasetManager] = None
 _settings_manager: Optional[SettingsManager] = None
 
@@ -74,7 +75,7 @@ def get_settings_manager() -> SettingsManager:
 
 
 def _principal(request: Request) -> Principal:
-    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    """The signed-in user that ``AuthMiddleware`` put on the request."""
     principal: Principal = request.state.principal
     return principal
 
@@ -117,7 +118,7 @@ def _kb_list(request: Request, assets: ScopedAssets) -> Any:
 
 @router.get("", response_class=HTMLResponse)
 async def settings_page(request: Request) -> Any:
-    """システム設定ページ（admin だけ）"""
+    """System settings page (admin only)."""
     principal = _principal(request)
     datasets = await _run(get_dataset_manager().get_datasets, principal)
     settings_manager = get_settings_manager()
@@ -133,26 +134,29 @@ async def settings_page(request: Request) -> Any:
             **_dataset_context(datasets),
             **_kb_context(knowledge_bases),
             **data_agent,
+            "show_advanced_generation_settings": (
+                settings_manager.is_advanced_generation_section_offered()
+            ),
         },
     )
 
 
 @router.get("/datasets", response_class=HTMLResponse)
 async def list_datasets(request: Request) -> Any:
-    """データセット一覧"""
+    """Dataset list."""
     datasets = await _run(get_dataset_manager().get_datasets, _principal(request))
     return _dataset_list(request, datasets)
 
 
 @router.get("/datasets/form", response_class=HTMLResponse)
 async def dataset_form(request: Request, dataset_id: Optional[str] = None) -> Any:
-    """データセット編集フォーム"""
+    """Dataset edit form."""
     principal = _principal(request)
     dataset_manager = get_dataset_manager()
     if dataset_id:
         dataset = await _run(dataset_manager.get_dataset, principal, dataset_id)
     else:
-        # 新規の形は一覧と同じ判定を通す（admin だけ）
+        # A new form goes through the same check as the list (admin only)
         await _run(dataset_manager.get_datasets, principal)
         dataset = None
 
@@ -178,12 +182,12 @@ async def dataset_form(request: Request, dataset_id: Optional[str] = None) -> An
 
 @router.post("/datasets/analyze", response_class=HTMLResponse)
 async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
-    """CSVファイルのスキーマを解析"""
+    """Parse the schema of a CSV file."""
     principal = _principal(request)
     content = await file.read()
     dataset_manager = get_dataset_manager()
     try:
-        # 形式・大きさの検査も Manager の判定（admin だけ）のあと
+        # Format and size checks also come after the Manager's check (admin only)
         if not (file.filename or "").endswith(".csv"):
             await _run(dataset_manager.get_datasets, principal)
             return _inline_error(
@@ -192,7 +196,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
                     ErrorCode.FILE_FORMAT_NOT_ALLOWED, {"allowed_formats": "CSV"}
                 ),
             )
-        if len(content) > 10 * 1024 * 1024:  # 10MB制限
+        if len(content) > 10 * 1024 * 1024:  # 10MB limit
             await _run(dataset_manager.get_datasets, principal)
             return _inline_error(
                 request,
@@ -204,12 +208,12 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
     except DatasetManagerError as e:
         if error_kind_of(e) in _ACCESS_KINDS:
             raise
-        # 空/重複ヘッダ等でクエリ列名と乖離するCSVは、汎用500ではなく
-        # フォーム近傍にインラインで理由を表示する（他バリデーションと同様）。
+        # A CSV whose empty/duplicate headers etc. diverge from the query column names
+        # shows the reason inline near the form instead of a generic 500 (like other validation).
         logger.warning("CSV schema analysis rejected", exc_info=True)
         return _inline_error(request, user_message_for(e))
 
-    # DatasetColumnをdictに変換
+    # Convert DatasetColumn to dict
     columns_dict = [
         {"name": c.name, "data_type": c.data_type, "description": c.description}
         for c in columns
@@ -259,7 +263,7 @@ async def create_dataset(
     notes: str = Form(""),
     columns_json: str = Form(...),
 ) -> Any:
-    """データセット作成"""
+    """Create a dataset."""
     principal = _principal(request)
     dataset_manager = get_dataset_manager()
     try:
@@ -280,7 +284,7 @@ async def create_dataset(
     except Exception as e:
         if error_kind_of(e) in _ACCESS_KINDS:
             raise
-        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
+        # Errors that a retry can fix are shown as a toast without clearing the input form
         logger.error("Dataset creation failed", exc_info=True)
         return toast_response(
             e, default="データセット作成に失敗しました", status_code=500
@@ -297,7 +301,7 @@ async def update_dataset(
     notes: str = Form(""),
     columns_json: str = Form(...),
 ) -> Any:
-    """データセット更新"""
+    """Update a dataset."""
     principal = _principal(request)
     dataset_manager = get_dataset_manager()
     try:
@@ -318,7 +322,7 @@ async def update_dataset(
     except Exception as e:
         if error_kind_of(e) in _ACCESS_KINDS:
             raise
-        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
+        # Errors that a retry can fix are shown as a toast without clearing the input form
         logger.error("Dataset update failed", exc_info=True)
         return toast_response(
             e, default="データセット更新に失敗しました", status_code=500
@@ -341,7 +345,7 @@ async def update_dataset(
 
 @router.delete("/datasets/{dataset_id}", response_class=HTMLResponse)
 async def delete_dataset(request: Request, dataset_id: str) -> Any:
-    """データセット削除"""
+    """Delete a dataset."""
     principal = _principal(request)
     dataset_manager = get_dataset_manager()
     success = await _run(dataset_manager.delete_dataset, principal, dataset_id)
@@ -363,20 +367,20 @@ async def delete_dataset(request: Request, dataset_id: str) -> Any:
     return _dataset_list(request, datasets)
 
 
-# JSON API（他のページから使用）
+# JSON API (used from other pages)
 @router.get("/api/datasets")
 async def api_list_datasets(request: Request) -> Any:
-    """データセット一覧API"""
+    """Dataset list API."""
     datasets = await _run(get_dataset_manager().get_datasets, _principal(request))
     return [d.to_dict() for d in datasets.items]
 
 
-# ==================== ナレッジベース管理 ====================
+# ==================== Knowledge base management ====================
 
 
 @router.get("/knowledge-bases", response_class=HTMLResponse)
 async def list_knowledge_bases(request: Request) -> Any:
-    """ナレッジベース一覧"""
+    """Knowledge base list."""
     knowledge_bases = await _run(
         get_settings_manager().get_all_knowledge_bases, _principal(request)
     )
@@ -391,7 +395,7 @@ async def create_knowledge_base(
     description: str = Form(""),
     kb_type: str = Form(KB_TYPE_SELF_MANAGED),
 ) -> Any:
-    """ナレッジベース登録"""
+    """Register a knowledge base."""
     principal = _principal(request)
     settings_manager = get_settings_manager()
     try:
@@ -410,12 +414,12 @@ async def create_knowledge_base(
         if error_kind_of(e) in _ACCESS_KINDS:
             raise
         if is_correctable(e):
-            # 入力の誤り（知らない種類など）。サーバーの失敗としては扱わない
+            # Bad input (e.g. an unknown kind). Not treated as a server failure
             logger.warning("KB registration was refused: %s", error_kind_of(e))
             return toast_response(
                 e, default="ナレッジベースの登録に失敗しました", status_code=400
             )
-        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
+        # Errors that a retry can fix are shown as a toast without clearing the input form
         logger.error("KB registration failed", exc_info=True)
         return toast_response(
             e, default="ナレッジベースの登録に失敗しました", status_code=500
@@ -425,7 +429,7 @@ async def create_knowledge_base(
 
 @router.delete("/knowledge-bases/{kb_id}", response_class=HTMLResponse)
 async def delete_knowledge_base(request: Request, kb_id: str) -> Any:
-    """ナレッジベース削除"""
+    """Delete a knowledge base."""
     principal = _principal(request)
     settings_manager = get_settings_manager()
     await _run(settings_manager.delete_knowledge_base, principal, kb_id)
@@ -433,17 +437,17 @@ async def delete_knowledge_base(request: Request, kb_id: str) -> Any:
     return _kb_list(request, knowledge_bases)
 
 
-# JSON API（他のページから使用）
+# JSON API (used from other pages)
 @router.get("/api/knowledge-bases")
 async def api_list_knowledge_bases(request: Request) -> Any:
-    """ナレッジベース一覧API"""
+    """Knowledge base list API."""
     knowledge_bases = await _run(
         get_settings_manager().get_all_knowledge_bases, _principal(request)
     )
     return [kb.to_dict() for kb in knowledge_bases.items]
 
 
-# ==================== 組織資産の利用範囲（M10、BR5.2） ====================
+# ==================== Usage scope of organization assets ====================
 
 
 def _scope_owner(kind: str) -> Any:
@@ -453,7 +457,7 @@ def _scope_owner(kind: str) -> Any:
 
 @router.get("/{kind}/{asset_id}/scope", response_class=HTMLResponse)
 async def asset_scope_dialog(request: Request, kind: str, asset_id: str) -> Any:
-    """利用範囲のダイアログ（admin だけ）"""
+    """Usage-scope dialog (admin only)."""
     if kind not in _SCOPE_LISTS:
         return Response(status_code=404)
     dialog = await _run(_scope_owner(kind).scope_dialog, _principal(request), asset_id)
@@ -464,7 +468,7 @@ async def asset_scope_dialog(request: Request, kind: str, asset_id: str) -> Any:
 
 @router.post("/{kind}/{asset_id}/scope", response_class=HTMLResponse)
 async def save_asset_scope(request: Request, kind: str, asset_id: str) -> Any:
-    """利用範囲の保存（開いたときの部署との差分だけを変える）"""
+    """Save the usage scope (changes only the difference from the departments when it was opened)."""
     if kind not in _SCOPE_LISTS:
         return Response(status_code=404)
     change = await asset_scope_views.change_from_request(request)
@@ -482,12 +486,102 @@ async def save_asset_scope(request: Request, kind: str, asset_id: str) -> Any:
     return asset_scope_views.saved_response(_SCOPE_LISTS[kind])
 
 
-# ==================== データ分析エージェント連携設定 ====================
+# ==================== Data analysis agent integration settings ====================
+
+
+# --- Advanced generation (beta) section ---
+
+#: The toast of a saved section.
+_SAVED_TOAST = "保存しました。次に開いたページから反映されます"
+
+
+def _advanced_section(
+    request: Request,
+    view: Any,
+    *,
+    status_code: int = 200,
+    error: Optional[str] = None,
+    form: Optional[dict[str, Any]] = None,
+    headers: Optional[dict[str, str]] = None,
+) -> Any:
+    return templates.TemplateResponse(
+        request,
+        "settings/partials/advanced_generation_settings.html",
+        {"request": request, "view": view, "error": error, "form": form},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.get("/advanced-generation", response_class=HTMLResponse)
+async def advanced_generation_section(request: Request) -> Any:
+    """Advanced generation section (404 without settings:manage)."""
+    view = await _run(
+        get_settings_manager().advanced_generation_section, _principal(request)
+    )
+    return _advanced_section(request, view)
+
+
+@router.post("/advanced-generation", response_class=HTMLResponse)
+async def save_advanced_generation(
+    request: Request,
+    audience_mode: str = Form(""),
+    departments: list[str] = Form(default=[]),
+    allow_detailed_analysis: str = Form(""),
+    version: str = Form(""),
+) -> Any:
+    """Save the advanced generation section (403 without permission).
+
+    Bad input gives 400 with the reason in the section and keeps the entered values. A version
+    conflict gives 409 with the section showing the latest values. Success gives the new version's section and a toast.
+    """
+    principal = _principal(request)
+    manager = get_settings_manager()
+    form = {
+        "audience_mode": audience_mode,
+        "department_groups": list(departments),
+        "allow_detailed_analysis": allow_detailed_analysis == "true",
+        "version": version,
+    }
+    try:
+        view = await _run(manager.save_advanced_generation_setting, principal, form)
+    except SettingsManagerError as e:
+        if error_kind_of(e) in _ACCESS_KINDS:
+            raise
+        code = error_payload(e)["error_code"]
+        if code == ErrorCode.SETTINGS_VERSION_CONFLICT.value:
+            # The latest values and version, read again
+            logger.info("advanced generation setting lost its version")
+            latest = await _run(manager.advanced_generation_section, principal)
+            return mark_renderable(
+                _advanced_section(
+                    request,
+                    latest.update(notice="conflict"),
+                    status_code=409,
+                    error=user_message_for(e),
+                )
+            )
+        if is_correctable(e):
+            logger.info("advanced generation setting refused")
+            current = await _run(manager.advanced_generation_section, principal)
+            return mark_renderable(
+                _advanced_section(
+                    request,
+                    current,
+                    status_code=400,
+                    error=user_message_for(e),
+                    form=form,
+                )
+            )
+        logger.warning("advanced generation setting not saved", exc_info=True)
+        return toast_response(e, status_code=500)
+    trigger = {"showToast": {"message": _SAVED_TOAST, "type": "success"}}
+    return _advanced_section(request, view, headers={"HX-Trigger": json.dumps(trigger)})
 
 
 @router.get("/data-agent/status", response_class=HTMLResponse)
 async def data_agent_status(request: Request) -> Any:
-    """データ分析エージェント設定状態取得"""
+    """Get the data analysis agent settings state."""
     data_agent = get_settings_manager().get_data_agent_settings(_principal(request))
     return templates.TemplateResponse(
         request,
@@ -503,7 +597,7 @@ async def save_data_agent_settings(
     region: str = Form("ap-northeast-1"),
     enabled: str = Form(""),
 ) -> Any:
-    """データ分析エージェント接続設定を保存"""
+    """Save the data analysis agent connection settings."""
     principal = _principal(request)
     settings_manager = get_settings_manager()
     settings_manager.save_data_agent_settings(
@@ -526,7 +620,7 @@ async def save_data_agent_settings(
 
 @router.post("/data-agent/test", response_class=HTMLResponse)
 async def test_data_agent_connection(request: Request) -> Any:
-    """データ分析エージェント接続テスト"""
+    """Test the data analysis agent connection."""
     settings_manager = get_settings_manager()
     try:
         result_text = await _run(
@@ -547,7 +641,7 @@ async def test_data_agent_connection(request: Request) -> Any:
         )
     except SettingsManagerError as e:
         if error_kind_of(e) in _ACCESS_KINDS:
-            # 閉域対応 U3: FORBIDDEN はトーストと 403（本文で画面を置き換えない）
+            # FORBIDDEN gives a toast and 403 (the body does not replace the screen)
             raise
         logger.warning("Data analysis agent connection test failed", exc_info=True)
         message = user_message_for(e, default="接続テストに失敗しました")

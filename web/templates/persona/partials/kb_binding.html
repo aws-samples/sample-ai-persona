@@ -1,12 +1,11 @@
-<!-- ナレッジベース紐付けパーシャル（データセット紐付けUIと統一） -->
+<!-- Knowledge base binding partial (same UI as dataset binding) -->
 {% from "components/dialog.html" import dialog, dialog_open_button %}
 {% from "components/status_label.html" import status_label %}
 {#
-  引数:
-    persona_id ... 対象ペルソナ
-    view       ... KbBindingView（binding: 今の紐付け、manageable: 変えられるか、
-                   choices: 紐付けられる KB。管理できる人にだけ入る）
-  紐付けの操作は管理できる人にだけ出す（BR4.2）。使えない KB は「利用権限なし」を文字で示す（BR2.7）。
+  Arguments:
+    persona_id ... target persona
+    view       ... KbBindingView (binding: current binding, manageable: whether it can be changed, choices: KBs that can be bound; filled only for users who can manage)
+  Binding actions are shown only to users who can manage. A KB the user cannot use shows "利用権限なし" in text.
 #}
 {% set binding = view.binding %}
 {% if binding %}
@@ -56,7 +55,7 @@
             </div>
         </div>
 
-        <!-- 紐付けダイアログ（要求が成功したときだけ閉じる。失敗したら開いたまま） -->
+        <!-- Binding dialog (closes only when the request succeeds; stays open on failure) -->
         {% call dialog("kb-binding-" ~ kb.id, kb.name ~ " を紐付け", close_on_success=True) %}
                 <p class="text-sm text-gray-600 mb-4">ナレッジベース検索時に適用するメタデータフィルタを設定してください（オプション）。</p>
 

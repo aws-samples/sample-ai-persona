@@ -1,4 +1,4 @@
-"""ペルソナ生成ワークフローを管理するManager"""
+"""Manager for the persona generation workflow"""
 
 import logging
 import re
@@ -59,9 +59,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Persona (src/models/persona.py) の create_new() パラメータと同一フィールド構成。
-# Why: Strands SDK の structured_output() は Pydantic BaseModel を要求するが、Persona は dataclass のため直接渡せない。
-# Personaのフィールド変更時はここも同期すること。
+# Same field set as the create_new() parameters of Persona (src/models/persona.py).
+# Why: Strands SDK's structured_output() requires a Pydantic BaseModel, but Persona is a dataclass and cannot be passed directly.
+# Keep this in sync when Persona's fields change.
 class _PersonaOutput(BaseModel):
     name: str = Field(description="名前（国・地域に即した自然な名前。日本語表記）")
     age: int = Field(description="年齢")
@@ -91,10 +91,10 @@ class PersonaGenerationManagerError(CodedError):
 
 
 class PersonaGenerationCapacityError(PersonaGenerationManagerError):
-    """生成数・入力量が多すぎて処理しきれなかった場合のエラー。
+    """Error when the generation count or input volume is too large to process.
 
-    Service層のGenerationCapacityError（出力トークン上限超過・タイムアウト）を
-    変換したもの。
+    Converted from the Service layer's GenerationCapacityError (output token
+    limit exceeded, timeout).
     """
 
     code = ErrorCode.GENERATION_CAPACITY_EXCEEDED
@@ -102,7 +102,7 @@ class PersonaGenerationCapacityError(PersonaGenerationManagerError):
 
 @dataclass(frozen=True)
 class GenerationResult:
-    """What one generation returns to the Router (WF1).
+    """What one generation returns to the Router.
 
     Attributes:
         personas: The generated personas. Their ``id`` is the candidate ID the
@@ -144,10 +144,11 @@ _UNSET: Any = object()
 
 
 class PersonaGenerationManager:
-    """ペルソナ生成ワークフロー全体のオーケストレーション
+    """Orchestration of the whole persona generation workflow.
 
-    v1.0.0 U5: 生成した候補はアプリの外（PersonaCandidates）に生成した人と一緒に
-    置き（BR1.1）、保存できるのは本人だけ（BR1.3）。アプリの中のキャッシュは持たない。
+    Generated candidates are placed outside the app (PersonaCandidates) together
+    with the user who generated them, and only that user can save them. There is
+    no in-app cache.
     """
 
     def __init__(
@@ -190,11 +191,11 @@ class PersonaGenerationManager:
         return self._s3
 
     # ------------------------------------------------------------------
-    # 公開API
+    # Public API
     # ------------------------------------------------------------------
 
     def ensure_data_agent_allowed(self, principal: Principal) -> None:
-        """Refuse a DWH generation before the router starts streaming (BR3.7).
+        """Refuse a DWH generation before the router starts streaming.
 
         Raises:
             AccessDeniedError: The user lacks ``ai:execute``.
@@ -215,12 +216,12 @@ class PersonaGenerationManager:
         event_queue: Any = None,
         auto_link_behavior: bool = False,
     ) -> GenerationResult:
-        """Generate personas and store them as the user's candidates (BR1.1).
+        """Generate personas and store them as the user's candidates.
 
         For a DWH generation with ``auto_link_behavior`` the behaviour CSVs the
-        data agent exported are staged under ``candidates/`` (BR1.2). Every
+        data agent exported are staged under ``candidates/``. Every
         candidate is measured before anything is written; one over 350KB fails
-        the whole generation (BR1.6).
+        the whole generation.
 
         Raises:
             AccessDeniedError: The user lacks ``ai:execute``.
@@ -230,7 +231,7 @@ class PersonaGenerationManager:
         """
         AccessPolicy.require(principal, Permission.AI_EXECUTE)
         if data_type == "dwh":
-            # Closed network U3 BR3.2 (3): before any data agent tool is built
+            # Closed network: before any data agent tool is built
             DataAgentPolicy.ensure_allowed(PersonaGenerationManagerError)
         self._validate_generation_input(
             data_type, persona_count, file_contents, data_description
@@ -325,7 +326,7 @@ class PersonaGenerationManager:
     def claim_candidates(
         self, principal: Principal, candidate_ids: list[str]
     ) -> CandidateClaim:
-        """Hold the user's candidates for one save request (BR1.3).
+        """Hold the user's candidates for one save request.
 
         Each candidate is claimed with one conditional update (owner, expiry,
         not saved, no live claim). If any cannot be claimed, the ones already
@@ -354,7 +355,7 @@ class PersonaGenerationManager:
                 )
         except CandidateUnavailable as e:
             self._release_all(claimed, token)
-            # Not an authorization denial (NFR8.17): one INFO line, no IDs of others
+            # Not an authorization denial: one INFO line, no IDs of others
             log_event("persona.candidate_unavailable", level="INFO", count=len(ids))
             raise PersonaGenerationManagerError(
                 "candidate unavailable", code=ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED
@@ -373,12 +374,12 @@ class PersonaGenerationManager:
     def finish_candidates(
         self, claim: CandidateClaim, result: CandidateSaveResult | None
     ) -> None:
-        """Clean up after a save, whatever its outcome (BR1.7). Never raises.
+        """Clean up after a save, whatever its outcome. Never raises.
 
         Saved candidates lose their item and every temporary CSV (selected or
         not); when the item cannot be deleted it is marked saved so it cannot
         be saved twice. Failed and unprocessed candidates are released. Every
-        cleanup failure is one WARNING line (NFR8.16); TTL, the lifecycle rule
+        cleanup failure is one WARNING line; TTL, the lifecycle rule
         and the 5-minute claim timeout clean up later.
         """
         saved = set(result.saved_ids) if result is not None else set()
@@ -444,7 +445,7 @@ class PersonaGenerationManager:
         thinking_log: list[dict[str, str]],
         recorder: _RecordingQueue,
     ) -> tuple[BehaviorDatasetCandidate, ...]:
-        """Fetch the behaviour CSVs and place them under ``candidates/`` (BR1.2).
+        """Fetch the behaviour CSVs and place them under ``candidates/``.
 
         A CSV that cannot be fetched, parsed or placed is left out (logged);
         the generation itself goes on.
@@ -486,7 +487,7 @@ class PersonaGenerationManager:
         return tuple(staged)
 
     # ------------------------------------------------------------------
-    # 生成ワークフロー内部
+    # Generation workflow internals
     # ------------------------------------------------------------------
 
     def _validate_generation_input(
@@ -522,20 +523,21 @@ class PersonaGenerationManager:
         data_description: str | None,
         custom_prompt: str | None,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
-        """ファイルベースのペルソナ生成"""
+        """File-based persona generation"""
         logger.info(
             f"ファイルベースペルソナ生成開始 (data_type={data_type}, count={persona_count}, files={len(file_contents)})"
         )
 
-        # 抽出は自前の finally で temp を掃除する（失敗時に呼び出し側 finally へ到達
-        # しないため）。抽出成功後は下の try/finally が temp の唯一の所有者になる。
+        # Extraction cleans up its temp files in its own finally (a failure does not
+        # reach the caller's finally). After a successful extraction, the try/finally
+        # below is the sole owner of the temp files.
         combined_text, source_descriptors = self._extract_file_texts(file_contents)
         csv_temp_paths = [d["path"] for d in source_descriptors]
 
-        # tool 構築（build_source_tools）が失敗しても temp を残さないため、抽出直後から
-        # 全処理を try/finally で囲む（round 11）。
+        # Wrap all processing in try/finally right after extraction so no temp file is left
+        # even if tool construction (build_source_tools) fails.
         try:
-            # global kill switch と CSV の有無の AND で有効判定する。
+            # Enabled only when the global kill switch AND the presence of CSVs both hold.
             enable_dataset_analysis = (
                 bool(source_descriptors) and config.ENABLE_DATASET_ANALYSIS
             )
@@ -594,7 +596,7 @@ class PersonaGenerationManager:
         event_queue: Any = None,
         auto_link_behavior: bool = False,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
-        """DWH連携のペルソナ生成"""
+        """DWH-integrated persona generation"""
         logger.info(
             f"DWH ペルソナ生成開始 (angle={analysis_angle!r}, count={persona_count}, auto_link={auto_link_behavior})"
         )
@@ -653,7 +655,7 @@ class PersonaGenerationManager:
         return personas, thinking_log
 
     def _convert_to_personas(self, result: _PersonaListOutput) -> list[Persona]:
-        """Pydantic出力 → Personaドメインモデルへの変換"""
+        """Convert Pydantic output to the Persona domain model"""
         from ..models.demographics import sanitize_gender
         from ..services.country_service import sanitize_country
 
@@ -680,7 +682,7 @@ class PersonaGenerationManager:
         data_description: str | None,
         custom_prompt: str | None,
     ) -> str:
-        """データ種別に応じたsystem_prompt構築"""
+        """Build the system_prompt according to the data type"""
         role_prompt = DATA_TYPE_PROMPTS.get(data_type)
         if role_prompt is None:
             role_prompt = f"以下は「{data_description or 'ユーザー提供データ'}」です。データ内容を分析してペルソナを生成してください。"
@@ -700,13 +702,13 @@ class PersonaGenerationManager:
         persona_count: int,
         source_descriptors: list[dict[str, Any]] | None = None,
     ) -> str:
-        """ユーザー向けプロンプト構築"""
+        """Build the user-facing prompt"""
         prompt = USER_PROMPT_TEMPLATE.format(
             persona_count=persona_count, data_text=data_text
         )
 
         if source_descriptors:
-            # LLM へは別名（dataset_id）と列名＋推定型のみ提示する（path・SQLは出さない）。
+            # Show the LLM only aliases (dataset_id) and column names with inferred types (no paths or SQL).
             csv_info = "\n".join(
                 f'- dataset_id "{d["alias"]}"（列: {self._format_source_columns(d)}）'
                 for d in source_descriptors
@@ -718,7 +720,7 @@ class PersonaGenerationManager:
 
     @staticmethod
     def _format_source_columns(descriptor: dict[str, Any]) -> str:
-        """source 記述子の列を `name (type)` 形式で列挙する（型が無ければ名前のみ）。"""
+        """List the columns of a source descriptor as `name (type)` (name only if no type)."""
         detail = descriptor.get("columns_detail")
         if detail:
             return ", ".join(
@@ -733,7 +735,7 @@ class PersonaGenerationManager:
         source_descriptors: list[dict[str, Any]],
         event_queue: Any,
     ) -> list[Any]:
-        """生成に使用するツールリストを決定する"""
+        """Decide the tool list used for generation"""
 
         tools: list[Any] = []
 
@@ -762,18 +764,19 @@ class PersonaGenerationManager:
     def _extract_file_texts(
         self, file_contents: list[tuple[bytes, str]]
     ) -> tuple[str, list[dict[str, Any]]]:
-        """ファイルからテキスト抽出。Returns: (combined_text, source_descriptors)
+        """Extract text from files. Returns: (combined_text, source_descriptors)
 
-        source_descriptors は CSV ごとの {"alias", "path", "columns"}。alias は
-        Manager がここで採番し（source_1, source_2, ...）、Service へ渡す唯一の識別子
-        とする（元ファイル名・path は LLM へ出さない）。
+        source_descriptors is {"alias", "path", "columns"} per CSV. The alias is
+        numbered here by the Manager (source_1, source_2, ...) and is the only
+        identifier passed to the Service (original file names and paths are not
+        shown to the LLM).
         """
         texts: list[str] = []
         csv_temp_paths: list[str] = []
         source_descriptors: list[dict[str, Any]] = []
 
-        # 検証で raise する場合、ここで作成した一時CSVは呼び出し側の finally に
-        # 到達しないため、送出前に自前でクリーンアップする。
+        # If validation raises, the temp CSV created here would not reach the caller's
+        # finally, so clean it up ourselves before raising.
         try:
             source_index = 0
             for content, filename in file_contents:
@@ -782,13 +785,13 @@ class PersonaGenerationManager:
                     alias = f"source_{source_index}"
                     csv_path = save_temp_csv(content)
                     csv_temp_paths.append(csv_path)
-                    # 列推論は UTF-8 正規化済みの temp から行う（Shift_JIS/EUC-JP 対応）。
+                    # Infer columns from the UTF-8 normalized temp file (supports Shift_JIS/EUC-JP).
                     with open(csv_path, "rb") as f:
                         utf8_bytes = f.read()
                     try:
                         columns, _ = analyze_csv_schema(utf8_bytes)
                     except ValueError as e:
-                        # 空/重複ヘッダは analyze_dataset のクエリ列と乖離するため弾く。
+                        # Reject empty/duplicate headers because they diverge from the analyze_dataset query columns.
                         raise PersonaGenerationManagerError(
                             f"invalid CSV header in {filename!r}: {e}",
                             code=ErrorCode.FILE_CSV_HEADER_INVALID,
@@ -797,9 +800,9 @@ class PersonaGenerationManager:
                         {
                             "alias": alias,
                             "path": csv_path,
-                            # allowlist 用は列名のみ（build_source_tools が使う）。
+                            # Column names only, for the allowlist (used by build_source_tools).
                             "columns": [c.name for c in columns],
-                            # プロンプト表示用は名前＋推定型（CSVには説明文が無いため型のみ）。
+                            # Name + inferred type for prompt display (CSVs have no descriptions, so type only).
                             "columns_detail": [
                                 {"name": c.name, "data_type": c.data_type}
                                 for c in columns
@@ -807,17 +810,17 @@ class PersonaGenerationManager:
                         }
                     )
                     preview = get_csv_preview(content, max_lines=20)
-                    # 見出しは「先頭20行プレビュー」に留める。全データへの
-                    # analyze_dataset アクセス可否は有効判定に同期する
-                    # CSV_ANALYSIS_INSTRUCTIONS（_build_user_prompt）でのみ主張し、
-                    # 無効時に存在しないツールを示唆しない。
+                    # The heading is limited to "first 20 rows preview". Whether analyze_dataset
+                    # can access all data is claimed only in CSV_ANALYSIS_INSTRUCTIONS
+                    # (_build_user_prompt), which follows the enable check, so a tool that does not
+                    # exist is not hinted at when disabled.
                     texts.append(
                         f"--- {alias} (CSV, 先頭20行プレビュー) ---\n{preview}"
                     )
                 else:
-                    # 内容不足は抽出後にしか判定できない（PDF/DOCXはバイト列時点で
-                    # 文字数が分からないため）。CSVはプレビュー20行のみを保持し全データは
-                    # DuckDBツール経由なので、この判定の対象外とする。
+                    # Insufficient content can only be judged after extraction (PDF/DOCX character
+                    # counts are unknown at the byte stage). A CSV keeps only the 20-row preview and
+                    # all data goes through the DuckDB tool, so it is excluded from this check.
                     text = extract_text_from_bytes(content, filename)
                     if len(text.strip()) < 10:
                         raise PersonaGenerationManagerError(
@@ -828,8 +831,8 @@ class PersonaGenerationManager:
 
             combined_text = "\n\n".join(texts)
 
-            # 合計文字数 = 抽出後テキスト長 = 入力トークン予算が真の上限。
-            # 複数ファイル・PDF/Word経由の合計もここで自然にカバーする。
+            # Total characters = extracted text length = input token budget is the real limit.
+            # Totals across multiple files and via PDF/Word are naturally covered here too.
             if len(combined_text) > config.PERSONA_SOURCE_MAX_CHARS:
                 raise PersonaGenerationCapacityError(
                     f"combined source text {len(combined_text)} chars exceeds "
@@ -837,10 +840,10 @@ class PersonaGenerationManager:
                     context={"max_chars": config.PERSONA_SOURCE_MAX_CHARS},
                 )
         except Exception:
-            # PersonaGenerationManagerError に加え、analyze_csv_schema /
-            # get_csv_preview が投げる _csv.Error・UnicodeDecodeError 等の
-            # 想定外例外でも temp CSV を残さない（呼び出し側 finally は
-            # 戻り値未確定のため到達しない）。
+            # Besides PersonaGenerationManagerError, leave no temp CSV even on unexpected
+            # exceptions such as _csv.Error and UnicodeDecodeError raised by
+            # analyze_csv_schema / get_csv_preview (the caller's finally is not reached
+            # because the return value is not yet determined).
             cleanup_temp_files(csv_temp_paths)
             raise
 
@@ -855,7 +858,7 @@ class PersonaGenerationManager:
         persona_count: int,
         auto_link_behavior: bool,
     ) -> dict[str, Any]:
-        """生成コンテキスト（メタデータ）の構築"""
+        """Build the generation context (metadata)"""
         ctx: dict[str, Any] = {
             "data_type": data_type,
             "data_description": data_description,
@@ -869,7 +872,7 @@ class PersonaGenerationManager:
         return ctx
 
     def _validate_generated_persona(self, persona: Persona) -> None:
-        """生成されたペルソナの基本バリデーション"""
+        """Basic validation of the generated persona"""
         if not persona.name or not persona.name.strip():
             raise PersonaGenerationManagerError(
                 "generated persona has no name",
@@ -882,7 +885,7 @@ class PersonaGenerationManager:
             )
 
     # ------------------------------------------------------------------
-    # 行動データ紐付け
+    # Behaviour data linking
     # ------------------------------------------------------------------
 
     def _build_behavior_dataset_candidates(
@@ -892,7 +895,7 @@ class PersonaGenerationManager:
         thinking_log: list[dict[str, str]],
         csv_url_labels: list[str],
     ) -> list[dict[str, Any]]:
-        """CSV URLリストからデータセット候補を構築する"""
+        """Build dataset candidates from the CSV URL list"""
         from ..services.data_agent_service import DataAgentService
 
         fallback_col, fallback_val = self._extract_user_id_from_log(thinking_log)
@@ -954,7 +957,7 @@ class PersonaGenerationManager:
         return candidates
 
     def _extract_label_from_tool_call(self, detail: str) -> str:
-        """tool_callのdetailからデータ種別ラベルを抽出する"""
+        """Extract the data type label from the tool_call detail"""
         m = re.search(r"の(.+?)を.*CSV", detail)
         if m:
             return m.group(1).strip()
@@ -971,7 +974,7 @@ class PersonaGenerationManager:
     def _extract_user_id_from_log(
         self, thinking_log: list[dict[str, str]]
     ) -> tuple[str, str]:
-        """思考ログからcustomer_id/user_idとその値を抽出する"""
+        """Extract customer_id/user_id and its value from the thinking log"""
         patterns = [
             r"customer_id\s*[=:]\s*['\"]?([a-zA-Z0-9\-_]+)['\"]?",
             r"user_id\s*[=:]\s*['\"]?([a-zA-Z0-9\-_]+)['\"]?",

@@ -1,9 +1,9 @@
-"""analyze_dataset tool closure factory + LLM 入力契約（TypedDict）。
+"""analyze_dataset tool closure factory + the LLM input contract (TypedDicts).
 
-LLM には server 発行の不透明な別名（``dataset_id``）だけを見せ、SQL・S3 パス・
-AWS 認証情報・ローカルパスは引数にも戻り値にも出さない。入力は ``dict[str, Any]``
-ではなく ``TypedDict`` + ``Literal`` で構造化し、operator/func/direction を schema に
-明示する（``dict`` 型だと Strands schema 上ただの object になり operator を表現できない）。
+The LLM only sees server-issued opaque aliases (``dataset_id``); SQL, S3 paths,
+AWS credentials and local paths never appear in arguments or return values. Input is structured
+with ``TypedDict`` + ``Literal`` rather than ``dict[str, Any]`` so operator/func/direction are
+explicit in the schema (a ``dict`` type becomes a plain object in the Strands schema and cannot express operators).
 """
 
 import logging
@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - Python < 3.11 fallback
 
 try:
     from strands import tool
-except ImportError:  # pragma: no cover - SDK 未導入環境
+except ImportError:  # pragma: no cover - environments without the SDK
 
     def tool(func: Callable) -> Callable:  # type: ignore[no-redef]
         return func
@@ -72,11 +72,11 @@ class OrderBy(TypedDict):
 
 @dataclass(frozen=True)
 class ResolvedDataset:
-    """tool クロージャが alias でキーに保持する immutable な dataset 記述子。
+    """Immutable dataset descriptor the tool closure keeps, keyed by alias.
 
-    LLM へは ``alias``（不透明 dataset_id）のみ露出する。``backend_path`` /
-    ``forced_filter`` は closure 内部にのみ存在し露出しない。プロンプト表示用の
-    メタデータは Manager が別途 descriptors として構築する（ここには持たない）。
+    Only ``alias`` (the opaque dataset_id) is exposed to the LLM. ``backend_path`` /
+    ``forced_filter`` exist only inside the closure. The metadata for prompt
+    display is built separately by the Manager as descriptors (not held here).
     """
 
     alias: str
@@ -99,7 +99,7 @@ def _format_result(
     label_map: Dict[str, str],
     max_chars: int,
 ) -> str:
-    """結果を LLM 向けの表形式テキストへ整形する（内部集計別名を表示ラベルへ）。"""
+    """Format the result as tabular text for the LLM (internal aggregate aliases become display labels)."""
     display_cols = [label_map.get(c, c) for c in columns]
     header = " | ".join(display_cols)
     lines = [f"{len(rows)} 件の結果:", header]
@@ -116,13 +116,13 @@ def create_analyze_dataset_tool(
     backend: DatasetQueryBackend,
     limits: Optional[ToolLimits] = None,
 ) -> Callable:
-    """複数 dataset を alias で保持する単一 ``analyze_dataset`` ツールを生成する。
+    """Create the single ``analyze_dataset`` tool that holds multiple datasets by alias.
 
-    binding 経路・source 経路で共通。全 descriptor を alias でキーに持つ immutable な
-    map を closure が保持するため、並行する別クロージャと状態を共有しない。
+    Shared by the binding and source paths. The closure holds an immutable map keyed by
+    alias with every descriptor, so it shares no state with concurrent closures.
     """
     limits = limits or ToolLimits()
-    # immutable な descriptor map（alias -> ResolvedDataset）。
+    # Immutable descriptor map (alias -> ResolvedDataset).
     dataset_map: Dict[str, ResolvedDataset] = {d.alias: d for d in resolved}
 
     @tool
@@ -209,7 +209,7 @@ def create_analyze_dataset_tool(
         except DatasetAccessError:
             logger.error("analyze_dataset access denied: dataset=%s", dataset_id)
             return "データソースにアクセスできませんでした。"
-        except Exception:  # noqa: BLE001 - LLM 向けに安全な文字列へ落とす
+        except Exception:  # noqa: BLE001 - reduce to an LLM-safe string
             logger.error(
                 "analyze_dataset query failed: dataset=%s", dataset_id, exc_info=True
             )

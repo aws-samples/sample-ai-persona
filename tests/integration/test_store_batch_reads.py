@@ -1,11 +1,12 @@
-"""まとめ読み（BatchGetItem）の共通の約束を、単純なテーブルのストアごとに確かめる。moto を使う。
+"""Checks the shared contract of batch reads (BatchGetItem) per simple-table store, using moto.
 
-NFR2.5・NFR2.21: まとめ読みは強い整合性で、未処理のキーは読み直す。100 件ずつに
-分けて読み、読み直しても未処理が残れば行を黙って落とさずストアの例外にする。
+Batch reads are strongly consistent and re-read unprocessed keys. They read 100 items
+at a time, and if unprocessed keys remain after the re-read, raise the store's
+exception instead of silently dropping rows.
 
-同じ実装が各ストアにあるため、テストはここで 1 つにまとめる。議論（射影と複数の
-テーブル）とカスタムペルソナデータ（待ち時間つきの再試行）は読み方が違うので、
-それぞれのテストファイルで確かめる。
+Each store has the same implementation, so the tests are combined here. Discussions
+(projection and multiple tables) and custom persona data (retry with a wait) read
+differently, so their own test files cover them.
 """
 
 from dataclasses import dataclass

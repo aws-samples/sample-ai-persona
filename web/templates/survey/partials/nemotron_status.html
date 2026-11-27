@@ -1,7 +1,7 @@
-{#- 閉域構成（download_allowed が偽）: 取得の操作と Hugging Face の案内を出さず、事前に配置したファイルの有無を出す（U3 BR4.1） #}
+{#- Closed-network setup (download_allowed is false): do not show download actions or the Hugging Face guide; show whether the pre-placed file exists. #}
 {% if not nemotron_status.download_allowed %}
 <div data-testid="nemotron-placed-notice">
-    {#- キー（S3 のファイルのパス）は、ファイルを置く管理者にだけ見せる #}
+    {#- The key (S3 file path) is shown only to the administrator who places the file. #}
     <p class="text-sm text-gray-500 mb-2">閉域構成では、事前に配置したファイルを使います。{% if manageable %}キー: <span class="font-mono">{{ nemotron_status.dataset_key }}</span>{% endif %}</p>
     {% if nemotron_status.available %}
     <div data-testid="nemotron-placed-available" class="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg p-4">
@@ -58,7 +58,7 @@
         </svg>
         <p class="text-yellow-800 text-sm">データセットがまだダウンロードされていません。{% if not manageable %}ダウンロードは管理者に依頼してください。{% endif %}</p>
     </div>
-    {#- ダウンロードは admin だけ（BR4.1） #}
+    {#- Download is admin-only. #}
     {%- if manageable %}
     <button hx-post="/survey/persona-data/download-nemotron"
             hx-target="#nemotron-status"

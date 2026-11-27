@@ -1,11 +1,11 @@
 """
-DynamoDB reads for authorization decisions (contracts C3, C8, C14).
+DynamoDB reads for authorization decisions.
 
 Reads only the columns an authorization decision needs (``id``, ``owner_sub``,
 ``shared_group_ids`` and one display-name column) with a projection, and the
 Jobs table for ``JobManager.get``. Nothing here writes.
 
-Limits (``reliability-design.md``, NFR9.18, NFR9.22):
+Limits:
 
 - One call: connect 0.5 s, read 0.5 s, two attempts in botocore's ``standard``
   retry mode (:data:`CLIENT_CONFIG`). This client is separate from the
@@ -13,7 +13,7 @@ Limits (``reliability-design.md``, NFR9.18, NFR9.22):
 - Deadline: ``read_targets`` receives the caller's deadline (a
   ``time.monotonic`` value). Before every call -- including the single re-read
   of ``UnprocessedKeys`` -- the remaining time is checked, and with less than
-  :data:`MIN_CALL_BUDGET_SECONDS` left nothing is read (NFR Design R-01).
+  :data:`MIN_CALL_BUDGET_SECONDS` left nothing is read.
 - Throttling: botocore's ``standard`` mode backs off between its two attempts
   inside one call. That back-off and the second attempt happen inside the
   call, so under throttling one call can run past the 1-second budget; the
@@ -41,7 +41,7 @@ from src.models.job import Job
 
 logger = logging.getLogger(__name__)
 
-#: botocore settings for authorization reads (``reliability-design.md``).
+#: botocore settings for authorization reads.
 #: ``total_max_attempts`` counts the first call (2 = two attempts in total).
 CLIENT_CONFIG = Config(
     connect_timeout=0.5,
@@ -50,7 +50,7 @@ CLIENT_CONFIG = Config(
 )
 
 #: Time one attempt may take (connect + read). With less than this left before
-#: the deadline, a read is not started (NFR Design R-01).
+#: the deadline, a read is not started.
 MIN_CALL_BUDGET_SECONDS = 1.0
 
 #: ``BatchGetItem`` accepts at most 100 keys per call.
@@ -77,7 +77,7 @@ class AuthzLookupError(CodedError):
 
 @dataclass(frozen=True)
 class LookupTable:
-    """Where one resource type's decision columns live (contract C8).
+    """Where one resource type's decision columns live.
 
     Attributes:
         resource_type: The resource type read from this table.
@@ -85,8 +85,8 @@ class LookupTable:
         display_name_attribute: Column used as the display name (``name`` for
             personas, ``topic`` for discussions), or ``None``.
         hidden_id_prefix: IDs with this prefix are other kinds of items of the
-            same table (``name#`` reservations of custom persona data, U7);
-            they are never read and come back as missing (NFR1.74).
+            same table (``name#`` reservations of custom persona data);
+            they are never read and come back as missing.
     """
 
     resource_type: ResourceType
@@ -242,7 +242,7 @@ class AuthzLookupService:
     # --- jobs -------------------------------------------------------------------
 
     def get_job(self, job_id: str) -> Job | None:
-        """Read one job with a strongly consistent ``GetItem`` (NFR9.22).
+        """Read one job with a strongly consistent ``GetItem``.
 
         Raises:
             AuthzLookupError: The Jobs table is unreachable.

@@ -1,9 +1,9 @@
-"""AuthzLookupService（判定用の DynamoDB の読み取り）の結合テスト。moto を使う。
+"""Integration tests for AuthzLookupService (the DynamoDB reads for authorization), using moto.
 
-BR2.10（約束 C8 の列だけを射影で読む・書き込みをしない・失敗は許可に倒さない）、
-NFR9.12（100 件を 1 回の BatchGetItem で読む）、NFR9.18（接続 0.5 秒・読み取り 0.5 秒・
-試行合計 2 回、UnprocessedKeys の読み直しは 1 回、締め切りの確認）、NFR9.22（Jobs の
-読み取り）、NFR Design R-01（締め切りの時刻を受け取り、残りが 1 回分未満なら読まない）。
+Covers: projecting only the needed columns, never writing, never failing open on
+errors; reading 100 items in one BatchGetItem; connect 0.5 s, read 0.5 s, 2 attempts in
+total, one re-read of UnprocessedKeys, and deadline checks; reading Jobs; and taking a
+deadline time and not reading when less than one attempt remains.
 """
 
 from datetime import datetime
@@ -189,7 +189,7 @@ class TestBatch:
 
     def test_no_second_read_without_time_for_it(self, service, clock):
         def slow_first_read(**_: Any) -> dict:
-            clock.now += 2.5  # 残りが 0.5 秒になる
+            clock.now += 2.5  # leaves 0.5 seconds
             return {
                 "Responses": {PERSONAS: []},
                 "UnprocessedKeys": {PERSONAS: {"Keys": [{"id": {"S": "p-2"}}]}},

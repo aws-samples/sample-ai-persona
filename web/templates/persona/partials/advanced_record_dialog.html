@@ -1,0 +1,182 @@
+{% from "persona/partials/advanced_labels.html" import method_label, code_kind_label, step_label, tool_label, block_summary, column_kind_label, refusal_label %}
+{#
+  Content of the analysis record dialog. On the generation page it is loaded via content_url of dialog(); on the detail screen of a saved persona it is drawn inline. Code is output as text in <pre><code> (auto-escaped).
+  The view is for the user to look back: interpretation of the purpose -> plan -> analyses run -> files used -> code. Hashes, checksums, random seeds, and the preparation version are stored but not shown.
+  Arguments:
+    record  ... AnalysisRecord. When absent (none), "分析の詳細は残っていません"
+    sources ... list of SourceAvailability (saved persona detail only). If the original file is gone, shows "元のファイルは消えています"; for older records without a file ID, shows "元のファイルの記録はありません"
+#}
+{#- How the columns of a table read: their kinds and the missing values (counts only). -#}
+{% macro columns_lines(summary, rows) -%}
+{%- set types = summary.get("types") or {} -%}
+{%- set kinds = [] -%}
+{%- for kind in ["number", "text", "date", "boolean", "other"] if types.get(kind) -%}{%- set _ = kinds.append(column_kind_label(kind) ~ " " ~ types.get(kind)) -%}{%- endfor -%}
+<p><span class="text-gray-600">列</span> {{ summary.get("columns", 0) }} 列{% if kinds %}（{{ kinds | join("・") }}）{% endif %}</p>
+<p><span class="text-gray-600">欠けた値</span>
+{%- if summary.get("missing") %} {% for m in summary.get("missing") %}{{ m.get("name") }} {{ "{:,}".format(m.get("count", 0)) }} 行{% if rows %}（{{ "{:.1%}".format(m.get("count", 0) / rows) }}）{% endif %}{% if not loop.last %}、{% endif %}{% endfor %}
+{%- else %} なし{% endif %}</p>
+{%- endmacro %}
+
+{#- A counted feature: its value and that of the whole. -#}
+{% macro feature_text(f) -%}
+{%- set value = f.get("value") -%}{%- set base = f.get("baseline") -%}
+{%- if f.get("kind") == "share" -%}{{ f.get("name") }} {{ "{:.0%}".format(value) }}（全体 {{ "{:.0%}".format(base) }}）
+{%- else -%}{{ f.get("name") }} {{ "{:,.1f}".format(value) }}（全体 {{ "{:,.1f}".format(base) }}）
+{%- endif -%}
+{%- endmacro %}
+
+{#- What a step found: groups, a refusal, a profile or a query (counted values only). -#}
+{% macro call_result_body(result) -%}
+{%- set unit = "行" if result.get("unit") == "rows" else "人" -%}
+<div class="mt-1 ml-5 space-y-1" data-testid="advanced-record-call-result">
+    {% if result.get("failure") %}
+    <p><span class="text-gray-600">理由</span> {{ refusal_label(result.get("failure"), result.get("counts")) }}</p>
+    <p class="text-xs text-gray-700">受け付けなかった結果は、ペルソナの根拠に使っていません。</p>
+    {% elif result.get("groups") is not none %}
+    {% set history = result.get("history") %}
+    {% if history %}
+    <p><span class="text-gray-600">数え方</span> {{ history.get("id_column") }} ごとに数えた人 {{ "{:,}".format(result.get("population", 0)) }} 人</p>
+    {% if history.get("rows_without_id") %}
+    <p>{{ history.get("id_column") }} が空の行 {{ "{:,}".format(history.get("rows_without_id")) }} 行（全体の {{ "{:.1%}".format(history.get("rows_without_id") / history.get("source_rows")) if history.get("source_rows") else "—" }}）は数えていません</p>
+    {% endif %}
+    {% else %}
+    <p><span class="text-gray-600">母数</span> {{ "{:,}".format(result.get("population", 0)) }} {{ unit }}</p>
+    {% endif %}
+    {% if result.get("groups") %}
+    <table class="w-full text-left text-xs mt-1">
+        <thead>
+            <tr class="border-b"><th scope="col" class="py-1 pr-2">層</th><th scope="col" class="py-1 pr-2">{{ "行数" if unit == "行" else "人数" }}</th><th scope="col" class="py-1 pr-2">割合</th><th scope="col" class="py-1">全体とのおもな違い</th></tr>
+        </thead>
+        <tbody>
+            {% for group in result.get("groups") %}
+            {% if group.get("hidden") %}
+            <tr class="border-b align-top"><td class="py-1 pr-2">（伏せた層）</td><td class="py-1 pr-2">10 {{ unit }}未満</td><td class="py-1 pr-2">—</td><td class="py-1">人数が少ないため伏せています</td></tr>
+            {% else %}
+            <tr class="border-b align-top">
+                <td class="py-1 pr-2">{{ group.get("label") }}</td>
+                <td class="py-1 pr-2 tabular-nums">{{ "{:,}".format(group.get("size", 0)) }} {{ unit }}</td>
+                <td class="py-1 pr-2 tabular-nums">{% if group.get("share") is not none %}{{ "{:.0%}".format(group.get("share")) }}{% else %}—{% endif %}</td>
+                <td class="py-1">{% for f in group.get("features") or [] %}{{ feature_text(f) }}{% if not loop.last %}、{% endif %}{% else %}—{% endfor %}</td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+    <p class="text-xs text-gray-700">{{ "行数" if unit == "行" else "人数" }}・割合・特徴は、システムがデータから数え直した値です。AI のプログラムが表示した文字や数字は、ここには載せていません。</p>
+    {% elif result.get("rows_returned") is not none %}
+    <p>集計した結果 {{ "{:,}".format(result.get("rows_returned")) }} 行（値は記録していません）</p>
+    {% elif result.get("rows") is not none %}
+    <p><span class="text-gray-600">行</span> {{ "{:,}".format(result.get("rows")) }} 行</p>
+    {{ columns_lines(result, result.get("rows")) }}
+    {% endif %}
+</div>
+{%- endmacro %}
+{% set judged = sources | default(none) %}
+<div data-testid="advanced-record">
+    {% if record %}
+    {% set plan = record.plan %}
+    {% set steps = plan.get("steps") or [{"kind": plan.get("method", ""), "reason": plan.get("rationale", "")}] %}
+    <ol class="space-y-3 text-sm text-gray-800 mb-5" data-testid="advanced-record-flow">
+        <li data-testid="advanced-record-purpose" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">1</span>AI が読み取った目的</h3>
+            <p class="mt-1">{{ plan.get("interpreted_purpose", "") }}</p>
+            {% if plan.get("questions") %}
+            <p class="mt-2 text-gray-600">答えを出そうとした問い</p>
+            <ul class="list-disc ml-5" data-testid="advanced-record-questions">
+                {% for question in plan.get("questions") %}<li>{{ question }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+        </li>
+        <li data-testid="advanced-record-plan" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">2</span>分析の計画</h3>
+            <ol class="list-decimal ml-5 mt-2 space-y-1" data-testid="advanced-record-steps">
+                {% for step in steps %}
+                <li data-kind="{{ step.get('kind', '') }}"><span class="font-semibold">{{ step_label(step.get("kind", "")) }}</span>{% if step.get("reason") %}<span class="block text-gray-700">{{ step.get("reason") }}</span>{% endif %}</li>
+                {% endfor %}
+            </ol>
+            {% if plan.get("deviation_reason") %}
+            <p class="mt-2 text-gray-700" data-testid="advanced-record-deviation">通常と違う方法を選んだ理由: {{ plan.get("deviation_reason") }}</p>
+            {% endif %}
+        </li>
+        <li data-testid="advanced-record-run" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">3</span>実際に行った分析</h3>
+            {% if record.tool_calls or record.table_summaries %}
+            {#- Calls that re-read the same playbook are merged into one. -#}
+            {% set read = namespace(names=[], runs=0) %}
+            <ul class="mt-2 space-y-1" data-testid="advanced-record-calls">
+                {% for table in record.table_summaries %}
+                <li data-testid="advanced-record-table">
+                    <details>
+                        <summary class="cursor-pointer"><span aria-hidden="true" class="text-green-800">✓</span> CSV の読み込み（{{ table.get("name") }}）</summary>
+                        <div class="mt-1 ml-5 space-y-1">
+                            <p><span class="text-gray-600">使った行</span> {{ "{:,}".format(table.get("rows_read", 0)) }} 行（除外 {{ "{:,}".format(table.get("rows_excluded", 0)) }} 行）</p>
+                            {{ columns_lines(table, table.get("rows_read", 0)) }}
+                        </div>
+                    </details>
+                </li>
+                {% endfor %}
+                {% for call in record.tool_calls %}
+                {% set again = call.get("playbook") and call.get("playbook") in read.names %}
+                {% if call.get("playbook") and not again %}{% set read.names = read.names + [call.get("playbook")] %}{% endif %}
+                {% set look = call.get("error_code") == "NO_RESULT" %}
+                {% set failed = call.get("ok") is sameas false and not look %}
+                {% if call.get("tool") == "run_code" and not look %}{% set read.runs = read.runs + 1 %}{% endif %}
+                {% if not again %}
+                {% set result = call.get("result") %}
+                <li data-testid="advanced-record-call" data-tool="{{ call.get('tool', '') }}">
+                    {% if result %}<details><summary class="cursor-pointer">{% endif %}
+                    {% if failed %}<span aria-hidden="true" class="text-red-800">✗</span>{% else %}<span aria-hidden="true" class="text-green-800">✓</span>{% endif %}
+                    {{ tool_label(call.get("tool", "")) }}
+                    {%- if call.get("playbook") %}（<span data-testid="advanced-record-playbook" data-name="{{ call.get('playbook') }}">{{ step_label(call.get("playbook")) }}</span>）{% endif %}
+                    {%- if look %} <span class="text-gray-700">下見（結果を出さずに確認）</span>
+                    {%- elif result and call.get("tool") == "run_code" %} {{ read.runs }} 回目：{% if failed %}<span class="text-red-800" data-testid="advanced-record-call-failed">結果を受け付けませんでした</span>{% else %}結果を受け付けました{% endif %}
+                    {%- elif failed %} <span class="text-red-800" data-testid="advanced-record-call-failed">失敗（やり直し）</span>{% endif %}
+                    {% if result %}</summary>{{ call_result_body(result) }}</details>{% endif %}
+                </li>
+                {% endif %}
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="mt-1 text-gray-700">分析の操作の記録はありません</p>
+            {% endif %}
+        </li>
+        <li data-testid="advanced-record-files" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">4</span>使ったファイル</h3>
+            {% if record.source_checksums %}
+            <ul class="mt-2 space-y-1 break-all" data-testid="advanced-record-sources">
+                {% for _ in record.source_checksums %}
+                {% set name = record.source_display_names[loop.index0] if loop.index0 < record.source_display_names | length else "" %}
+                {% set found = judged[loop.index0] if judged and loop.index0 < judged | length else none %}
+                <li>{{ name or "ファイル " ~ loop.index }}
+                    {%- if found and found.state.value == "deleted" %} <span class="text-gray-700" data-testid="advanced-record-source-deleted">（元のファイルは消えています）</span>
+                    {%- elif found and found.state.value == "unknown" %} <span class="text-gray-700" data-testid="advanced-record-source-unknown">（元のファイルの記録はありません）</span>
+                    {%- endif %}</li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="mt-1 text-gray-700" data-testid="advanced-record-sources">ファイルの記録はありません</p>
+            {% endif %}
+        </li>
+    </ol>
+    <h3 class="font-medium text-gray-900 mb-2">実行したコード（{{ record.code_blocks | length }}）</h3>
+    <p class="text-xs text-gray-600 mb-2">各項目を開くと、実際に動かしたコードを確認できます。</p>
+    <ol class="space-y-2">
+        {% for block in record.code_blocks %}
+        <li>
+            {#- The joined columns and match rate can be read without opening the code. -#}
+            {% if block.get("title") %}<p class="text-xs text-gray-700 mb-1" data-testid="advanced-record-joined">{{ block.get("title") }}</p>{% endif %}
+            <details data-testid="advanced-record-code">
+                <summary class="cursor-pointer text-sm" data-testid="advanced-record-code-kind" data-kind="{{ block.get('kind', 'fixed') }}">{{ loop.index }}. {{ block_summary(block) }} <span class="text-xs text-gray-600">（{{ code_kind_label(block.get("kind")) }}）</span></summary>
+                <pre class="mt-1 bg-gray-50 border border-gray-200 rounded p-2 text-xs font-mono overflow-x-auto max-h-64" tabindex="0"><code>{{ block.get("code", "") }}</code></pre>
+            </details>
+        </li>
+        {% endfor %}
+    </ol>
+    {% else %}
+    <p class="text-sm text-gray-700" data-testid="advanced-record-missing">分析の詳細は残っていません</p>
+    {% endif %}
+    <div class="mt-4 text-right">
+        <button type="button" data-dialog-close class="px-4 py-2 text-sm border border-gray-300 rounded-md">閉じる</button>
+    </div>
+</div>

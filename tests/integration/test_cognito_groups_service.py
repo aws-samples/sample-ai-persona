@@ -1,8 +1,8 @@
-"""CognitoGroupsService（部署の一覧の ListGroups）の結合テスト。
+"""Integration tests for CognitoGroupsService (ListGroups for the department list).
 
-BR2.11（group: 接頭辞のグループだけを部署にする・description がなければグループ名）、
-NFR Design R-02 (3)（5 秒の上限は全ページの合計）、reliability-design.md（再試行しない）。
-boto3 のクライアントは unittest.mock で差し替える。
+Only groups with the ``group:`` prefix become departments, and the group name is
+used when there is no description. The 5-second limit covers all pages together,
+and there is no retry. The boto3 client is replaced with unittest.mock.
 """
 
 from unittest.mock import Mock
@@ -89,7 +89,7 @@ class TestListDepartments:
         clock = FakeClock()
 
         def slow_page(**kwargs: object) -> dict:
-            clock.now += 4.0  # 残りは 1 秒。次のページは待てない
+            clock.now += 4.0  # One second left; the next page cannot be waited for.
             return {"Groups": [_group("group:sales")], "NextToken": "t-1"}
 
         client = Mock()

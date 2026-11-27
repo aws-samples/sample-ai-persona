@@ -23,6 +23,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
 
 exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） App スタックのリソースの型ごとの数 1`] = `
 {
+  "AWS::BedrockAgentCore::CodeInterpreterCustom": 1,
   "AWS::CloudFront::CachePolicy": 1,
   "AWS::CloudFront::Distribution": 1,
   "AWS::CloudFront::VpcOrigin": 1,
@@ -47,15 +48,17 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "AWS::ElasticLoadBalancingV2::Listener": 1,
   "AWS::ElasticLoadBalancingV2::LoadBalancer": 1,
   "AWS::ElasticLoadBalancingV2::TargetGroup": 1,
-  "AWS::IAM::Policy": 5,
+  "AWS::IAM::ManagedPolicy": 1,
+  "AWS::IAM::Policy": 6,
   "AWS::IAM::Role": 6,
   "AWS::Lambda::Function": 3,
   "AWS::Logs::LogGroup": 2,
-  "AWS::Logs::MetricFilter": 7,
+  "AWS::Logs::MetricFilter": 14,
   "AWS::SecretsManager::Secret": 1,
   "AWS::StepFunctions::StateMachine": 1,
   "Custom::CrossRegionExportReader": 1,
   "Custom::DescribeCognitoUserPoolClient": 1,
+  "Custom::UploadBucketCors": 1,
   "Custom::VpcRestrictDefaultSG": 1,
 }
 `;
@@ -63,6 +66,8 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
 exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） Data スタックのステートフルな資源（Retain）の論理 ID 1`] = `
 [
   "CognitoUserPool279BBD48 AWS::Cognito::UserPool",
+  "DatabaseAdvancedGenerations374B82F7 AWS::DynamoDB::GlobalTable",
+  "DatabaseAppSettings4508DE37 AWS::DynamoDB::GlobalTable",
   "DatabaseCustomPersonaData2BD851B6 AWS::DynamoDB::GlobalTable",
   "DatabaseDatasets6844609D AWS::DynamoDB::GlobalTable",
   "DatabaseDiscussionMessages7B2C7FCD AWS::DynamoDB::GlobalTable",
@@ -78,6 +83,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "DatabaseResourceShares97F09665 AWS::DynamoDB::GlobalTable",
   "DatabaseSessionsACCE14E8 AWS::DynamoDB::GlobalTable",
   "DatabaseSessionsKey591942AA AWS::KMS::Key",
+  "DatabaseSourceFiles4C13608E AWS::DynamoDB::GlobalTable",
   "DatabaseSurveyRunLease24271981 AWS::DynamoDB::GlobalTable",
   "DatabaseSurveyTemplates94E0DB60 AWS::DynamoDB::GlobalTable",
   "DatabaseSurveysAEB1D8E2 AWS::DynamoDB::GlobalTable",
@@ -96,7 +102,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "AWS::Cognito::UserPool": 1,
   "AWS::Cognito::UserPoolDomain": 1,
   "AWS::Cognito::UserPoolGroup": 2,
-  "AWS::DynamoDB::GlobalTable": 18,
+  "AWS::DynamoDB::GlobalTable": 21,
   "AWS::ECR::Repository": 1,
   "AWS::KMS::Key": 1,
   "AWS::S3::Bucket": 1,
@@ -116,13 +122,16 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
 
 exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） タスクの環境変数（キーで並べる） 1`] = `
 {
+  "ADVANCED_GENERATIONS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseAdvancedGenerations374B82F7657826E6)",
   "AGENTCORE_MEMORY_ID": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttMemoryMemoryId5865BD41)",
   "AGENTCORE_MEMORY_REGION": "ap-northeast-1",
   "AGENT_MODEL_ID": "global.anthropic.claude-haiku-5-5",
   "APP_BASE_URL": "https://GetAtt(CloudFrontDistributionEAB06B35.DomainName)",
+  "APP_SETTINGS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseAppSettings4508DE3777A0540E)",
   "AUTH_MODE": "oidc",
   "AWS_REGION": "ap-northeast-1",
   "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-5-5",
+  "CODE_INTERPRETER_ID": "GetAtt(AnalysisCodeInterpreter1463C83F.CodeInterpreterId)",
   "COGNITO_CLIENT_ID": "Ref(AppClient4AE61178)",
   "COGNITO_DOMAIN": "Import(AIPersonaDev-Data:ExportsOutputRefCognitoUserPoolDomain4D6973E96CE551BD).auth.ap-northeast-1.amazoncognito.com",
   "COGNITO_USER_POOL_ID": "Import(AIPersonaDev-Data:ExportsOutputRefCognitoUserPool279BBD4830DEAA77)",
@@ -133,6 +142,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "DISCUSSION_REPORTS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseDiscussionReportsA61FA565D4EBAEB2)",
   "DYNAMODB_REGION": "ap-northeast-1",
   "ENABLE_ADDITIONAL_PERSONA_MODELS": "false",
+  "ENABLE_ADVANCED_GENERATION": "true",
   "ENABLE_DATASET_ANALYSIS": "true",
   "ENABLE_LONG_TERM_MEMORY": "true",
   "INTERVIEW_MESSAGES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseInterviewMessages49E0B278401D9CF0)",
@@ -145,6 +155,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "RESOURCE_SHARES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseResourceShares97F0966581EFE80A)",
   "S3_BUCKET_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefUploadBucketB0FBA0377290D88A)",
   "SESSIONS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSessionsACCE14E83CC9D000)",
+  "SOURCE_FILES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSourceFiles4C13608EA5B8D330)",
   "SURVEYS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSurveysAEB1D8E2CC1C6D7E)",
   "SURVEY_EXECUTION_TIMEOUT_SECONDS": "7200",
   "SURVEY_MODEL_ID": "global.anthropic.claude-haiku-5-5",
@@ -175,17 +186,22 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
     ],
     "Effect": "Allow",
     "Resource": [
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseAdvancedGenerations374B82F7Arn7826E8FD)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseAppSettings4508DE37Arn5835F383)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDatasets6844609DArn0155E542)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDiscussions02268B7DArnD9CDEC93)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseJobs6F06B67CArnB49409A9)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseKnowledgeBases13F82C35Arn6D1876B5)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonasF1218346Arn3688BF1B)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSessionsACCE14E8ArnEADBCE91)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSourceFiles4C13608EArnC56B2074)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveyTemplates94E0DB60Arn37B8FB57)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveysAEB1D8E2Arn0C4E72A8)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseUploadedFiles6ED989C5Arn68B5DFFE)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseAdvancedGenerations374B82F7Arn7826E8FD)/index/owner_sub-created_at",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDiscussions02268B7DArnD9CDEC93)/index/OwnerIndex",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonasF1218346Arn3688BF1B)/index/OwnerIndex",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSourceFiles4C13608EArnC56B2074)/index/owner_sub-created_at",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveyTemplates94E0DB60Arn37B8FB57)/index/OwnerIndex",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveysAEB1D8E2Arn0C4E72A8)/index/OwnerIndex",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveysAEB1D8E2Arn0C4E72A8)/index/RunQueueIndex",
@@ -302,6 +318,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
     ],
     "Effect": "Allow",
     "Resource": [
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)/analysis-records/*",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)/candidates/*",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)/uploads/*",
     ],
@@ -311,6 +328,21 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
       "s3:ListBucket",
       "s3:ListBucketMultipartUploads",
     ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)",
+  },
+  {
+    "Action": "s3:DeleteObjectVersion",
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)/sources/*",
+  },
+  {
+    "Action": "s3:ListBucketVersions",
+    "Condition": {
+      "StringLike": {
+        "s3:prefix": "sources/*",
+      },
+    },
     "Effect": "Allow",
     "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)",
   },
@@ -385,6 +417,15 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttMemoryMemoryArn678119FD)",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttMemoryMemoryArn678119FD)/*",
     ],
+  },
+  {
+    "Action": [
+      "bedrock-agentcore:InvokeCodeInterpreter",
+      "bedrock-agentcore:StartCodeInterpreterSession",
+      "bedrock-agentcore:StopCodeInterpreterSession",
+    ],
+    "Effect": "Allow",
+    "Resource": "GetAtt(AnalysisCodeInterpreter1463C83F.CodeInterpreterArn)",
   },
 ]
 `;

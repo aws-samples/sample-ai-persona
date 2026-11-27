@@ -10,7 +10,7 @@
 
 - [AWS CDK を利用したデプロイ手順](./cdk/README.md)
 - [閉域構成でのデプロイ手順](./docs/closed_network.md)
-- [AWS Generative AI Solution Box からのワンクリックデプロイ](https://aws-samples.github.io/sample-one-click-generative-ai-solutions/solutions/ai-persona/)
+- （準備中）[AWS Generative AI Solution Box からのワンクリックデプロイ](https://aws-samples.github.io/sample-one-click-generative-ai-solutions/solutions/ai-persona/)
 
 ### バージョン更新
 
@@ -44,16 +44,16 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 | モード | 処理時間 | ペルソナ数 | 特徴 |
 |--------|---------|-----------|------|
 | 簡易議論 | 3-5分 | 2-5体 | 高速な意見収集 |
-| しっかり議論 | 5-15分 | 2-5体 | エージェント駆動の深い議論。 |
-| インタビュー | リアルタイム | 1-5体 | ペルソナとの直接チャット。 |
+| しっかり議論 | 5-15分 | 2-5体 | エージェント駆動の深い議論 |
+| インタビュー | リアルタイム | 1-5体 | ペルソナとの直接チャット |
 
 ### アンケート調査
 
-数百〜数千のAIペルソナに大規模アンケートを実施します。
+最大1万人のAIペルソナに大規模アンケートを実施します。
 
 | ステップ | 機能 | 概要 |
 |---------|------|------|
-| 1 | **ペルソナデータ設定** | オープンデータセット（Nemotron）のDLやカスタムデータセットリスト（CSV）のアップロード |
+| 1 | **ペルソナデータ設定** | オープンデータセットのDLやカスタムデータセットリスト（CSV）のアップロード |
 | 2 | **テンプレート管理** | 選択式・自由記述・スケール評価の質問作成、画像添付、AIチャットでの設問ドラフト自動生成 |
 | 3 | **アンケート開始** | ペルソナデータソース選択、属性フィルタ、サンプリング数、アンケートジョブ開始 |
 | 4 | **結果表示** | CSVダウンロード、ビジュアル分析（棒グラフ）、AIインサイトレポート生成 |
@@ -70,7 +70,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 |---------|------|
 | 言語・フレームワーク | Python 3.13, FastAPI, htmx, Jinja2, Tailwind CSS, Alpine.js |
 | AI | Amazon Bedrock (Claude Sonnet 5.5 / Haiku 5.5 / Haiku 4.5), Strands Agent SDK |
-| インフラ | AWS CDK (TypeScript), ECS Fargate, 内部 ALB, CloudFront（VPC オリジン）, WAF, ECR, Cognito（アプリでの OIDC ログイン）, DynamoDB, Step Functions（マスアンケート）, Secrets Manager |
+| インフラ | AWS CDK (TypeScript), ECS Fargate, ALB, CloudFront, WAF, Cognito, DynamoDB, Step Functions |
 
 
 ## オプション
@@ -102,6 +102,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 | 対象 | ドキュメント |
 |------|------------|
 | ユーザー向け | [ユーザーガイド](docs/user_guide.md)  |
+| ユーザー向け | [ペルソナの高度な生成機能活用ガイド](docs/advanced_generation_guide.md) |
 | 開発者向け | [CDKデプロイガイド](cdk/README.md) |
 | 開発者向け | [閉域構成ガイド](docs/closed_network.md) |
 | 管理者向け | [利用者・ロール・グループの管理](docs/user_management.md) |

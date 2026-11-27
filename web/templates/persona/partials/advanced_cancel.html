@@ -1,0 +1,16 @@
+{#
+  "Cancel" of section C. Content of the cancel area in advanced_progress.html, and the response of the cancel POST.
+  Arguments:
+    generation_id ... generation ID
+    cancelling ... after the request is accepted (shows "中止しています" and disables the button)
+#}
+{% if cancelling %}
+<button type="button" data-testid="advanced-cancel-button" disabled aria-disabled="true"
+        class="text-sm px-3 py-1 border border-gray-300 rounded-md text-gray-500 cursor-not-allowed">中止</button>
+<p data-testid="advanced-cancelling" role="status" class="text-sm text-gray-700">中止しています</p>
+{% else %}
+<button type="button" data-testid="advanced-cancel-button"
+        hx-post="/persona/advanced/generations/{{ generation_id | urlencode }}/cancel"
+        hx-target="#advanced-cancel-area" hx-swap="innerHTML"
+        class="text-sm px-3 py-1 border border-gray-400 rounded-md text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500">中止</button>
+{% endif %}

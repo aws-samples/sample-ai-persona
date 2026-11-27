@@ -1,15 +1,14 @@
 {#
-  ペルソナ詳細のヘッダー（アイコン・名前・操作ボタン・所有者と共有、M8）。
-  詳細ページ（detail.html）と編集保存後のスワップ（detail_swap.html）で共有する。
-  中身は detail_header_body.html。共有の保存後は listReload で #persona-detail-header を
-  data-reload-url から読み直す（一覧の #persona-list がない詳細画面でも共有の表示を新しくする）。
+  Persona detail header (icon, name, action buttons, owner and sharing).
+  Shared by the detail page (detail.html) and the swap after an edit is saved (detail_swap.html).
+  The content is detail_header_body.html. After sharing is saved, listReload re-reads #persona-detail-header from data-reload-url (so the sharing display refreshes even on a detail screen with no #persona-list).
 
-  引数:
-    persona ... 対象ペルソナ
-    avatar_upload_enabled ... アイコン画像の保存先（S3）が設定されているか
-    manageable  ... 編集・共有・削除ができるか（BR6.4）。共有されているだけの人は False
-    owner_label ... 所有者の名前（「所有者不明」、写しが取れなければ None）。編集後のスワップでも同じ値を渡す（R-07）
-    shared_with ... 共有先のグループ名
+  Arguments:
+    persona ... target persona
+    avatar_upload_enabled ... whether the icon image storage (S3) is configured
+    manageable  ... whether edit, share, and delete are allowed; False for users the persona is only shared with
+    owner_label ... owner name ("所有者不明" or None if the copy cannot be taken). Pass the same value on the swap after editing
+    shared_with ... names of the groups it is shared with
 #}
 <div class="mb-8" id="persona-detail-header" data-reload-url="/persona/{{ persona.id }}/header">
 {% include "persona/partials/detail_header_body.html" %}

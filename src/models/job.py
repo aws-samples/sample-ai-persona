@@ -1,12 +1,11 @@
-"""
-Job data model for async job tracking (contract C14).
+"""Job data model for async job tracking.
 
-Since v1.0.0 every job records who submitted it (``owner_sub``); results are
-returned only to that user (BR2.12). Jobs written before v1.0.0 carry no owner
-and are returned to nobody.
+Every job records who submitted it (``owner_sub``); results are returned only
+to that user. Jobs written before the owner was recorded carry no owner and
+are returned to nobody.
 
-A failed job keeps only an error code (U6, BR8.3, ``error-catalog.md``):
-the exception text is logged, never stored. Old records that stored the
+A failed job keeps only an error code (see ``error-catalog.md``): the
+exception text is logged, never stored. Old records that stored the
 exception text (``error``) are read as ``UNKNOWN`` and the text is dropped.
 """
 
@@ -38,7 +37,7 @@ class Job:
         result: The result once completed.
         error_code: ``ErrorCode`` value of a failed job (never the exception text).
         owner_sub: ``sub`` of the user who submitted it. ``None`` for jobs
-            written before v1.0.0.
+            written before the owner was recorded.
         job_type: What kind of work the job does (for logs).
     """
 
@@ -72,8 +71,8 @@ class Job:
     def from_dict(cls, data: dict[str, Any]) -> "Job":
         """Build a Job from :meth:`to_dict` values.
 
-        A missing or empty ``owner_sub`` becomes ``None`` (a pre-v1.0.0 job).
-        An old ``error`` text becomes ``unknown`` and is not kept.
+        A missing or empty ``owner_sub`` becomes ``None`` (a job without an
+        owner). An old ``error`` text becomes ``unknown`` and is not kept.
         """
         error_code = data.get("error_code") or None
         if error_code is None and data.get("error"):

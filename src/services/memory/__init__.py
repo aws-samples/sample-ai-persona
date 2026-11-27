@@ -1,11 +1,11 @@
 # Memory services package
 """
-長期記憶機能のサービスパッケージ
-AgentCore Memoryを使用したペルソナの長期記憶管理
+Service package for the long-term memory feature
+Long-term memory management for personas using AgentCore Memory
 
-推奨方式: AgentCoreMemorySessionManagerを使用
-- STM（短期記憶）: 会話履歴の自動永続化
-- LTM（長期記憶）: Summary/UserPreference/Semantic戦略による自動抽出
+Recommended approach: use AgentCoreMemorySessionManager
+- STM (short-term memory): automatic persistence of conversation history
+- LTM (long-term memory): automatic extraction via the Summary/UserPreference/Semantic strategies
 """
 
 from .session_manager_factory import (
@@ -14,7 +14,7 @@ from .session_manager_factory import (
     is_memory_enabled,
 )
 
-# 後方互換性のため旧モジュールもエクスポート（非推奨）
+# Also export the old modules for backward compatibility (deprecated)
 from .memory_service import (
     MemoryConnectionError,
     MemoryService,
@@ -29,11 +29,11 @@ from .summary_strategy import MemoryOperationError, SummaryStrategy
 from .semantic_strategy import SemanticStrategy
 
 __all__ = [
-    # 推奨API
+    # Recommended API
     "create_agentcore_session_manager",
     "is_memory_enabled",
     "SessionManagerFactoryError",
-    # 後方互換性（非推奨）
+    # Backward compatibility (deprecated)
     "MemoryStrategy",
     "SummaryStrategy",
     "SemanticStrategy",

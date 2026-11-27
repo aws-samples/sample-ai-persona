@@ -1,18 +1,17 @@
-"""
-LoginChallenge data model (v1.0.0 U8, ``closed-network-groundwork/entities.md``).
+"""LoginChallenge data model.
 
 The state between Cognito answering ``NEW_PASSWORD_REQUIRED`` to
-``AdminInitiateAuth`` and the first password change (M3) completing. It lives
-in the Sessions table so any task can continue the change (FR7.4, NFR9.42);
+``AdminInitiateAuth`` and the first password change completing. It lives
+in the Sessions table so any task can continue the change;
 the browser only holds the raw challenge id in the signed ``login_tx`` cookie.
 
-Rules (``closed-network-groundwork/rules.md``):
+Rules:
 
-- BR2.2: the key is ``challenge#`` + SHA-256 hex of the raw id, so it never
+- The key is ``challenge#`` + SHA-256 hex of the raw id, so it never
   collides with a LoginSession key (an unprefixed SHA-256 hex). The
   ``item_type`` marker lets either reader treat the other kind as absent.
-- BR2.3: the Cognito session string is stored encrypted only.
-- BR2.4: usable for 3 minutes from ``created_at``; ``ttl`` is only DynamoDB's
+- The Cognito session string is stored encrypted only.
+- Usable for 3 minutes from ``created_at``; ``ttl`` is only DynamoDB's
   cleanup horizon and never decides expiry.
 - No password (current or new) is ever part of this model.
 """
@@ -24,7 +23,7 @@ from typing import Any
 
 #: How long a challenge stays usable (Cognito's NEW_PASSWORD_REQUIRED session).
 CHALLENGE_TTL = timedelta(minutes=3)
-#: Prefix of the Sessions table key of a challenge item (BR2.2).
+#: Prefix of the Sessions table key of a challenge item.
 CHALLENGE_KEY_PREFIX = "challenge#"
 #: Value of the ``item_type`` marker attribute of a challenge item.
 CHALLENGE_ITEM_TYPE = "challenge"
@@ -41,7 +40,7 @@ _REQUIRED = (
 
 
 def challenge_key(challenge_id: str) -> str:
-    """Sessions table key of the challenge with this raw id (BR2.2)."""
+    """Sessions table key of the challenge with this raw id."""
     digest = hashlib.sha256(challenge_id.encode("utf-8")).hexdigest()
     return f"{CHALLENGE_KEY_PREFIX}{digest}"
 
@@ -96,7 +95,7 @@ class LoginChallenge:
         )
 
     def is_expired(self, now: datetime) -> bool:
-        """Whether more than 3 minutes have passed since creation (BR2.4)."""
+        """Whether more than 3 minutes have passed since creation."""
         return now - self.created_at > CHALLENGE_TTL
 
     def to_dict(self) -> dict[str, Any]:
@@ -118,7 +117,7 @@ class LoginChallenge:
 
         Returns:
             ``None`` when the item is not a challenge (another ``item_type``,
-            such as a LoginSession), so callers treat it as absent (BR2.2).
+            such as a LoginSession), so callers treat it as absent.
 
         Raises:
             ValueError: The item is marked as a challenge but is incomplete.

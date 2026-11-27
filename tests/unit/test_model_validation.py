@@ -1,8 +1,7 @@
-"""
-src.managers.shared.model_validation の単体テスト
+"""Unit tests for src.managers.shared.model_validation.
 
-AgentDiscussionManager, InterviewManager の両方から共通利用される
-モデル選択バリデーションロジックをテストします。
+Tests the model selection validation logic shared by AgentDiscussionManager and
+InterviewManager.
 """
 
 import pytest
@@ -20,7 +19,7 @@ from tests.error_helpers import raises_code
 
 
 class _DummyError(CodedError):
-    """テスト用のドメイン例外。"""
+    """Domain exception for tests."""
 
 
 JP_HAIKU_5_5 = "jp.anthropic.claude-haiku-5-5"
@@ -47,7 +46,7 @@ def _validate_interview(model_ids):
 
 
 class TestValidateModelSelectionByScope:
-    """閉域対応 U5（BR4.3）: 範囲の一覧か環境の既定のモデルだけを受け付ける。"""
+    """Accepts only models in the scope list or the environment default."""
 
     @pytest.fixture
     def jp(self, monkeypatch):
@@ -115,11 +114,11 @@ class TestValidateModelSelectionByScope:
 
 
 class TestResolveEffectivePersonaModels:
-    """未選択ペルソナへのconfig.AGENT_MODEL_ID補完のテスト
+    """Tests for filling in config.AGENT_MODEL_ID for personas with no selection.
 
-    Issue #107再レビュー: config.AGENT_MODEL_IDが環境でGemma4等に設定されうるため、
-    persona_models未選択（None扱い）のペルソナも実際に呼び出されるモデルとして
-    検証対象に含める必要がある。
+    config.AGENT_MODEL_ID may be set to Gemma4 or similar by the environment, so personas
+    with no persona_models selection (treated as None) must also be validated as models
+    that are actually called.
     """
 
     def test_unselected_persona_falls_back_to_agent_model_id(self):
@@ -139,8 +138,8 @@ class TestResolveEffectivePersonaModels:
         assert resolved == {"persona-1": "openai.gpt-5.6-terra"}
 
     def test_gemma4_as_env_default_still_enforces_size_limit(self):
-        """config.AGENT_MODEL_IDがGemma4の場合、persona_models未選択でも上限が効くこと。"""
-        documents_total_size = 4 * 1024 * 1024  # 4MB > 3.5MB上限
+        """If config.AGENT_MODEL_ID is Gemma4, the limit applies even with no persona_models selection."""
+        documents_total_size = 4 * 1024 * 1024  # 4MB > 3.5MB limit
 
         with patch("src.managers.shared.model_validation.config") as mock_config:
             mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
@@ -158,12 +157,12 @@ class TestResolveEffectivePersonaModels:
 
 
 class TestValidateDocumentSizeForModels:
-    """Gemma4等のmax_request_bytesに対するドキュメント合計サイズ検証のテスト"""
+    """Tests for the total document size check against max_request_bytes of Gemma4 and similar."""
 
     def test_gemma4_over_limit_raises_capacity_error(self):
         with pytest.raises(_DummyError) as exc_info:
             validate_document_size_for_models(
-                4 * 1024 * 1024,  # 4MB > 3.5MB上限
+                4 * 1024 * 1024,  # 4MB > 3.5MB limit
                 {"persona-1": "google.gemma-4-31b"},
                 _DummyError,
                 ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE,
@@ -173,11 +172,11 @@ class TestValidateDocumentSizeForModels:
 
     def test_gemma4_under_limit_passes(self):
         validate_document_size_for_models(
-            1 * 1024 * 1024,  # 1MB < 3.5MB上限
+            1 * 1024 * 1024,  # 1MB < 3.5MB limit
             {"persona-1": "google.gemma-4-31b"},
             _DummyError,
             ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE,
-        )  # 例外が発生しないことを確認
+        )  # verify no exception is raised
 
     def test_no_persona_models_skips_validation(self):
         validate_document_size_for_models(
@@ -188,7 +187,7 @@ class TestValidateDocumentSizeForModels:
         )
 
     def test_stored_gemma_in_jp_is_not_limited_by_gemma(self, monkeypatch):
-        """閉域対応 U5（BR4.4）: jp では Gemma を既定に読み替えるので 3.5 MB で弾かない。"""
+        """In jp, Gemma is remapped to the default, so 3.5 MB does not reject."""
         from src.config import config
 
         monkeypatch.setattr(config, "INFERENCE_SCOPE", "jp")

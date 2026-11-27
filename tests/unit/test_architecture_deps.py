@@ -1,27 +1,31 @@
-"""層の依存方向を機械検査する（`.claude/rules/architecture.md` を単一ソースとする）。
+"""Mechanically checks layer dependency direction (`.claude/rules/architecture.md` is the single source).
 
-pre-push-review の「アーキテクチャ違反チェック」は元々LLMが architecture.md を読んで
-差分に当てはめる単発判断であり、再現性も実行保証もなかった。依存方向は import を
-走査するだけの決定的なルールなので、error-catalog.md が確立した「規律は人手レビュー
-ではなくAST走査で保証する」方式（`tests/api/test_error_exposure.py`）に倣って機械化する。
+The pre-push-review "architecture violation check" was originally a one-off
+LLM judgment applied to the diff, with no reproducibility or guarantee that it
+ran. Dependency direction is a deterministic rule that only needs an import
+scan, so it follows the approach established in error-catalog.md: discipline
+is guaranteed by AST scanning, not manual review
+(`tests/api/test_error_exposure.py`).
 
-検査する依存方向（architecture.md §依存方向）:
-- Router → Manager → Service。Models は全層から参照可。逆方向禁止。
-- Models   : services / managers / routers を import しない
-- Service  : managers / routers を import しない。他の service も不可（`service_factory` は例外）
-- Manager  : routers を import しない。他の manager も不可（`shared/`・`components/` は可）
-- Component : `src/managers/components/`。複数 Manager が使う共有ワークフロー部品。
-             Manager → Component は可、Component → Manager / Router は不可。
-             Component どうしは一方向なら可、循環は不可（BR2.16。ファイル単位で別に検査）
-- Router は `AccessTarget`（判定の材料）を import しない（NFR3.7）
-- Shared   : services / routers を import しない
-- Router   : services を直接 import しない
-             （例外: テンプレート表示ヘルパー。architecture.md 31行。`_DISPLAY_HELPER_ALLOW`）
+Dependency directions checked (architecture.md, dependency direction):
+- Router -> Manager -> Service. Models may be referenced from every layer. No reverse imports.
+- Models   : must not import services / managers / routers
+- Service  : must not import managers / routers, nor other services (`service_factory` is the exception)
+- Manager  : must not import routers, nor other managers (`shared/` and `components/` are allowed)
+- Component: `src/managers/components/`, shared workflow parts used by several Managers.
+             Manager -> Component is allowed; Component -> Manager / Router is not.
+             Components may depend on each other one-way; cycles are not allowed
+             (checked separately on a per-file graph)
+- Routers must not import `AccessTarget` (the material of an access decision)
+- Shared   : must not import services / routers
+- Router   : must not import services directly
+             (exception: template display helpers, see `_DISPLAY_HELPER_ALLOW`)
 
-`_BASELINE` と完全一致するラチェット方式をとる。現状のコードは違反ゼロなので baseline は
-空であり、逆方向の import が1件でも入れば失敗する。責務配置チェック（Manager に I/O、
-Service にビジネスルール等）は静的走査になじまない主観判断のため、この検査の対象外
-（pre-push-review 側で WARN として人手レビューが担当する）。
+The check is a ratchet that must match `_BASELINE` exactly. The current code
+has zero violations, so the baseline is empty and a single reverse import
+fails. Responsibility placement checks (I/O in a Manager, business rules in a
+Service, etc.) are subjective and do not suit static scanning, so they are out
+of scope here (pre-push-review covers them as a WARN for manual review).
 """
 
 import ast
@@ -34,32 +38,32 @@ pytestmark = pytest.mark.unit
 _SRC = Path(__file__).parent.parent.parent / "src"
 _WEB = Path(__file__).parent.parent.parent / "web"
 
-# 各層のディレクトリと、その層が import してはならない層（禁止先）。
-# 禁止先は「モジュールパスの先頭セグメント列」で表す（相対・絶対の両方を解決後に判定）。
+# Directory of each layer, and the layers it must not import (forbidden targets).
+# Forbidden targets are leading module-path segments (judged after resolving relative and absolute imports).
 _MODELS_DIR = _SRC / "models"
 _SERVICES_DIR = _SRC / "services"
 _MANAGERS_DIR = _SRC / "managers"
 _SHARED_DIR = _SRC / "managers" / "shared"
 _ROUTERS_DIR = _WEB / "routers"
 
-# Service が他の Service を import してよい唯一の例外（architecture.md 8行）。
+# The only case where a Service may import another Service (architecture.md).
 _SERVICE_FACTORY = "service_factory"
 
-# Router がテンプレート表示ヘルパーとして直接 import してよい Service（architecture.md 31行）。
-# 純粋なデータ参照（ISO国コード→名前等）でビジネスロジックを含まないもののみ。
+# Services a Router may import directly as template display helpers (architecture.md).
+# Only pure data lookups (ISO country code -> name, etc.) with no business logic.
 _DISPLAY_HELPER_ALLOW = {"country_service"}
 
-# ファイルごとに 1 ユニットとして扱うサブパッケージ。stores/ はテーブルごとのストアを
-# まとめた置き場で、同じディレクトリにあってもストアどうしは import しない。
+# Subpackages treated as one unit per file. stores/ holds the per-table stores;
+# stores must not import each other even though they share a directory.
 _PER_FILE_PACKAGES = {"stores"}
 
-# 既知の違反（module 相対パス -> 違反 import 先の集合）。新たな逆方向 import は
-# ここに足すのではなく、正しい層へ移すこと。ラチェットとして、ここに載っていない
-# 新規違反は fail し、解消済みで残っているエントリも fail する。
+# Known violations (module relative path -> set of violating import targets). Do not add
+# new reverse imports here; move them to the correct layer. As a ratchet, new violations
+# not listed here fail, and entries that remain after being fixed also fail.
 #
-# agent_service は実行時に兄弟 service を遅延 import して結合している（AgentService が
-# ツール生成のために DataAgent / MCP / KnowledgeBase / Memory を直接束ねる構造）。
-# 本来は Manager 層でオーケストレートすべき既存負債。解消したらこのエントリを削除する。
+# agent_service lazily imports sibling services at run time (AgentService directly
+# bundles DataAgent / MCP / KnowledgeBase / Memory to build tools).
+# This is existing debt that a Manager should orchestrate; delete the entry once fixed.
 _BASELINE: dict[str, set[str]] = {
     "src/services/agent_service.py": {
         "src.services.data_agent_service",
@@ -75,12 +79,12 @@ def _py_files(directory: Path, *, recursive: bool = False) -> list[Path]:
 
 
 def _layer_modules() -> list[tuple[Path, Path]]:
-    """(ファイルパス, 所属層ディレクトリ) の一覧。shared は managers と別扱い。"""
+    """List of (file path, owning layer directory). shared is handled separately from managers."""
     result: list[tuple[Path, Path]] = []
     result += [(p, _MODELS_DIR) for p in _py_files(_MODELS_DIR, recursive=True)]
     result += [(p, _SERVICES_DIR) for p in _py_files(_SERVICES_DIR, recursive=True)]
     result += [(p, _ROUTERS_DIR) for p in _py_files(_ROUTERS_DIR, recursive=True)]
-    # managers 直下（shared を除く）と shared を分ける。
+    # Separate managers top level (excluding shared) from shared.
     shared_files = set(_py_files(_SHARED_DIR, recursive=True))
     for p in _py_files(_MANAGERS_DIR, recursive=True):
         if p in shared_files:
@@ -91,13 +95,13 @@ def _layer_modules() -> list[tuple[Path, Path]]:
 
 
 def _resolve_import(node: ast.AST, module_file: Path) -> str | None:
-    """import 文を `src.services.foo` / `web.routers.bar` 形式のドット表記へ正規化する。
+    """Normalize an import statement to dotted form such as `src.services.foo` / `web.routers.bar`.
 
-    相対 import（`from ..services.x`）は module_file の位置から解決する。
-    解決できない・パッケージ外なら None。
+    Relative imports (`from ..services.x`) are resolved from the module_file location.
+    Returns None if unresolvable or outside the packages.
     """
     if isinstance(node, ast.Import):
-        # `import src.services.x` 形式。alias は呼び出し側で個別に扱う。
+        # `import src.services.x` form. Aliases are handled separately by the caller.
         return None
     if not isinstance(node, ast.ImportFrom):
         return None
@@ -105,10 +109,10 @@ def _resolve_import(node: ast.AST, module_file: Path) -> str | None:
     if node.level == 0:
         return node.module
 
-    # 相対 import。module_file が属するパッケージ（src / web）を起点に解決する。
-    # src/managers/foo.py の親は src/managers、level=2 の `..services` は src/services。
+    # Relative import. Resolve from the package (src / web) that module_file belongs to.
+    # The parent of src/managers/foo.py is src/managers; `..services` at level=2 is src/services.
     parts = module_file.parent.parts
-    # プロジェクトルート配下の "src" or "web" 以降だけを使う。
+    # Use only the part after "src" or "web" under the project root.
     for anchor in ("src", "web"):
         if anchor in parts:
             idx = parts.index(anchor)
@@ -117,7 +121,7 @@ def _resolve_import(node: ast.AST, module_file: Path) -> str | None:
     else:
         return None
 
-    # level=1 は現ディレクトリ、level=2 は1つ上。level-1 個だけ末尾を落とす。
+    # level=1 is the current directory, level=2 one up. Drop level-1 trailing parts.
     trim = node.level - 1
     if trim:
         base = base[:-trim] if trim <= len(base) else []
@@ -134,18 +138,18 @@ _LAYER_PKGS = {
 
 
 def _iter_imported_dotted(tree: ast.AST, module_file: Path) -> list[str]:
-    """ドット表記の import 先を列挙する。相対・絶対の両方を解決する。
+    """List dotted import targets, resolving both relative and absolute imports.
 
-    `from src.services import country_service` のように module が層パッケージそのものを
-    指す場合は、import された各名前を submodule とみなして展開する
-    （`src.services.country_service`）。module が具体モジュールを指す場合の import 名は
-    クラス・関数なので展開しない。
+    When the module itself is a layer package, as in `from src.services import country_service`,
+    each imported name is treated as a submodule and expanded
+    (`src.services.country_service`). When the module is a concrete module, the
+    imported names are classes or functions and are not expanded.
     """
     type_checking_imports = _type_checking_import_nodes(tree)
     out: list[str] = []
     for node in ast.walk(tree):
-        # `if TYPE_CHECKING:` 配下の import は型注釈専用で実行時の結合を生まない。
-        # 依存方向は実行時ロードの向きで判定するため対象外とする。
+        # Imports under `if TYPE_CHECKING:` are for type annotations only and create no runtime coupling.
+        # Dependency direction is judged by run-time loading, so they are excluded.
         if node in type_checking_imports:
             continue
         if isinstance(node, ast.Import):
@@ -163,7 +167,7 @@ def _iter_imported_dotted(tree: ast.AST, module_file: Path) -> list[str]:
 
 
 def _type_checking_import_nodes(tree: ast.AST) -> set[ast.AST]:
-    """`if TYPE_CHECKING:` ブロック直下の import 文ノードを集める。"""
+    """Collect import statement nodes directly under `if TYPE_CHECKING:` blocks."""
     nodes: set[ast.AST] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.If):
@@ -180,7 +184,7 @@ def _type_checking_import_nodes(tree: ast.AST) -> set[ast.AST]:
 
 
 def _segments(dotted: str) -> list[str]:
-    """`src.services.ai_service` -> ['src','services','ai_service']（先頭 src/web に正規化）。"""
+    """`src.services.ai_service` -> ['src','services','ai_service'] (normalized to start at src/web)."""
     parts = dotted.split(".")
     for anchor in ("src", "web"):
         if anchor in parts:
@@ -189,16 +193,16 @@ def _segments(dotted: str) -> list[str]:
 
 
 def _unit_of(module_file: Path, layer_dir: Path) -> str:
-    """層内でのユニット名。サブパッケージ（`memory/` 等）はディレクトリ名を、直下の
-    モジュールはファイル名（拡張子なし）を返す。同一ユニット内の import は結合ではない。
+    """Unit name within a layer. A subpackage (`memory/` etc.) yields its directory name,
+    a top-level module yields its file name (no extension). Imports within one unit are not coupling.
 
-    パスセグメント名で解決するため、実ファイルでも一時ファイルでも動く
-    （`relative_to` はテスト用の tmp_path 配下で例外になるため使わない）。"""
+    Resolved by path segment names so it works for real files and temp files
+    (`relative_to` raises under the tests' tmp_path, so it is not used)."""
     key = layer_dir.name  # models / services / managers / shared / routers
     parts = module_file.parts
     if key in parts:
         after = parts[parts.index(key) + 1 :]
-        if len(after) > 1:  # サブパッケージ配下（after = [subpkg, ..., file.py]）
+        if len(after) > 1:  # under a subpackage (after = [subpkg, ..., file.py])
             if after[0] in _PER_FILE_PACKAGES:
                 return f"{after[0]}.{Path(after[1]).stem}"
             return after[0]
@@ -206,7 +210,7 @@ def _unit_of(module_file: Path, layer_dir: Path) -> str:
 
 
 def _target_unit(seg: list[str], layer_index: int) -> str:
-    """import 先ドット表記から、その層内のユニット名を取り出す。
+    """Extract the in-layer unit name from a dotted import target.
 
     seg=['src','services','memory','memory_service'], layer_index=2 -> 'memory'
     seg=['src','services','country_service'],          layer_index=2 -> 'country_service'
@@ -219,10 +223,10 @@ def _target_unit(seg: list[str], layer_index: int) -> str:
 
 
 def _violations_for(module_file: Path, layer_dir: Path) -> set[str]:
-    """1ファイルの逆方向 import 違反を集める。返すのは違反した import 先（ドット表記）。
+    """Collect reverse-import violations in one file. Returns the violating import targets (dotted).
 
-    同一層内は「ユニット」単位で判定する。ユニットは層直下のモジュール名、または
-    サブパッケージ名（`memory/` 等）。同一ユニット内の import は結合ではないので許可する。
+    Within a layer, judgment is per unit: a top-level module name or a
+    subpackage name (`memory/` etc.). Imports within one unit are not coupling, so they are allowed.
     """
     tree = ast.parse(module_file.read_text(encoding="utf-8"))
     self_unit = (
@@ -252,10 +256,10 @@ def _violations_for(module_file: Path, layer_dir: Path) -> set[str]:
             if target_pkg in {("src", "managers"), ("web", "routers")}:
                 found.add(dotted)
             elif target_pkg == ("src", "services"):
-                # 他の service ユニットは禁止。ただし以下は除外:
-                #   - 自ユニット内の import（結合ではない）
-                #   - service_factory への依存（DI の継ぎ目。architecture.md 8行）
-                #   - service_factory 自身は全 service を束ねてよい
+                # Other service units are forbidden, except:
+                #   - imports within the same unit (not coupling)
+                #   - dependency on service_factory (the DI seam; architecture.md)
+                #   - service_factory itself may bundle all services
                 unit = _target_unit(seg, 2)
                 if (
                     unit
@@ -269,10 +273,10 @@ def _violations_for(module_file: Path, layer_dir: Path) -> set[str]:
             if target_pkg == ("web", "routers"):
                 found.add(dotted)
             elif target_pkg == ("src", "managers"):
-                # 他の manager は禁止。shared/・components/ と自ユニットは可。
-                # components/ は複数 Manager が使う共有ワークフロー部品。Manager →
-                # Component の順方向のみ許す。Component → Manager は self_unit=
-                # "components" のため下の判定で依然 flag される（順方向を保つ）。
+                # Other managers are forbidden. shared/, components/ and the own unit are allowed.
+                # components/ holds shared workflow parts used by several Managers; only the
+                # forward Manager -> Component direction is allowed. Component -> Manager is
+                # still flagged below because self_unit == "components" (keeps the direction forward).
                 unit = _target_unit(seg, 2)
                 if unit and unit not in {self_unit, "shared", "components"}:
                     found.add(dotted)
@@ -283,7 +287,7 @@ def _violations_for(module_file: Path, layer_dir: Path) -> set[str]:
 
         elif layer_dir == _ROUTERS_DIR:
             if target_pkg == ("src", "services"):
-                # 表示ヘルパー例外に載っているものだけ許可。
+                # Allow only what is listed as a display-helper exception.
                 unit = _target_unit(seg, 2)
                 if unit not in _DISPLAY_HELPER_ALLOW:
                     found.add(dotted)
@@ -297,7 +301,7 @@ def _violations_for(module_file: Path, layer_dir: Path) -> set[str]:
     ids=lambda v: v.name if isinstance(v, Path) else v,
 )
 def test_no_reverse_dependency(module_file: Path, layer_dir: Path) -> None:
-    """各ファイルが依存方向に違反する import を持たないこと（ラチェット方式）。"""
+    """Each file has no import that violates the dependency direction (ratchet)."""
     found = _violations_for(module_file, layer_dir)
     key = str(module_file.relative_to(_SRC.parent))
     expected = _BASELINE.get(key, set())
@@ -317,7 +321,7 @@ def test_no_reverse_dependency(module_file: Path, layer_dir: Path) -> None:
 
 
 def test_baseline_has_no_stale_entries() -> None:
-    """_BASELINE に存在しないモジュールパスが残っていないこと。"""
+    """No module path absent from _BASELINE remains."""
     known = {str(p.relative_to(_SRC.parent)) for p, _ in _layer_modules()}
     assert not set(_BASELINE) - known
 
@@ -325,36 +329,46 @@ def test_baseline_has_no_stale_entries() -> None:
 _COMPONENTS_DIR = _MANAGERS_DIR / "components"
 
 
-def _component_imports(components_dir: Path) -> dict[str, set[str]]:
-    """Component file -> Component files it imports (``src.managers.components.x``)."""
+def _package_imports(directory: Path, package: list[str]) -> dict[str, set[str]]:
+    """Module file -> modules of the same package it imports.
+
+    ``package`` is the package's dotted path as segments, e.g.
+    ``["src", "managers", "components"]``.
+    """
     graph: dict[str, set[str]] = {}
-    files = _py_files(components_dir)
+    files = _py_files(directory)
     names = {p.stem for p in files}
+    depth = len(package)
     for path in files:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         targets: set[str] = set()
         for dotted in _iter_imported_dotted(tree, path):
             seg = _segments(dotted)
-            if seg[:3] == ["src", "managers", "components"] and len(seg) >= 4:
-                targets.add(seg[3])
-        # `from . import x` / `from src.managers.components import x` は
-        # パッケージそのものを指すので、import した名前を Component とみなす
+            if seg[:depth] == package and len(seg) > depth:
+                targets.add(seg[depth])
+        # `from . import x` / `from src.managers.components import x` points at
+        # the package itself, so treat the imported names as its modules
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 resolved = _resolve_import(node, path)
-                if resolved and _segments(resolved) == [
-                    "src",
-                    "managers",
-                    "components",
-                ]:
+                if resolved and _segments(resolved) == package:
                     targets |= {alias.name for alias in node.names}
         graph[path.stem] = {t for t in targets if t in names and t != path.stem}
     return graph
 
 
+def _component_imports(components_dir: Path) -> dict[str, set[str]]:
+    """Component file -> Component files it imports (``src.managers.components.x``)."""
+    return _package_imports(components_dir, ["src", "managers", "components"])
+
+
 def _component_cycles(components_dir: Path) -> list[list[str]]:
     """Cycles in the Component import graph, each as ``[a, b, ..., a]``."""
-    graph = _component_imports(components_dir)
+    return _import_cycles(_component_imports(components_dir))
+
+
+def _import_cycles(graph: dict[str, set[str]]) -> list[list[str]]:
+    """Cycles in a module import graph, each as ``[a, b, ..., a]``."""
     cycles: list[list[str]] = []
     seen: set[frozenset[str]] = set()
 
@@ -389,21 +403,118 @@ def _modules_importing(directory: Path, name: str) -> list[str]:
 
 
 def test_components_have_no_import_cycle() -> None:
-    """Component どうしは一方向なら依存してよいが、循環させない（BR2.16、NFR1.6）。
+    """Components may depend on each other one-way, but must not form cycles.
 
-    上の層の検査は components/ 全体を 1 つのユニットとして扱い、Component どうしの
-    import を無条件に許す。循環はここでファイル単位のグラフで検査する。
+    The layer checks above treat all of components/ as one unit and allow
+    Component-to-Component imports unconditionally. Cycles are checked here on a per-file graph.
     """
     assert _component_cycles(_COMPONENTS_DIR) == []
 
 
+_ADVANCED_DIR = _MANAGERS_DIR / "advanced_generation"
+_ADVANCED_PACKAGE = ["src", "managers", "advanced_generation"]
+
+#: Layer of each module of the advanced generation package (higher calls lower).
+#: The Manager uses the stage classes, the stage classes share the run context,
+#: and everything else is a leaf: types, errors and the pure helpers. A name
+#: whose file does not exist is skipped; a file missing here fails the check.
+_ADVANCED_LAYERS: dict[str, int] = {
+    "manager": 3,
+    "preparation": 2,
+    "analysis_stage": 2,
+    "finishing": 2,
+    "controls": 2,
+    "run_context": 1,
+    "run_types": 0,
+    "errors": 0,
+    "documents": 0,
+    "prompts": 0,
+    "results": 0,
+    "analysis_policy": 0,
+    "analysis_verifier": 0,
+    "detailed_analysis": 0,
+    "join_planner": 0,
+    "persona_check": 0,
+    "segment_features": 0,
+    "call_results": 0,
+}
+#: The only import allowed between two stage classes (the reader's end
+#: goes through the finishing stage).
+_ADVANCED_STAGE_PAIRS = frozenset({("controls", "finishing")})
+
+
+def _advanced_layer_violations(directory: Path) -> list[tuple[str, str]]:
+    """``(module, imported)`` pairs that go against the package's layers.
+
+    Leaves may import each other (cycles are checked on their own); any other
+    import must point at a lower layer, or be one of ``_ADVANCED_STAGE_PAIRS``.
+    A module not in ``_ADVANCED_LAYERS`` is reported as ``(module, "")``.
+    """
+    found: list[tuple[str, str]] = []
+    for module, targets in sorted(
+        _package_imports(directory, _ADVANCED_PACKAGE).items()
+    ):
+        layer = _ADVANCED_LAYERS.get(module)
+        if layer is None:
+            found.append((module, ""))
+            continue
+        for target in sorted(targets):
+            other = _ADVANCED_LAYERS.get(target)
+            if other is None:
+                found.append((module, target))
+            elif other < layer or (layer == other == 0):
+                continue
+            elif (module, target) not in _ADVANCED_STAGE_PAIRS:
+                found.append((module, target))
+    return found
+
+
+def test_advanced_generation_modules_follow_their_layers() -> None:
+    """The advanced generation package has no import cycle and no upward import.
+
+    The layer checks above treat all of ``advanced_generation/`` as one unit,
+    so imports between its own modules are checked here on a per-file graph:
+    Manager -> stage classes -> run context -> leaves, one way only.
+    """
+    graph = _package_imports(_ADVANCED_DIR, _ADVANCED_PACKAGE)
+    assert _import_cycles(graph) == []
+    assert _advanced_layer_violations(_ADVANCED_DIR) == []
+
+
 def test_routers_do_not_import_access_target() -> None:
-    """判定の材料（AccessTarget）を画面・API に返さない（NFR3.7、ADR-011）。"""
+    """The material of an access decision (AccessTarget) is not returned to screens or APIs."""
     assert _modules_importing(_ROUTERS_DIR, "AccessTarget") == []
 
 
+#: Code that runs only inside the analysis sandbox.
+_SANDBOX_PACKAGE = "sandbox"
+
+
+def _modules_importing_sandbox(*directories: Path) -> list[str]:
+    """Files under ``directories`` that import the sandbox code by any form."""
+    found: list[str] = []
+    for directory in directories:
+        for path in _py_files(directory, recursive=True):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                names: list[str] = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                    names = [node.module or ""]
+                if any(n.split(".")[0] == _SANDBOX_PACKAGE for n in names):
+                    found.append(path.name)
+                    break
+    return found
+
+
+def test_app_does_not_import_sandbox_code() -> None:
+    """Code under `sandbox/` runs only inside the session and is not imported by the app."""
+    assert _modules_importing_sandbox(_SRC, _WEB) == []
+
+
 class TestCheckerItself:
-    """検査ロジック自体が空振りしていないことの検証（error-catalog.md の要求）。"""
+    """The check logic itself does not silently pass (required by error-catalog.md)."""
 
     def _write(self, tmp_path: Path, rel: str, source: str) -> Path:
         target = tmp_path / rel
@@ -450,7 +561,7 @@ class TestCheckerItself:
         assert not _violations_for(f, _SERVICES_DIR)
 
     def test_store_importing_other_store_is_flagged(self, tmp_path: Path) -> None:
-        # stores/ はテーブルごとに 1 ユニット。同じディレクトリでもストアどうしは結合しない。
+        # stores/ is one unit per table. Stores in the same directory are not coupled to each other.
         f = self._write(
             tmp_path,
             "src/services/stores/foo_store.py",
@@ -493,7 +604,7 @@ class TestCheckerItself:
         assert not _violations_for(f, _MANAGERS_DIR)
 
     def test_manager_importing_component_is_allowed(self, tmp_path: Path) -> None:
-        # Manager → Component は順方向。合法。
+        # Manager -> Component is forward, so legal.
         f = self._write(
             tmp_path,
             "src/managers/foo.py",
@@ -502,8 +613,8 @@ class TestCheckerItself:
         assert not _violations_for(f, _MANAGERS_DIR)
 
     def test_component_importing_manager_is_flagged(self, tmp_path: Path) -> None:
-        # Component → Manager は逆方向。components/ 配下は managers 層に分類され
-        # self_unit="components" なので、他 manager ユニットへの import は flag される。
+        # Component -> Manager is reverse. Files under components/ are classified in the managers layer
+        # with self_unit="components", so an import of another manager unit is flagged.
         f = self._write(
             tmp_path,
             "src/managers/components/foo.py",
@@ -512,7 +623,7 @@ class TestCheckerItself:
         assert _violations_for(f, _MANAGERS_DIR)
 
     def test_manager_importing_service_is_allowed(self, tmp_path: Path) -> None:
-        # manager → service は順方向。合法。
+        # Manager -> service is forward, so legal.
         f = self._write(
             tmp_path,
             "src/managers/foo.py",
@@ -547,6 +658,36 @@ class TestCheckerItself:
             "from ...models.authz import Principal\n",
         )
         assert _component_cycles(tmp_path / "src/managers/components") == []
+
+    def test_advanced_upward_and_unlisted_imports_are_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        package = "src/managers/advanced_generation"
+        self._write(tmp_path, f"{package}/manager.py", "from .finishing import F\n")
+        self._write(tmp_path, f"{package}/finishing.py", "from . import run_context\n")
+        self._write(tmp_path, f"{package}/controls.py", "from .finishing import F\n")
+        self._write(tmp_path, f"{package}/run_context.py", "from .errors import E\n")
+        self._write(tmp_path, f"{package}/errors.py", "from .prompts import P\n")
+        self._write(tmp_path, f"{package}/prompts.py", "x = 1\n")
+        assert _advanced_layer_violations(tmp_path / package) == []
+        self._write(tmp_path, f"{package}/results.py", "from .manager import M\n")
+        self._write(tmp_path, f"{package}/extra.py", "x = 1\n")
+        assert _advanced_layer_violations(tmp_path / package) == [
+            ("extra", ""),
+            ("results", "manager"),
+        ]
+
+    def test_importing_sandbox_is_flagged(self, tmp_path: Path) -> None:
+        self._write(
+            tmp_path,
+            "src/services/foo.py",
+            "from sandbox.persona_analysis import prepare\n",
+        )
+        self._write(tmp_path, "web/routers/bar.py", "import sandbox.persona_analysis\n")
+        self._write(tmp_path, "src/models/baz.py", "from .sandbox_like import X\n")
+        assert sorted(
+            _modules_importing_sandbox(tmp_path / "src", tmp_path / "web")
+        ) == ["bar.py", "foo.py"]
 
     def test_router_importing_access_target_is_flagged(self, tmp_path: Path) -> None:
         self._write(

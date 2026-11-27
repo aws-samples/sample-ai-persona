@@ -2,20 +2,19 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { synthPublic } from './helpers/stages';
 
 /**
- * 公開の Stage AIPersonaDev の「写し」をスナップショットで固定する（U1 閉域、NFR7.1、
- * security-design.md §5、BR2.2）。
+ * Pins a "copy" of the public Stage AIPersonaDev with a snapshot.
  *
- * 閉域構成の変更の前のコードで作ったスナップショット
- * （__snapshots__/public-stage-invariants.test.ts.snap）と比べる。落ちたら、閉域の変更が
- * 公開構成を変えてしまったということなので、スナップショットを更新せずに原因を直す。
- * イメージのタグ・アセットのハッシュ・アカウント（テストの固定値）など変わりやすい値は写さない。
+ * It is compared with a snapshot (__snapshots__/public-stage-invariants.test.ts.snap) built from
+ * the code before the closed-network changes. If it fails, a closed-network change altered the
+ * public configuration, so fix the cause instead of updating the snapshot.
+ * Volatile values such as image tags, asset hashes and the account (fixed in tests) are not copied.
  */
 
 jest.setTimeout(120_000);
 
 const { templates } = synthPublic();
 
-/** `Ref` / `Fn::GetAtt` / `Fn::ImportValue` / `Fn::Join` を、参照先の名前だけの文字列にする。 */
+/** Turns `Ref` / `Fn::GetAtt` / `Fn::ImportValue` / `Fn::Join` into a string of only the referenced name. */
 function simplify(value: unknown): unknown {
   if (value === null || typeof value !== 'object') {
     return value;
@@ -51,7 +50,7 @@ function resourceTypeCounts(template: Template): Record<string, number> {
   return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-/** 1 つのルールを「相手・プロトコル・ポート」の文字列にする。 */
+/** Turns one rule into a "peer, protocol, port" string. */
 function ruleOf(rule: Record<string, any>): string {
   const peer =
     rule.CidrIp ??
@@ -63,7 +62,7 @@ function ruleOf(rule: Record<string, any>): string {
   return `${JSON.stringify(simplify(peer))} ${rule.IpProtocol} ${rule.FromPort ?? ''}-${rule.ToPort ?? ''}`;
 }
 
-/** SG ごとの受け入れ・外向きのルール（SG の中に書くものと、別のリソースのものの両方）。 */
+/** Ingress and egress rules per SG (both those written inside the SG and those of separate resources). */
 function securityGroupRules(template: Template): Record<string, { ingress: string[]; egress: string[] }> {
   const resources = template.toJSON().Resources as Record<string, any>;
   const groups: Record<string, { ingress: string[]; egress: string[] }> = {};
@@ -118,8 +117,12 @@ function taskRoleStatements(template: Template): unknown[] {
     id.startsWith('AppTaskDefinitionTaskRole'),
   );
   expect(roles).toHaveLength(1);
-  const policies = Object.values(template.findResources('AWS::IAM::Policy')).filter((policy) =>
-    (policy.Properties.Roles as any[]).some((r) => r.Ref === roles[0]),
+  // Also read statements that did not fit the default policy and that CDK moved to the same role's overflow managed policy
+  const policies = [
+    ...Object.values(template.findResources('AWS::IAM::Policy')),
+    ...Object.values(template.findResources('AWS::IAM::ManagedPolicy')),
+  ].filter((policy) =>
+    ((policy.Properties.Roles ?? []) as any[]).some((r) => r.Ref === roles[0]),
   );
   expect(policies.length).toBeGreaterThan(0);
   return policies.flatMap((policy) => simplify(policy.Properties.PolicyDocument.Statement) as unknown[]);

@@ -1,8 +1,9 @@
-"""SurveyStore（アンケートの本体の読み書き）の結合テスト。moto を使う。
+"""Integration tests for SurveyStore (reads and writes of the survey body), on moto.
 
-U7 BR1.1（新規は「まだない ID」の条件付きで、共有は書かない。OwnerIndex に載る）、
-BR1.5・NFR1.87（更新は渡した列だけ。所有者・共有・キー・テンプレートの写しは書かない）、
-NFR2.21（まとめ読みは強い整合性で、未処理のキーは読み直す）、NFR2.25（本体の大きさ）。
+A new survey is conditional on the ID not existing yet, writes no sharing, and
+appears in OwnerIndex. Updates write only the columns passed (never owner,
+sharing, keys or the template copy). Batch reads are strongly consistent and
+retry unprocessed keys. The body size is estimated.
 """
 
 from datetime import datetime
@@ -128,7 +129,7 @@ class TestPutAndGet:
         assert "s3_result_path" not in _raw(client, survey.id)
 
     def test_new_survey_has_no_shares_and_lands_in_owner_index(self, store, client):
-        """BR1.1: 共有は ResourceSharing だけが書く（作成は共有なしで始まる）。"""
+        """Only ResourceSharing writes sharing (creation starts with none)."""
         survey = Survey.from_dict({**_survey().to_dict(), "shared_group_ids": ["s"]})
         store.put_new(survey)
 
@@ -230,7 +231,7 @@ class TestUpdateFields:
 
 class TestItemSize:
     def test_grows_with_the_body(self):
-        """NFR2.25: 本体の大きさは属性名と値の合計で見積もる。"""
+        """The body size is estimated from the sum of attribute names and values."""
         small = SurveyStore.item_size({"id": "a"})
         large = SurveyStore.item_size({"id": "a", "text": "あ" * 1000})
 
@@ -253,7 +254,7 @@ class TestFailures:
 
 
 # =============================================================================
-# Step Functions への移行: 待ちの索引と条件付きの遷移（NFR3.10、NFR4.4）
+# Move to Step Functions: the waiting index and conditional transitions
 # =============================================================================
 
 
@@ -265,7 +266,7 @@ def _queued(store: SurveyStore, at: str, **kwargs: Any) -> Survey:
 
 
 class TestRunQueue:
-    """Only queued and running surveys are in RunQueueIndex (NFR3.10)."""
+    """Only queued and running surveys are in RunQueueIndex."""
 
     def test_lists_queued_and_running_but_not_finished(self, store):
         a = _queued(store, "2026-10-30T01:00:00+00:00")
@@ -304,7 +305,7 @@ class TestRunQueue:
 
 
 class TestTransition:
-    """Every transition holds only when the status is the expected one (NFR4.4)."""
+    """Every transition holds only when the status is the expected one."""
 
     def test_queued_to_running_writes_the_execution(self, store, client):
         survey = _queued(store, "2026-10-30T01:00:00+00:00")

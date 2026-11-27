@@ -1,7 +1,7 @@
-"""OwnerDirectory（所有者の名前の写し）の単体テスト。
+"""Unit tests for OwnerDirectory (a copy of owner names).
 
-BR5.1〜BR5.3、NFR2.7、NFR2.8、NFR5.6、NFR8.13、performance-design.md §3。
-時計と Service はモック、取り直しの別スレッドは注入した実行器で走らせる。
+The clock and the Service are mocks; the refresh on another thread runs on an
+injected executor.
 """
 
 import json
@@ -72,7 +72,7 @@ def _directory(users: Mock, clock: FakeClock, executor: Any) -> OwnerDirectory:
 
 def _warm(users: Mock, clock: FakeClock) -> OwnerDirectory:
     directory = _directory(users, clock, lambda job: job())
-    directory.labels(["s1"])  # 初回の取り直しを同期で済ませる
+    directory.labels(["s1"])  # finish the first refresh synchronously
     return directory
 
 
@@ -138,7 +138,7 @@ class TestCopyLifetime:
 
         assert directory.labels(["s1"]) == {"s1": "中村 由美"}
         assert directory.labels(["s1"]) == {"s1": "中村 由美"}
-        assert len(deferred.jobs) == 1  # 取り直しは 1 つだけ
+        assert len(deferred.jobs) == 1  # only one refresh
 
         deferred.run_all()
         assert directory.labels(["s1"]) == {"s1": "新しい名前"}
@@ -198,7 +198,9 @@ class TestCopyLifetime:
         directory._run_in_background = broken  # type: ignore[attr-defined]
         clock.now += REFRESH_INTERVAL_SECONDS + 1
 
-        assert directory.labels(["s1"]) == {"s1": "中村 由美"}  # 前の写しを返す
+        assert directory.labels(["s1"]) == {
+            "s1": "中村 由美"
+        }  # returns the previous copy
         (event,) = _stale_events(capsys)
         assert event["served"] == "stale"
 

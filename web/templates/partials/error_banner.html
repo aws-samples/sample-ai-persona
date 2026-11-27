@@ -1,18 +1,17 @@
 {% from "components/icons.html" import icon_x_circle, icon_refresh %}
 {#
-  領域置換型のエラー表示（Issue #117 ステップ5）。
+  Error display that replaces a region.
 
-  対象領域そのものを置き換えるエラーに使う。
-  - コンテンツ読み込みの失敗（GET）
-  - 対象が存在しない（NOT_FOUND）
+  Used for errors that replace the target region itself.
+  - content load failure (GET)
+  - target does not exist (NOT_FOUND)
 
-  この画面には再試行の導線を置く。読み込みに失敗した領域は再読込で回復する
-  ことが多く、利用者の入力を壊す心配もないため。
+  This view offers a retry path: a region that failed to load often recovers on reload, and there is no user input to lose.
 
-  引数:
-    error       ... 表示する文言（web/error_messages.py が解決したもの）
-    back_url    ... 任意。指定すると復帰リンクを出す
-    back_label  ... 任意。復帰リンクの文字列（既定「一覧に戻る」）
+  Arguments:
+    error       ... message to show (resolved by web/error_messages.py)
+    back_url    ... optional; shows a return link when given
+    back_label  ... optional; return link text (default "一覧に戻る")
 #}
 <div class="bg-red-50 border border-red-200 rounded-lg p-4 fade-in" role="alert">
     <div class="flex items-start">

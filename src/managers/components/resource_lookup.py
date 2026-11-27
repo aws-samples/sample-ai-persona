@@ -1,18 +1,18 @@
-"""Reading what an authorization decision needs (ADR-011, contract C3).
+"""Reading what an authorization decision needs.
 
 ``ResourceLookup`` returns :class:`AccessTarget` values (owner, shared
 departments, display name, existence) and nothing else; ``AccessPolicy``
 judges them. How each resource type is read is registered as a
 :class:`~src.models.authz.LookupReader`, implemented in the Service layer by
-the Unit that owns the table (U5〜U7). U2 registers none (Q1).
+the code that owns the table. No reader is registered yet.
 
-Rules (BR2.10, NFR9.18, NFR Design R-01, Q2):
+Rules:
 
 - Readers are registered once, at start-up, in :func:`build_resource_lookup`;
   registering a type twice is a start-up error.
 - An unregistered type, an unreachable table, keys left unprocessed or a
   missed deadline all raise ``LookupUnavailableError`` (503). Nothing is ever
-  treated as allowed (fail closed, NFR1.3).
+  treated as allowed (fail closed).
 - Every ``get`` / ``get_many`` call has its own 3-second deadline from its
   start. The deadline is checked before each 100-ID read and handed to the
   reader, which checks it again before every call it makes.
@@ -21,7 +21,7 @@ Rules (BR2.10, NFR9.18, NFR Design R-01, Q2):
 - IDs that do not exist come back as ``exists=False`` targets.
 
 Logs: ``authz.lookup`` (sampled by ``AUTH_TIMING_SAMPLE_RATE``) and
-``authz.lookup_failed``; neither carries resource IDs (NFR8.8, NFR8.9).
+``authz.lookup_failed``; neither carries resource IDs.
 """
 
 import random
@@ -37,7 +37,7 @@ from ..shared.structured_log import log_event
 LOOKUP_DEADLINE_SECONDS = 3.0
 #: IDs per reader call (the ``BatchGetItem`` limit).
 LOOKUP_BATCH_SIZE = 100
-#: Most IDs one ``get_many`` call accepts (Q2).
+# Most IDs one ``get_many`` call accepts.
 LOOKUP_MAX_IDS = 500
 
 
@@ -163,10 +163,10 @@ def build_resource_lookup(
     sample_rate: float | None = None,
     random_source: Callable[[], float] = random.random,
 ) -> ResourceLookup:
-    """The one place readers are registered (BR2.10).
+    """The one place readers are registered.
 
-    Units that add owner and share columns (U5〜U7) add their reader here in
-    the same change. U2 registers none, so every lookup answers 503 until then.
+    Code that adds owner and share columns adds its reader here in the same
+    change. While none is registered, every lookup answers 503.
 
     Args:
         readers: ``(resource type, reader)`` pairs.

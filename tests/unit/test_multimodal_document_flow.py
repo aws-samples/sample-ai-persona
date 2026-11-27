@@ -2,7 +2,7 @@
 Integration test for multimodal document support (Task 1-4).
 Tests the complete flow from file upload to discussion with documents.
 
-U6: the discussion is run by the uploader and saved through
+The discussion is run by the uploader and saved through
 ``DiscussionRecords``, which attaches the documents to it.
 """
 
@@ -22,7 +22,7 @@ from tests.unit.discussion_world import OWNER, World
 
 @pytest.fixture
 def upload_store(monkeypatch):
-    """Upload metadata on moto DynamoDB (U5: UploadedFileStore)."""
+    """Upload metadata on moto DynamoDB (UploadedFileStore)."""
     moto = pytest.importorskip("moto")
     import boto3
 
@@ -65,7 +65,7 @@ def test_complete_document_flow(tmp_path, upload_store):
         uploader, test_pdf_path.read_bytes(), "pdf_test.pdf"
     )
 
-    # U5: the metadata records the uploader; nobody else may read the files
+    # the metadata records the uploader; nobody else may read the files
     assert upload_store.get(image_metadata.file_id).owner_sub == uploader.sub
     assert not attachments.can_read_file(MEMBER_B.principal(), pdf_metadata.file_id)
 

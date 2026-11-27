@@ -1,6 +1,6 @@
 # AI ペルソナシステムの AWS CDK デプロイについて
 
-AI ペルソナシステムを AWS にデプロイするための CDK コードです。v1.0.0 では、ログインをアプリ自身が行い、アプリを ECS Fargate と内部 ALB で動かし、CDK を Data・App・Edge の 3 スタックで構成。
+AI ペルソナシステムを AWS にデプロイするための CDK コードです。v1.0.0 では、ログインをアプリ自身が行い、アプリを ECS Fargate で動かし、CDK を Data・App・Edge の 3 スタックで構成。
 
 インターネットへ出る経路を持たない VPC で動かす場合は、[閉域構成ガイド](../docs/closed_network.md) を参照してください。
 
@@ -24,6 +24,7 @@ flowchart TB
 
     SFN["AWS Step Functions<br/>（マスアンケート）"]
     Bedrock[Amazon Bedrock]
+    CodeInterpreter["AgentCore<br/>Code Interpreter<br/>"]
 
     subgraph Data["Data スタック（すべて RETAIN）"]
         DynamoDB[(DynamoDB)] ~~~ ECR[ECR] ~~~ Memory[AgentCore<br/>Memory]
@@ -33,19 +34,20 @@ flowchart TB
     User -->|HTTPS| CloudFront
     WAF -.- CloudFront
     ECS -->|開始・確認・停止| SFN
+    User -.->|"ファイルを分割で直接アップロード<br/>（署名付き URL）"| S3
     ECS --> Bedrock
+    ECS -->|前準備・分析| CodeInterpreter
     ECS --> Data
     SFN -->|推論| Bedrock
     SFN -->|入力・結果| S3
 ```
 
-利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF は既定で有効で、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。
-
+利用者は CloudFront から Internal ALB を経てアプリへ届きます。WAF は既定で有効で、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 |
 |---|---|---|
 | `AIPersonaDev-Data` | ap-northeast-1 | DynamoDB、S3、ECR、Cognito User Pool、AgentCore Memory、KMS キー、Secrets Manager の鍵 |
 | `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF（`enableWaf: true` のときだけ。既定は有効） |
-| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、マスアンケートの Step Functions のステートマシン、ログ |
+| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、マスアンケートの Step Functions のステートマシン、AgentCore Code Interpreter、ログ |
 
 ## デプロイ
 
@@ -75,6 +77,7 @@ flowchart TB
 | `enableWaf` / `allowedIpAddresses` | `true` / なし | CloudFront 用 WAF と IP 制限。ログイン画面への短時間の大量アクセスも止める。費用を抑えるなら `false` にする（月 $8 ほど減る） |
 | `enableAdditionalPersonaModels` | `false` | 追加ペルソナベースモデル（Bedrock Mantle 経由） |
 | `enableDatasetAnalysis` | `true` | データセット構造化分析ツール |
+| `enableAdvancedGeneration` | `true` | ペルソナ生成の「高度な生成（ベータ）」のタブ。`false` で再デプロイすると、資源は残したまま画面から外れる（[高度な生成ガイド](../docs/advanced_generation_guide.md)）。閉域の構成ではいつも無効 |
 | `dataAgentRuntimeArn` / `dataAgentRegion` | なし | データ分析エージェント連携 |
 | `inferenceScope` | `global` | 推論の範囲（下の「[推論の範囲](#推論の範囲inferencescope)」） |
 | `surveyModelId` | 範囲の既定（Claude Haiku 5.5） | マスアンケートのモデル。`global.` か `jp.` の推論プロファイル ID |

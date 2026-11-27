@@ -1,10 +1,11 @@
-"""後始末で残った S3 のオブジェクトを見つけるスクリプトの結合テスト（moto）。
+"""Integration tests (moto) for the script that finds S3 objects left over after cleanup.
 
-NFR1.84、NFR1.85。アンケートの削除は本体と共有を先に消し、結果の CSV を 3 回まで
-消し直す。カスタムデータの削除は登録情報を先に消し、Parquet を 3 回まで消し直す。
-それでも残った ``survey-results/{id}/`` と ``persona-dataset/custom/{id}.parquet`` を
-このスクリプトが見つける。既定は件数を出すだけで何も消さない。--apply で消す。
-作成から 1 時間以内のものは、保存の途中かもしれないため対象にしない。
+Survey deletion removes the source and shares first and retries deleting the result CSV
+up to 3 times. Custom data deletion removes the registration first and retries deleting
+the Parquet up to 3 times. The script finds the ``survey-results/{id}/`` and
+``persona-dataset/custom/{id}.parquet`` objects that still remain. By default it only
+reports counts; --apply deletes. Objects created within the last hour are skipped
+because a save may still be in progress.
 """
 
 import time
@@ -94,7 +95,7 @@ class TestPlan:
         assert plan.is_clean
 
     def test_files_not_named_by_an_id_are_not_touched(self, survey_world: SurveyWorld):
-        """v1.0.0 より前の名前のファイル（persona-dataset/custom/{名前}.parquet）は対象外"""
+        """Files with pre-v1.0.0 names (persona-dataset/custom/{name}.parquet) are out of scope."""
         survey_world.s3.upload_file(b"old", "persona-dataset/custom/顧客データ.parquet")
         survey_world.s3.upload_file(
             b"old", "persona-dataset/custom/顧客データ_meta.json"
@@ -148,7 +149,7 @@ class TestMain:
 
 class TestApply:
     def test_a_body_that_appeared_meanwhile_is_kept(self, survey_world: SurveyWorld):
-        """消す直前にもう一度本体を確かめる（保存が終わったものは消さない）"""
+        """The source is checked again just before deleting (finished saves are not deleted)."""
         survey_id = _orphan_result(survey_world)
         data_id = _orphan_custom(survey_world)
         plan = plan_cleanup(

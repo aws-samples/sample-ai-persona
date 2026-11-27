@@ -1,4 +1,4 @@
-"""DynamoDB reads and writes of discussions (U6, ADR-002, NFR Design Q1 A).
+"""DynamoDB reads and writes of discussions.
 
 Three tables:
 
@@ -11,7 +11,7 @@ Messages and reports have no owner; they are read only through their
 discussion, after its body was checked (``DiscussionRecords``). Every rule
 about *whether* something may happen lives in ``DiscussionRecords`` and the
 Managers; this service runs the reads, the conditional writes and the
-transactions (``reliability-design.md`` §1, §2, §6):
+transactions:
 
 - the body is written last, "id does not exist yet", in one transaction with
   the caller's items (``put_new``);
@@ -44,7 +44,7 @@ from src.models.message import DiscussionMessage
 
 logger = logging.getLogger(__name__)
 
-#: Largest body written (BR2.7; DynamoDB's own limit is 400KB).
+#: Largest body written (DynamoDB's own limit is 400KB).
 MAX_BODY_BYTES = 350 * 1024
 #: ``BatchWriteItem`` accepts at most 25 requests.
 WRITE_BATCH_LIMIT = 25
@@ -210,7 +210,7 @@ class DiscussionStore:
 
     @staticmethod
     def item_size(body: Mapping[str, Any]) -> int:
-        """Size of ``body`` as an item: attribute names plus values (BR2.7)."""
+        """Size of ``body`` as an item: attribute names plus values."""
         serializer = TypeSerializer()
         item = _to_dynamo(body)
         return sum(
@@ -223,7 +223,7 @@ class DiscussionStore:
     def put_new(
         self, body: Mapping[str, Any], extra_items: Sequence[dict[str, Any]] = ()
     ) -> None:
-        """Write a new body with the caller's items in one transaction (BR1.2 (3)).
+        """Write a new body with the caller's items in one transaction.
 
         Args:
             body: The body (``Discussion.to_dict()``).
@@ -258,7 +258,7 @@ class DiscussionStore:
     def get_many(
         self, discussion_ids: Sequence[str], attributes: Sequence[str]
     ) -> dict[str, dict[str, Any]]:
-        """Read some columns of many bodies, strongly consistent (NFR2.15).
+        """Read some columns of many bodies, strongly consistent.
 
         Returns:
             id -> body (only the given attributes), for the IDs that exist.
@@ -317,7 +317,7 @@ class DiscussionStore:
     def update_insights(
         self, discussion_id: str, insights: list[dict[str, Any]], updated_at: str
     ) -> None:
-        """Replace ``insights`` and ``updated_at`` only (BR1.4).
+        """Replace ``insights`` and ``updated_at`` only.
 
         Raises:
             DiscussionConditionFailed: The body does not exist.
@@ -339,7 +339,7 @@ class DiscussionStore:
         updated_at: str,
         documents: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Move ``message_count`` from ``expected`` to ``new`` (BR3.8, NFR1.62).
+        """Move ``message_count`` from ``expected`` to ``new``.
 
         Args:
             documents: The whole new ``documents`` list, when files were added.
@@ -396,13 +396,13 @@ class DiscussionStore:
     # --- messages ----------------------------------------------------------------
 
     def write_messages(self, messages: Sequence[DiscussionMessage]) -> None:
-        """Write messages, 25 per ``BatchWriteItem`` (BR1.2 (2)).
+        """Write messages, 25 per ``BatchWriteItem``.
 
         Raises:
             DiscussionStoreError: Items stayed unprocessed after three re-sends.
         """
-        # written_at: 書いた時刻。インタビューの保存は古い発言を移すため、created_at では
-        # 保存の途中かどうかを見分けられない（後始末のスクリプト、BR1.6）
+        # written_at: when it was written. An interview save moves old statements, so created_at
+        # cannot tell whether a save is mid-way (used by the cleanup script).
         written_at = int(self._clock())
         requests = [
             {
@@ -417,7 +417,7 @@ class DiscussionStore:
     def query_messages(
         self, discussion_id: str, *, up_to: int | None = None
     ) -> list[DiscussionMessage]:
-        """The messages in ``seq`` order, through every page (BR1.3, NFR9.34).
+        """The messages in ``seq`` order, through every page.
 
         Args:
             up_to: Read only ``seq <= up_to`` (the body's ``message_count``).
@@ -440,7 +440,7 @@ class DiscussionStore:
         return [DiscussionMessage.from_dict(self._plain(i)) for i in items]
 
     def delete_messages(self, discussion_id: str) -> int:
-        """Delete every message of a discussion (BR1.5 (2)). Returns the count."""
+        """Delete every message of a discussion. Returns the count."""
         return self._delete_partition(self.messages_table, discussion_id, _SEQ)
 
     # --- reports -----------------------------------------------------------------
@@ -460,7 +460,7 @@ class DiscussionStore:
     def put_report(
         self, report: DiscussionReport, *, max_reports: int, updated_at: str
     ) -> None:
-        """Save a report and add one to ``report_count`` (BR4.4, NFR1.62).
+        """Save a report and add one to ``report_count``.
 
         Raises:
             DiscussionConditionFailed: The body is gone or already holds
@@ -486,7 +486,7 @@ class DiscussionStore:
         )
 
     def update_report(self, report: DiscussionReport, *, updated_at: str) -> None:
-        """Write a report's new content and the body's ``updated_at`` (BR4.4).
+        """Write a report's new content and the body's ``updated_at``.
 
         Raises:
             DiscussionConditionFailed: The report or the body is gone.
@@ -528,7 +528,7 @@ class DiscussionStore:
     def delete_report(
         self, discussion_id: str, report_id: str, *, updated_at: str
     ) -> None:
-        """Delete one report and take one from ``report_count`` (BR4.4).
+        """Delete one report and take one from ``report_count``.
 
         Raises:
             DiscussionConditionFailed: The report or the body is gone.
@@ -553,10 +553,10 @@ class DiscussionStore:
         )
 
     def delete_reports(self, discussion_id: str) -> int:
-        """Delete every report of a discussion (BR1.5 (2)). Returns the count."""
+        """Delete every report of a discussion. Returns the count."""
         return self._delete_partition(self.reports_table, discussion_id, _REPORT_ID)
 
-    # --- the cleanup script (BR1.6; operators' credentials, not the task role) ------
+    # --- the cleanup script (operators' credentials, not the task role) ------
 
     def message_partitions(self) -> dict[str, PartitionSummary]:
         """Discussion ID -> count and newest write time of its messages."""

@@ -1,9 +1,33 @@
 {% from "components/datetime.html" import iso_datetime %}
 {% from "components/icons.html" import icon_persona, icon_document, icon_lightbulb, icon_x_circle, icon_rocket, icon_cpu_chip %}
-<!-- ペルソナ詳細ボディ（共通パーシャル） -->
-{# gender_label / country_name は各ルーターで templates.env.globals に登録済み #}
+<!-- Persona detail body (shared partial) -->
+{# gender_label / country_name are registered in templates.env.globals by each router. #}
+{% from "components/dialog.html" import dialog, dialog_open_button %}
+{% from "persona/partials/advanced_labels.html" import method_label, share_text %}
 
-<!-- 基本情報カード -->
+{#- Badge for personas made by advanced generation (beta) and the analysis summary. #}
+{% set advanced_context = persona.generation_context or {} %}
+{% if advanced_context.get("mode") == "advanced" %}
+{% set advanced_unverified = advanced_context.get("unverified_segment_ids") or [] %}
+{% set advanced_segment = (advanced_context.get("segments") or []) | selectattr("id", "equalto", advanced_context.get("segment_id")) | first %}
+<div class="bg-white rounded-lg shadow-md p-6 mb-6" data-testid="persona-advanced-summary">
+    <p class="mb-2"><span data-testid="persona-advanced-badge" class="inline-flex items-center px-2 py-0.5 rounded border border-amber-600 text-amber-800 bg-amber-50 text-sm">高度な生成（ベータ）で作成</span></p>
+    <p class="text-sm text-gray-800">
+        分析の要約: {{ method_label((advanced_context.get("plan_summary") or {}).get("method", "")) }}
+        {%- if advanced_segment %} / {{ advanced_segment["label"] or "層" }}
+        {%- if advanced_segment["id"] not in advanced_unverified %}（全体の {{ share_text(advanced_segment["share"]) }}）{% endif %}
+        {%- endif %}
+    </p>
+    {% if analysis_record_checked %}
+    {#- The open button is in the header action row (same place as generation log and evaluation). -#}
+    {% call dialog("persona-analysis-record", "分析の詳細", panel_class="max-w-3xl") %}
+    {% with record = analysis_record, sources = analysis_sources %}{% include "persona/partials/advanced_record_dialog.html" %}{% endwith %}
+    {% endcall %}
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Basic info card -->
 <div class="bg-white rounded-lg shadow-md p-6 mb-6">
     <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_persona("w-5 h-5 text-gray-600") }} 基本情報</h2>
     <div class="grid md:grid-cols-3 gap-4">
@@ -50,13 +74,13 @@
     {% endif %}
 </div>
 
-<!-- 背景 -->
+<!-- Background -->
 <div class="bg-white rounded-lg shadow-md p-6 mb-6">
     <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_document("w-5 h-5 text-gray-600") }} 背景・プロフィール</h2>
     <p class="text-gray-700 whitespace-pre-wrap">{{ persona.background }}</p>
 </div>
 
-<!-- 価値観 -->
+<!-- Values -->
 <div class="bg-white rounded-lg shadow-md p-6 mb-6">
     <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_lightbulb("w-5 h-5 text-blue-600") }} 価値観・信念</h2>
     <ul class="space-y-3">
@@ -71,7 +95,7 @@
     </ul>
 </div>
 
-<!-- 課題・悩み -->
+<!-- Pain points -->
 <div class="bg-white rounded-lg shadow-md p-6 mb-6">
     <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_x_circle("w-5 h-5 text-red-600") }} 課題・悩み</h2>
     <ul class="space-y-3">
@@ -86,7 +110,7 @@
     </ul>
 </div>
 
-<!-- 目標・願望 -->
+<!-- Goals -->
 <div class="bg-white rounded-lg shadow-md p-6 mb-6">
     <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_rocket("w-5 h-5 text-green-600") }} 目標・願望</h2>
     <ul class="space-y-3">
@@ -101,9 +125,9 @@
     </ul>
 </div>
 
-{#- 長期記憶（メモリ画面）は管理できる人だけ。共有された人には導線も出さない（BR4.1、AC4.2.4） #}
+{#- Long-term memory (memory screen) is for users who can manage only. Users the persona is shared with get no link. #}
 {% if manageable %}
-<!-- 長期記憶セクション -->
+<!-- Long-term memory section -->
 <div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false, loaded: false, activeTab: 'summary' }">
     <button 
         @click="open = !open; if (!loaded) { $nextTick(() => { htmx.trigger(document.getElementById('memory-section-content'), 'load-memories'); loaded = true; }); }"
@@ -129,7 +153,7 @@
     
     <div x-show="open" x-collapse class="px-6 pb-6">
         <div class="border-t border-gray-100 pt-4">
-            <!-- タブナビゲーション -->
+            <!-- Tab navigation -->
             <div class="flex border-b border-gray-200 mb-4">
                 <button 
                     @click="activeTab = 'summary'; htmx.ajax('GET', '/persona/{{ persona.id }}/memories?strategy_type=summary', {target: '#memory-section-content', swap: 'innerHTML'})"
@@ -153,7 +177,7 @@
                 </button>
             </div>
             
-            <!-- 記憶一覧読み込みエリア -->
+            <!-- Memory list loading area -->
             <div 
                 id="memory-section-content"
                 hx-get="/persona/{{ persona.id }}/memories?strategy_type=summary"
@@ -170,7 +194,7 @@
 </div>
 {% endif %}
 
-<!-- ナレッジベース紐付けセクション -->
+<!-- Knowledge base binding section -->
 <div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false }">
     <button 
         @click="open = !open"
@@ -211,7 +235,7 @@
     </div>
 </div>
 
-<!-- データセット紐付けセクション -->
+<!-- Dataset binding section -->
 <div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false }">
     <button 
         @click="open = !open"
@@ -252,7 +276,7 @@
     </div>
 </div>
 
-<!-- メタ情報 -->
+<!-- Metadata -->
 <div class="bg-gray-50 rounded-lg p-4 text-sm text-gray-500">
     <p><strong>ペルソナID:</strong> {{ persona.id }}</p>
     <p><strong>作成日時:</strong> {% if persona.created_at %}<time datetime="{{ iso_datetime(persona.created_at) }}">{{ persona.created_at.strftime('%Y/%m/%d %H:%M:%S') }}</time>{% else %}不明{% endif %}</p>

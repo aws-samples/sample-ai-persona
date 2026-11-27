@@ -1,8 +1,8 @@
 """
-Login URLs (contract C11): ``GET /login``, ``GET /auth/callback``, ``POST /signout``,
-the no-role page ``GET /no-role`` (M4, BR2.8), and for the closed network
-(``AUTH_MODE=admin_api``, U8) ``POST /login`` (M2) and
-``GET/POST /auth/new-password`` (M3).
+Login URLs: ``GET /login``, ``GET /auth/callback``, ``POST /signout``,
+the no-role page ``GET /no-role``, and for the closed network
+(``AUTH_MODE=admin_api``) ``POST /login`` (the login form) and
+``GET/POST /auth/new-password`` (the first password change).
 
 HTTP translation only; every decision is made by
 :class:`src.managers.auth_manager.AuthManager`, whose synchronous DynamoDB /
@@ -15,10 +15,10 @@ first-password-change challenge. The login session id goes into the separate
 ``session_id`` cookie (HttpOnly, SameSite=Lax, Secure outside
 ``AUTH_MODE=local``).
 
-M2 / M3 are full-page forms (no htmx): failures answer 200 with the form again,
+The login form and the first-password-change form are full-page forms (no htmx): failures answer 200 with the form again,
 and the form fields default to empty strings so a missing field never becomes
-FastAPI's 422 (BR1.2, BR2.5). Passwords are never logged and never rendered
-back (BR4.5).
+FastAPI's 422. Passwords are never logged and never rendered
+back.
 """
 
 import asyncio
@@ -68,11 +68,11 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 #: Key of the LoginTransaction inside the signed ``login_tx`` cookie.
 LOGIN_TRANSACTION_KEY = "login_transaction"
-#: Key of the first-password-change challenge id in ``login_tx`` (U8 BR2.1).
+#: Key of the first-password-change challenge id in ``login_tx``.
 NEW_PASSWORD_CHALLENGE_KEY = "new_password_challenge"
 CHALLENGE_EXPIRED_PATH = "/login?reason=challenge_expired"
 _NOTICE_REASONS = {"expired", "signed_out"}
-#: Notices shown on top of M2 (U8 BR1.1).
+# Notices shown on top of the login form.
 _M2_NOTICE_REASONS = {"expired", "signed_out", "challenge_expired"}
 _ADMIN_API = "admin_api"
 
@@ -125,7 +125,7 @@ def _signed_in(result: LoginResult, manager: AuthManager) -> Response:
     )
 
 
-# --- M2 / M3 rendering (U8) --------------------------------------------------------
+# --- Login form / first-password-change rendering --------------------------------
 
 
 def _login_form(
@@ -136,8 +136,8 @@ def _login_form(
     notice: str | None = None,
     error: str | None = None,
 ) -> HTMLResponse:
-    """M2. Every failure goes through here, so the body depends only on the
-    wording, the e-mail address and ``next`` (NFR4.19). The password field is
+    """The login form. Every failure goes through here, so the body depends only on the
+    wording, the e-mail address and ``next``. The password field is
     always empty."""
     return _page(
         request,
@@ -155,7 +155,7 @@ def _login_form(
 def _password_rules(
     policy: PasswordPolicy, missed: frozenset[PasswordRule] | None
 ) -> list[dict[str, Any]]:
-    """The M3 rule list. ``missed`` is ``None`` before any submission."""
+    """The password rule list. ``missed`` is ``None`` before any submission."""
     return [
         {
             "key": rule.value,
@@ -174,7 +174,7 @@ def _new_password_form(
     error_field: str | None = None,
     missed: frozenset[PasswordRule] | None = None,
 ) -> HTMLResponse:
-    """M3. Neither password field is ever filled back in (BR2.5)."""
+    """The first-password-change form. Neither password field is ever filled back in."""
     return _page(
         request,
         "auth/new_password.html",
@@ -202,10 +202,10 @@ def _challenge_expired(request: Request) -> Response:
 async def login(
     request: Request, next: str | None = None, reason: str | None = None
 ) -> Response:
-    """Start a login, or show the expired / signed-out notice first (BR1.22).
+    """Start a login, or show the expired / signed-out notice first.
 
-    Under ``admin_api`` the app's own login form (M2) is the login screen and
-    Cognito's screen is never used (U8 BR1.1).
+    Under ``admin_api`` the app's own login form is the login screen and
+    Cognito's screen is never used.
     """
     manager = get_auth_manager()
     target = manager.sanitize_next(next)
@@ -242,7 +242,7 @@ async def login_submit(
     password: str = Form(default=""),
     next: str = Form(default="/"),
 ) -> Response:
-    """M2 submission (U8 WF1). Only ``admin_api`` has a login form."""
+    """Login form submission. Only ``admin_api`` has a login form."""
     manager = get_auth_manager()
     if manager.mode != _ADMIN_API:
         return _redirect("/login")
@@ -272,7 +272,7 @@ async def login_submit(
 
 @router.get(NEW_PASSWORD_PATH, response_class=HTMLResponse)
 async def new_password_page(request: Request) -> Response:
-    """M3 (U8 WF2 1〜2): only with a valid challenge, else back to M2."""
+    """First-password-change form: only with a valid challenge, else back to the login form."""
     manager = get_auth_manager()
     if manager.mode != _ADMIN_API:
         return _redirect("/login")
@@ -293,7 +293,7 @@ async def new_password_submit(
     new_password: str = Form(default=""),
     confirmation: str = Form(default=""),
 ) -> Response:
-    """M3 submission (U8 WF2 3〜8)."""
+    """First-password-change submission."""
     manager = get_auth_manager()
     if manager.mode != _ADMIN_API:
         return _redirect("/login")
@@ -333,7 +333,7 @@ async def auth_callback(
     state: str | None = None,
     error: str | None = None,
 ) -> Response:
-    """Accept the Cognito redirect and create the session (WF1 5〜8)."""
+    """Accept the Cognito redirect and create the session."""
     manager = get_auth_manager()
     transaction = request.session.pop(LOGIN_TRANSACTION_KEY, None)
     try:
@@ -357,7 +357,7 @@ async def auth_callback(
 
 @router.get(NO_ROLE_PATH, response_class=HTMLResponse)
 async def no_role(request: Request) -> Response:
-    """The no-role page (M4, BR2.8): why the user cannot go further.
+    """The no-role page: why the user cannot go further.
 
     Only users without a role are sent here; one who has a role (for example
     after logging in again) goes to the top page.
@@ -370,7 +370,7 @@ async def no_role(request: Request) -> Response:
 
 @router.post("/signout")
 async def signout(request: Request) -> Response:
-    """End the login here and at Cognito, then go to the login page (WF4)."""
+    """End the login here and at Cognito, then go to the login page."""
     manager = get_auth_manager()
     location = await _run(manager.logout, request.cookies.get(SESSION_COOKIE_NAME))
     response = RedirectResponse(location, status_code=303)

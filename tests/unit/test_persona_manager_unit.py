@@ -1,4 +1,4 @@
-"""PersonaManager の単体テスト（欠落メソッド分）"""
+"""Unit tests for PersonaManager (previously missing methods)."""
 
 import pytest
 
@@ -37,7 +37,7 @@ def manager(mock_db):
 
 
 class TestGeneratePersonas:
-    """PersonaGenerationManager.generate のバリデーションテスト"""
+    """Validation tests for PersonaGenerationManager.generate."""
 
     @pytest.fixture
     def gen_manager(self):
@@ -99,7 +99,7 @@ class TestGeneratePersonas:
             )
 
     def test_capacity_error_converted(self):
-        """Service層のGenerationCapacityErrorはPersonaGenerationCapacityErrorに変換される"""
+        """A Service-layer GenerationCapacityError is converted to PersonaGenerationCapacityError."""
         from src.managers.persona_generation_manager import (
             PersonaGenerationManager,
             PersonaGenerationCapacityError,
@@ -123,7 +123,7 @@ class TestGeneratePersonas:
 
 
 class TestExtractFileTexts:
-    """PersonaGenerationManager._extract_file_texts の抽出後バリデーション"""
+    """Post-extraction validation of PersonaGenerationManager._extract_file_texts."""
 
     @pytest.fixture
     def gen_manager(self):
@@ -167,7 +167,7 @@ class TestExtractFileTexts:
 
 
 class TestSavePersona:
-    """save_persona のテスト"""
+    """Tests for save_persona."""
 
     @pytest.fixture
     def manager(self):
@@ -209,11 +209,11 @@ class TestSavePersona:
 
 
 class TestGetPersonasForUse:
-    """get_personas_for_use（議論・インタビューの開始、U6 BR2.8）
+    """get_personas_for_use (starting a discussion or interview).
 
-    参加者は ParticipantReader が判定してから本体を読む。判定を通らない読み出し
-    （get_persona_unchecked）はなくした。利用者を受け取る get_persona の判定は
-    test_persona_manager_bindings.py が確かめる。
+    ParticipantReader decides on the participants before the bodies are read. The
+    unchecked read (get_persona_unchecked) was removed. The check in get_persona,
+    which takes the user, is verified in test_persona_manager_bindings.py.
     """
 
     @pytest.fixture
@@ -252,7 +252,7 @@ class TestGetPersonasForUse:
             manager.get_personas_for_use(RUNNER, ["", " "])
 
     def test_ai_execute_comes_before_the_personas(self, manager, world):
-        """C12: 権限がなければ、ペルソナの有無を知らせず 403。"""
+        """Without permission, 403 without revealing whether the persona exists."""
         from tests.unit.discussion_world import NO_ROLE
 
         with pytest.raises(AccessDeniedError):
@@ -261,7 +261,7 @@ class TestGetPersonasForUse:
 
 
 class TestEditPersona:
-    """update_persona のテスト（所有者として編集する。判定は test_persona_manager_sharing）"""
+    """Tests for update_persona (edits as the owner; decisions are in test_persona_manager_sharing)."""
 
     @pytest.fixture
     def manager(self):
@@ -324,7 +324,7 @@ class TestEditPersona:
 
 
 class TestDeletePersona:
-    """delete_persona のテスト（ResourceSharing.delete_with_shares を通す）"""
+    """Tests for delete_persona (goes through ResourceSharing.delete_with_shares)."""
 
     @pytest.fixture
     def manager(self):
@@ -360,7 +360,7 @@ class TestDeletePersona:
 
 
 def _valid_persona(**overrides):
-    """バリデーションを通る最小限のペルソナを返すヘルパー"""
+    """Helper returning the minimal persona that passes validation."""
     defaults = dict(
         name="テスト太郎",
         age=30,
@@ -376,7 +376,7 @@ def _valid_persona(**overrides):
 
 @pytest.mark.unit
 class TestValidatePersonaForSave:
-    """_validate_persona_for_save のバリデーションを save_persona 経由でテスト"""
+    """Test _validate_persona_for_save through save_persona."""
 
     @pytest.fixture
     def manager(self):
@@ -384,7 +384,7 @@ class TestValidatePersonaForSave:
         mock_db.put_new.return_value = None
         return PersonaManager(persona_store=mock_db)
 
-    # --- 必須フィールド ---
+    # --- Required fields ---
 
     def test_empty_name_raises(self, manager):
         persona = _valid_persona(name="")
@@ -430,7 +430,7 @@ class TestValidatePersonaForSave:
         ):
             manager.save_persona(OWNER, persona)
 
-    # --- リストフィールド（空リスト）---
+    # --- List fields (empty list) ---
 
     def test_empty_values_raises(self, manager):
         persona = _valid_persona(values=[])
@@ -453,7 +453,7 @@ class TestValidatePersonaForSave:
         ):
             manager.save_persona(OWNER, persona)
 
-    # --- リストフィールド（空文字項目）---
+    # --- List fields (empty string items) ---
 
     def test_empty_string_in_values_raises(self, manager):
         persona = _valid_persona(values=["valid", ""])
@@ -478,7 +478,7 @@ class TestValidatePersonaForSave:
         ):
             manager.save_persona(OWNER, persona)
 
-    # --- 文字数上限 ---
+    # --- Length limits ---
 
     def test_name_over_100_chars_raises(self, manager):
         persona = _valid_persona(name="あ" * 101)
@@ -504,7 +504,7 @@ class TestValidatePersonaForSave:
         ):
             manager.save_persona(OWNER, persona)
 
-    # --- リスト項目数上限 ---
+    # --- List item count limits ---
 
     def test_values_over_10_items_raises(self, manager):
         persona = _valid_persona(values=[f"v{i}" for i in range(11)])
@@ -527,7 +527,7 @@ class TestValidatePersonaForSave:
         ):
             manager.save_persona(OWNER, persona)
 
-    # --- 性別バリデーション ---
+    # --- Gender validation ---
 
     def test_invalid_gender_raises(self, manager):
         persona = _valid_persona(gender="invalid_gender")
@@ -544,7 +544,7 @@ class TestValidatePersonaForSave:
         result = manager.save_persona(OWNER, persona)
         assert result == persona.id
 
-    # --- 国コードバリデーション ---
+    # --- Country code validation ---
 
     @patch("src.managers.persona_manager.country_service")
     def test_invalid_country_raises(self, mock_cs, manager):
@@ -560,7 +560,7 @@ class TestValidatePersonaForSave:
         result = manager.save_persona(OWNER, persona)
         assert result == persona.id
 
-    # --- 都市バリデーション ---
+    # --- City validation ---
 
     def test_city_over_100_chars_raises(self, manager):
         persona = _valid_persona(city="あ" * 101)
@@ -572,7 +572,7 @@ class TestValidatePersonaForSave:
         ):
             manager.save_persona(OWNER, persona)
 
-    # --- タグバリデーション ---
+    # --- Tag validation ---
 
     def test_tags_over_20_items_raises(self, manager):
         persona = _valid_persona(tags=[f"tag{i}" for i in range(21)])
@@ -612,5 +612,5 @@ class TestValidatePersonaForSave:
         assert result == persona.id
 
 
-# 紐付けの作成・一覧・削除（U5、PersonaBindings）は
-# tests/unit/test_persona_manager_bindings.py が判定と一緒に確かめる。
+# Binding create/list/delete (PersonaBindings) is verified together with the decisions in
+# tests/unit/test_persona_manager_bindings.py.

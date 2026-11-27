@@ -1,8 +1,8 @@
-"""DatasetAnalysisService — analyze_dataset ツール組み立ての Service エントリ。
+"""DatasetAnalysisService: the Service entry point that assembles the analyze_dataset tool.
 
-入口の記述子を用途別に 2 つに分ける（binding 経路 / persona 生成 source 経路）が、
-内部では共通の :class:`ResolvedDataset` へ正規化してから tool/SQL を組む。
-重複 binding の除外（dedup）は Manager の責務であり、この Service では行わない。
+Entry descriptors are split by use (binding path / persona-generation source path),
+but are normalized into a common :class:`ResolvedDataset` internally before building tools/SQL.
+Deduplicating bindings is the Manager's job, not this Service's.
 """
 
 import logging
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class DatasetAnalysisService:
-    """analyze_dataset ツールと、それに対応するプロンプト用記述子を生成する。"""
+    """Create the analyze_dataset tool and the matching prompt descriptors."""
 
     def __init__(
         self,
@@ -38,8 +38,8 @@ class DatasetAnalysisService:
         limits: Optional[ToolLimits] = None,
         max_concurrent_queries: int = 4,
     ) -> None:
-        # backend を注入された場合はその同時実行設定を尊重し、ここでは上書きしない
-        # （max_concurrent_queries は既定 DuckDB backend を生成する経路にのみ効く）。
+        # If a backend is injected, its concurrency setting is respected and not overridden here
+        # (max_concurrent_queries only applies when the default DuckDB backend is created).
         self.backend: DatasetQueryBackend = backend or DuckDBQueryBackend(
             bucket_name=bucket_name,
             region_name=region_name,
@@ -48,7 +48,7 @@ class DatasetAnalysisService:
         self.limits = limits or ToolLimits()
 
     # ------------------------------------------------------------------
-    # binding 経路（discussion / interview）
+    # Binding path (discussion / interview)
     # ------------------------------------------------------------------
 
     def build_binding_tools(
@@ -56,12 +56,12 @@ class DatasetAnalysisService:
         accepted_bindings: Sequence[Mapping[str, Any]],
         datasets: Sequence["Dataset"],
     ) -> Tuple[List[Callable], List[Dict[str, Any]]]:
-        """重複除外済みの binding から単一 analyze_dataset ツールと記述子を作る。
+        """Build a single analyze_dataset tool and descriptors from deduplicated bindings.
 
         Returns:
             (tools, accepted_descriptors)
-            tools は単一ツール（要素 0 or 1）。accepted_descriptors は prompt 用の
-            表示メタデータ（backend_path / forced_filter 値は含めない）。
+            tools is a single tool (0 or 1 elements). accepted_descriptors is display
+            metadata for the prompt (no backend_path / forced_filter values).
         """
         dataset_map = {d.id: d for d in datasets}
         resolved: List[ResolvedDataset] = []
@@ -72,9 +72,9 @@ class DatasetAnalysisService:
             if dataset is None:
                 continue
             alias = f"dataset_{index}"
-            # allowlist 用は列名のみ（sql_builder が完全一致で検証する）。
+            # The allowlist gets column names only (sql_builder validates by exact match).
             column_names = [c.name for c in dataset.columns]
-            # プロンプト表示用は名前・型・説明（いずれも安全に露出できる metadata）。
+            # Prompt display gets name, type and description (all safe-to-expose metadata).
             column_detail = [
                 {
                     "name": c.name,
@@ -109,17 +109,17 @@ class DatasetAnalysisService:
         return [tool], descriptors
 
     # ------------------------------------------------------------------
-    # persona 生成 source 経路
+    # Persona-generation source path
     # ------------------------------------------------------------------
 
     def build_source_tools(
         self,
         source_descriptors: Sequence[Mapping[str, Any]],
     ) -> List[Callable]:
-        """アップロード CSV の source 記述子から単一 analyze_dataset ツールを作る。
+        """Build a single analyze_dataset tool from uploaded-CSV source descriptors.
 
-        別名の採番は Manager が行う。Service は受け取った別名を検証・保持するだけで
-        再採番しない（combined preview と tool の別名不一致を防ぐ）。
+        Alias numbering is done by the Manager. This Service only validates and keeps the given aliases
+        and never renumbers them (prevents mismatches between the combined preview and the tool aliases).
         """
         seen: set[str] = set()
         resolved: List[ResolvedDataset] = []

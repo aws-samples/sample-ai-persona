@@ -1,21 +1,21 @@
-"""
-SettingsManager
-システム設定（ナレッジベース管理、データエージェント接続設定・接続テスト）を管理する。
+"""SettingsManager: manages system settings (knowledge base management, data agent
+connection settings and connection test).
 
-v1.0.0 U7 (``functional-design/rules.md``):
+Rules:
 
-- BR3.1 / BR3.3: every method of the settings screen first checks
+- Every method of the settings screen first checks
   ``settings:manage``; others get ``SETTINGS_NOT_FOUND`` (the same 404 as a
   missing page) and nothing is read or changed. ``is_data_agent_available``
   only tells whether the agent is configured.
-- BR5.2: the knowledge bases' usage scope changes with ``ADD`` / ``DELETE``;
+- The knowledge bases' usage scope changes with ``ADD`` / ``DELETE``;
   only added departments must exist. ``asset.scope_changed`` is logged.
 
-Members see the knowledge bases they may use through ``PersonaManager`` (U5).
+Members see the knowledge bases they may use through ``PersonaManager``.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
@@ -23,6 +23,7 @@ from ..models.errors import CodedError, ErrorCode
 from ..models.knowledge_base import KB_TYPE_SELF_MANAGED, KB_TYPES, KnowledgeBase
 from ..models.persona_binding import KB_TARGET_KEY
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
+from ..services.stores.app_settings_store import AppSettingsStore, AppSettingsStoreError
 from ..services.stores.knowledge_base_store import KnowledgeBaseStore
 from ..services.stores.persona_binding_store import (
     PersonaBindingStore,
@@ -30,8 +31,13 @@ from ..services.stores.persona_binding_store import (
 )
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
+from .components.advanced_generation_policy import (
+    AdvancedGenerationPolicy,
+    SettingSectionView,
+)
 from .components.data_agent_policy import DataAgentPolicy
 from .components.department_directory import DepartmentDirectory
+from .components.owner_directory import OwnerDirectory
 from .components.sharing_runtime import sharing_parts_from
 from .shared.asset_scope import scope_dialog, scope_labels
 from .shared.structured_log import log_event
@@ -43,6 +49,13 @@ _KB = ResourceType.KNOWLEDGE_BASE
 
 class SettingsManagerError(CodedError):
     pass
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _missing_kb() -> SettingsManagerError:
@@ -57,18 +70,28 @@ class SettingsManager:
         knowledge_base_store: Optional[KnowledgeBaseStore] = None,
         departments: Optional[DepartmentDirectory] = None,
         binding_store: Optional[PersonaBindingStore] = None,
+        settings_store: Optional[AppSettingsStore] = None,
+        owners: Optional[OwnerDirectory] = None,
+        clock: Optional[Callable[[], datetime]] = None,
     ) -> None:
         """Create the manager.
 
         Args:
             knowledge_base_store: Knowledge base records (the singleton when omitted).
-            departments: The per-task department copy (scope choices, C4).
+            departments: The per-task department copy (scope choices).
             binding_store: Persona bindings, removed with a deleted knowledge
                 base (the singleton on first use when omitted).
+            settings_store: The advanced generation setting (the
+                singleton on first use when omitted).
+            owners: The owner-name copy, for "who saved last".
+            clock: The time written as ``updated_at``.
         """
         self._kbs = knowledge_base_store or service_factory.get_knowledge_base_store()
         self._departments = departments
         self._binding_store = binding_store
+        self._settings_store = settings_store
+        self._owners = owners
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     @property
     def _bindings(self) -> PersonaBindingStore:
@@ -82,6 +105,106 @@ class SettingsManager:
             self._departments = sharing_parts_from(service_factory).departments
         return self._departments
 
+    @property
+    def _generation_policy(self) -> AdvancedGenerationPolicy:
+        if self._settings_store is None:
+            self._settings_store = service_factory.get_app_settings_store()
+        return AdvancedGenerationPolicy(self._settings_store)
+
+    def _owner_label(self, sub: Optional[str]) -> Optional[str]:
+        if not sub:
+            return None
+        if self._owners is None:
+            self._owners = sharing_parts_from(service_factory).owners
+        return self._owners.label(sub)
+
+    # --- Advanced generation (beta) section ---
+
+    @staticmethod
+    def is_advanced_generation_section_offered() -> bool:
+        """Whether the settings screen shows the advanced generation section.
+
+        False where the feature is off (the closed network Stage).
+        """
+        return AdvancedGenerationPolicy.feature_enabled()
+
+    @classmethod
+    def _require_section_offered(cls) -> None:
+        if not cls.is_advanced_generation_section_offered():
+            raise SettingsManagerError(
+                "advanced generation is off in this environment",
+                code=ErrorCode.SETTINGS_NOT_FOUND,
+            )
+
+    def advanced_generation_section(self, principal: Principal) -> SettingSectionView:
+        """The advanced generation section of the settings screen.
+
+        Raises:
+            CodedError: ``SETTINGS_NOT_FOUND`` without ``settings:manage``
+                (nothing is read).
+            SettingsManagerError: ``SETTINGS_NOT_FOUND`` where the feature is
+                off (nothing is read), or the setting could not be read.
+        """
+        self._require_manage(principal)
+        self._require_section_offered()
+        try:
+            view = self._generation_policy.section_view(
+                self._department_directory.list_all()
+            )
+        except AppSettingsStoreError as e:
+            raise SettingsManagerError("setting unreadable", code=e.code) from e
+        return view.update(updated_by_name=self._owner_label(view.setting.updated_by))
+
+    def save_advanced_generation_setting(
+        self, principal: Principal, form: Mapping[str, Any]
+    ) -> SettingSectionView:
+        """Save the section on the version it was read at.
+
+        Args:
+            principal: The administrator.
+            form: ``audience_mode``, ``department_groups``,
+                ``allow_detailed_analysis`` and ``version`` as sent.
+
+        Raises:
+            AccessDeniedError: ``ACCESS_DENIED`` without ``settings:manage``
+                (nothing is read or written).
+            SettingsManagerError: ``SETTINGS_NOT_FOUND`` where the feature is
+                off (nothing is read or written), ``REQUEST_INVALID``,
+                ``SETTINGS_VERSION_CONFLICT`` (the latest section in
+                ``context["section"]``) or a failed DynamoDB call.
+        """
+        AccessPolicy.require(principal, Permission.SETTINGS_MANAGE, resource_type=_KB)
+        self._require_section_offered()
+        try:
+            view = self._generation_policy.save_setting(
+                principal,
+                form,
+                self._department_directory.list_all(),
+                now=self._clock(),
+                error_type=SettingsManagerError,
+            )
+        except SettingsManagerError as e:
+            if e.code is ErrorCode.SETTINGS_VERSION_CONFLICT:
+                log_event(
+                    "settings.advanced_generation_conflict",
+                    actor_sub=principal.sub,
+                    sent_version=_int_or_none(form.get("version")),
+                )
+            raise
+        except AppSettingsStoreError as e:
+            raise SettingsManagerError("setting not saved", code=e.code) from e
+        setting = view.setting
+        # Counts and modes only, never the department names
+        log_event(
+            "settings.advanced_generation_changed",
+            actor_sub=principal.sub,
+            version=setting.version,
+            audience_mode=setting.audience_mode,
+            department_count=len(setting.department_groups),
+            allow_detailed_analysis=setting.allow_detailed_analysis,
+        )
+        return view.update(updated_by_name=self._owner_label(setting.updated_by))
+
     @staticmethod
     def _require_manage(principal: Principal) -> None:
         AccessPolicy.require(
@@ -91,12 +214,12 @@ class SettingsManager:
             resource_type=_KB,
         )
 
-    # --- ナレッジベース管理 ---
+    # --- Knowledge base management ---
 
     def get_all_knowledge_bases(
         self, principal: Principal
     ) -> ScopedAssets[KnowledgeBase]:
-        """登録済みの KB と利用範囲（admin だけ）。"""
+        """Registered KBs and their usage scope (admin only)."""
         self._require_manage(principal)
         kbs = self._kbs.list_all()
         departments = self._department_directory.list_all() if kbs else []
@@ -116,7 +239,7 @@ class SettingsManager:
         description: str = "",
         kb_type: str = KB_TYPE_SELF_MANAGED,
     ) -> KnowledgeBase:
-        """KB を登録する（利用範囲は admin だけで始まる、BR5.1）。
+        """Register a KB (the usage scope starts as admin only).
 
         Raises:
             SettingsManagerError: ``REQUEST_INVALID`` when ``kb_type`` is not
@@ -156,7 +279,7 @@ class SettingsManager:
             )
 
     def scope_dialog(self, principal: Principal, kb_id: str) -> AssetScopeDialog:
-        """What the usage-scope dialog shows (M10).
+        """What the usage-scope dialog shows.
 
         Raises:
             CodedError: ``SETTINGS_NOT_FOUND`` (missing knowledge base).
@@ -176,7 +299,7 @@ class SettingsManager:
     def update_scope(
         self, principal: Principal, kb_id: str, change: AssetScopeChange
     ) -> KnowledgeBase:
-        """Change the usage scope with ``ADD`` / ``DELETE`` (BR5.2).
+        """Change the usage scope with ``ADD`` / ``DELETE``.
 
         Raises:
             CodedError: ``SETTINGS_NOT_FOUND`` (missing knowledge base) or
@@ -204,12 +327,12 @@ class SettingsManager:
             raise _missing_kb()
         return kb
 
-    # --- データ分析エージェント設定 ---
+    # --- Data analysis agent settings ---
 
     def get_data_agent_settings(self, principal: Principal) -> Dict[str, Any]:
-        """データ分析エージェントの接続設定（admin だけ、BR3.1）。
+        """Connection settings of the data analysis agent (admin only).
 
-        Closed network U3 (BR3.4): when this environment may not use the agent,
+        Closed network: when this environment may not use the agent,
         only ``data_agent_allowed=False`` and ``data_agent_enabled=False`` are
         returned (no ARN, no region), and the screen shows a notice instead of
         the form.
@@ -231,9 +354,9 @@ class SettingsManager:
         region: str,
         enabled: bool,
     ) -> None:
-        """データ分析エージェント接続設定を保存する。
+        """Save the data analysis agent connection settings.
 
-        Closed network U3 (BR3.2, BR1.5): refused with ``DATA_AGENT_NOT_ALLOWED``
+        Closed network: refused with ``DATA_AGENT_NOT_ALLOWED``
         before any value changes when the agent is not allowed here. Only the
         three connection values are ever written; ``DATA_AGENT_ALLOWED`` never is.
         """
@@ -248,16 +371,16 @@ class SettingsManager:
 
     @staticmethod
     def is_data_agent_available() -> bool:
-        """データ分析エージェントが利用可能かどうかを判定する（allowed を含む、BR3.3）。"""
+        """Whether the data analysis agent is available (including allowed)."""
         return DataAgentPolicy.available()
 
     @staticmethod
     def is_data_agent_allowed() -> bool:
-        """Whether this environment may use the data agent (no permission, BR3.6)."""
+        """Whether this environment may use the data agent (no permission needed)."""
         return DataAgentPolicy.allowed()
 
     def test_data_agent_connection(self, principal: Principal) -> str:
-        """データ分析エージェントへの接続テストを実行する（使ってよくなければ接続しない）。"""
+        """Run a connection test to the data analysis agent (no connection if it may not be used)."""
         self._require_manage(principal)
         DataAgentPolicy.ensure_allowed(SettingsManagerError)
         if not config.DATA_AGENT_RUNTIME_ARN:

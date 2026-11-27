@@ -1,13 +1,13 @@
 """
-Discussion data model for the AI Persona System (v1.0.0 U6, entities.md).
+Discussion data model for the AI Persona System.
 
-The body of a discussion no longer holds its messages and reports: they live
+The body of a discussion does not hold its messages and reports: they live
 in ``DiscussionMessages`` and ``DiscussionReports`` and are read only after the
-body passed ``can_read`` (ADR-002). The body carries its owner, its department
+body passed ``can_read``. The body carries its owner, its department
 shares and the counts of what was written elsewhere.
 
-Discussions saved before v1.0.0 still hold ``messages`` and ``reports`` inside
-and have no ``owner_sub`` / ``message_count`` (BR1.7). :meth:`Discussion.from_dict`
+Discussions saved in the old format still hold ``messages`` and ``reports``
+inside and have no ``owner_sub`` / ``message_count``. :meth:`Discussion.from_dict`
 reads them, and :func:`legacy_messages` / :func:`legacy_reports` read their
 inner lists for display only; they are never rewritten in the new shape.
 """
@@ -24,15 +24,15 @@ from .message import Message
 
 #: The three kinds of saved discussions.
 DISCUSSION_MODES: tuple[str, ...] = ("classic", "agent", "interview")
-#: Most insights one discussion keeps (BR2.6).
+#: Most insights one discussion keeps.
 MAX_INSIGHTS = 100
-#: Participant states seen by the reader of a discussion (BR7.3, M9).
+#: Participant states seen by the reader of a discussion.
 PARTICIPANT_STATUSES: tuple[str, ...] = ("readable", "no_access", "deleted")
 
 
 @dataclass(frozen=True)
 class DocumentRef:
-    """Display metadata of an attached document (BR5.2).
+    """Display metadata of an attached document.
 
     The S3 key is never kept here: content and delivery are looked up by
     ``id`` in ``UploadedFiles`` (``FileAttachments``).
@@ -75,14 +75,14 @@ class DocumentRef:
 
 @dataclass(frozen=True)
 class ParticipantView:
-    """One participant as seen by the reader of a discussion (M9, BR7.3).
+    """One participant as seen by the reader of a discussion.
 
     Attributes:
         persona_id: The persona.
         display_name: The name kept when the discussion was saved.
         status: ``readable``, ``no_access`` or ``deleted``.
         persona: The current body, for the participant card. Only a readable
-            participant carries one (BR7.3).
+            participant carries one.
     """
 
     persona_id: str
@@ -115,11 +115,11 @@ class Discussion:
         mode: ``classic``, ``agent`` or ``interview``.
         agent_config: Rounds, instructions, memory and model settings.
         documents: Attached documents (metadata only).
-        owner_sub: Who saved it; ``None`` for discussions before v1.0.0.
+        owner_sub: Who saved it; ``None`` for discussions in the old format.
         shared_group_ids: Departments it is shared with (``ResourceSharing``).
         participant_names: Persona ID -> name when it was saved.
         message_count: Messages written to ``DiscussionMessages``; ``None`` for
-            discussions before v1.0.0 (their messages are inside the body).
+            discussions in the old format (their messages are inside the body).
         report_count: Reports in ``DiscussionReports`` (at most 3).
         updated_at: Last insight / report / interview change.
     """
@@ -157,7 +157,7 @@ class Discussion:
 
         Args:
             discussion_id: A preset ID (an agent discussion decides its ID at
-                the start so the memory session uses the same value, BR6.2).
+                the start so the memory session uses the same value).
             now: Creation time (tests); the current time when omitted.
 
         Raises:
@@ -180,7 +180,7 @@ class Discussion:
 
     @property
     def is_legacy(self) -> bool:
-        """Saved before v1.0.0: its messages are inside the body (BR1.7)."""
+        """Saved in the old format: its messages are inside the body."""
         return self.message_count is None
 
     def with_insights(
@@ -219,7 +219,7 @@ class Discussion:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Discussion":
-        """Read a stored body, in the v1.0.0 shape or the older one (BR1.7)."""
+        """Read a stored body, in the current shape or the older one."""
         documents = data.get("documents")
         legacy = "message_count" not in data
         names = dict(data.get("participant_names") or {})
@@ -256,14 +256,14 @@ class Discussion:
 
 
 def legacy_messages(data: Mapping[str, Any]) -> List[Message]:
-    """The messages inside a body saved before v1.0.0 (display only, BR1.7)."""
+    """The messages inside a body saved in the old format (display only)."""
     return [Message.from_dict(dict(m)) for m in data.get("messages") or []]
 
 
 def legacy_reports(
     data: Mapping[str, Any], discussion_id: str
 ) -> List[DiscussionReport]:
-    """The reports inside a body saved before v1.0.0 (display only, BR1.7)."""
+    """The reports inside a body saved in the old format (display only)."""
     return [
         DiscussionReport.from_dict({**dict(r), "discussion_id": discussion_id})
         for r in data.get("reports") or []
@@ -278,7 +278,7 @@ class DiscussionView:
         discussion: The body.
         messages: The messages in ``seq`` order (display shape).
         reports: The saved reports.
-        participants: Each participant's state for this reader (M9).
+        participants: Each participant's state for this reader.
         manageable: Whether the reader may delete, share and edit it.
     """
 
@@ -288,7 +288,7 @@ class DiscussionView:
     participants: List[ParticipantView]
     manageable: bool = False
 
-    # 画面・API が本体の項目をそのまま読めるように（読み取り専用）
+    # Let screens and APIs read the body's fields as they are (read-only)
     @property
     def id(self) -> str:
         return self.discussion.id

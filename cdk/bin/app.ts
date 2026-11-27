@@ -4,16 +4,16 @@ import * as cdk from 'aws-cdk-lib';
 import { applyNagChecks, createClosedDevStage, createDevStage } from '../lib/dev-stage';
 
 /**
- * v1.0.0 の CDK アプリ: Stage AIPersonaDev（Data・App・Edge）を作る。閉域のパラメータ
- * （-c closedCertificateArn=... -c closedDomainName=...）が渡されたときだけ、閉域の Stage
- * AIPersonaDevClosed（Data・App）も並べて作る（U1 閉域。deploy.sh --closed が渡す）。
+ * CDK app for v1.0.0: creates the AIPersonaDev Stage (Data, App, Edge). Only when the closed-network
+ * parameters (-c closedCertificateArn=... -c closedDomainName=...) are passed, it also creates the
+ * AIPersonaDevClosed Stage (Data, App) alongside it (deploy.sh --closed passes them).
  *
- * v0 のスタック（AIPersona-dev、AIPersonaEcr-dev、AIPersonaCognito-dev など）は
- * このアプリから外した。デプロイ済みの v0 のスタックはそのまま残り、v1 と並べて動かせる
- * （切り戻しの備え。v0 の削除は利用者が明示的に判断して手で行う）。
+ * The v0 stacks (AIPersona-dev, AIPersonaEcr-dev, AIPersonaCognito-dev, etc.) are no longer part of
+ * this app. Deployed v0 stacks stay as they are and can run next to v1 as a rollback option;
+ * deleting v0 is a manual decision by the user.
  *
- * Stage の組み立てと cdk-nag の掛け方は lib/dev-stage.ts（テストも同じ関数を通る。U9）。
- * 使い方は deploy.sh を参照（① Data・Edge → ② イメージ → ③ App -c imageTag=<タグ>）。
+ * Stage assembly and cdk-nag wiring live in lib/dev-stage.ts (tests go through the same functions).
+ * See deploy.sh for usage (1. Data/Edge, 2. image, 3. App with -c imageTag=<tag>).
  */
 const app = new cdk.App();
 

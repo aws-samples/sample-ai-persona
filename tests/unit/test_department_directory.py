@@ -1,9 +1,9 @@
-"""DepartmentDirectory（部署の一覧、約束 C4、ADR-009）の単体テスト。
+"""Unit tests for DepartmentDirectory (department list).
 
-BR2.11（5 分ごとに取り直し、失敗時は 1 時間まで前の一覧）、NFR8.8
-（authz.departments_stale）、NFR9.14（5 分以内は Cognito を呼ばない）、NFR9.17
-（失敗後 60 秒は呼び直さない）、NFR9.19、NFR Design R-02 の 4 つの穴。
-時刻は注入した時計で進める。並行のテストだけ threading の待ちを使う。
+Covers refresh every 5 minutes, falling back to the previous list for up to 1 hour on
+failure (authz.departments_stale), no Cognito calls within 5 minutes, no retry for 60
+seconds after a failure, and four more edge cases.
+Time advances via an injected clock; only the concurrency test waits on threads.
 """
 
 import json
@@ -25,7 +25,7 @@ from tests.error_helpers import raises_code
 SALES = Department(group_id="sales", display_name="営業部")
 DEV = Department(group_id="dev", display_name="開発部")
 HR = Department(group_id="hr", display_name="人事部")
-#: list_all() の順（表示名のコードポイント順: 営 U+55B6 < 開 U+958B）
+#: Order of list_all() (by display-name code point)
 SORTED = [SALES, DEV]
 
 
@@ -168,7 +168,7 @@ class TestConcurrentRefresh:
         refresher.start()
         assert groups.entered.wait(5)
 
-        assert directory.list_all() == SORTED  # 取り直しの完了を待たない
+        assert directory.list_all() == SORTED  # does not wait for the refresh to finish
 
         groups.gate.set()
         refresher.join(5)
@@ -241,7 +241,7 @@ class TestConcurrentRefresh:
 class TestQueries:
     def test_list_all_is_sorted_by_display_name(self):
         directory = _directory(StubGroups([SALES, HR, DEV]), FakeClock())
-        # 人事部 < 営業部 < 開発部（コードポイント順）
+        # HR < Sales < Dev (code point order)
         assert directory.list_all() == sorted(
             [SALES, HR, DEV], key=lambda d: d.display_name
         )

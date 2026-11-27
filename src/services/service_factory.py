@@ -1,10 +1,11 @@
 """
 Service Factory
-アプリケーション全体でサービスインスタンスを管理するファクトリークラス
+Factory class that manages service instances across the application
 """
 
 import logging
-from typing import Any, Optional, TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence, TYPE_CHECKING
 from threading import Lock
 
 from .ai_service import AIService
@@ -18,6 +19,9 @@ if TYPE_CHECKING:
     from .cognito_groups_service import CognitoGroupsService
     from .cognito.cognito_auth_service import CognitoAuthService
     from .cognito.oidc_service import OidcService
+    from .stores.advanced_generation_store import AdvancedGenerationStore
+    from .stores.app_settings_store import AppSettingsStore
+    from .stores.source_file_store import SourceFileStore
     from .stores.custom_persona_data_store import CustomPersonaDataStore
     from .stores.dataset_store import DatasetStore
     from .stores.job_store import JobStore
@@ -39,19 +43,31 @@ if TYPE_CHECKING:
     from .s3_service import S3Service
     from .survey_batch_service import SurveyBatchService
     from .survey_runner_service import SurveyRunnerService
+    from .sandbox_service import SandboxService
+    from .dataset_analysis.analysis_tool_service import (
+        AnalysisTable,
+        AnalysisToolService,
+    )
+    from ..models.analysis import AnalysisToolPolicy, RunCodeGate
+
+#: The fixed library written into each analysis session (read as a file, never
+#: imported).
+_SANDBOX_LIBRARY_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "sandbox" / "persona_analysis.py"
+)
 
 
 class ServiceFactory:
     """
-    サービスインスタンスを管理するシングルトンファクトリー
-    アプリケーション全体でサービスの再利用を実現
+    Singleton factory that manages service instances
+    Reuses services across the whole application
     """
 
     _instance: Optional["ServiceFactory"] = None
     _lock = Lock()
 
     def __new__(cls) -> "ServiceFactory":
-        """シングルトンパターンの実装"""
+        """Singleton pattern implementation."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -59,7 +75,7 @@ class ServiceFactory:
         return cls._instance
 
     def __init__(self) -> None:
-        """初期化（一度だけ実行される）"""
+        """Initialize (runs only once)."""
         if hasattr(self, "_initialized"):
             return
 
@@ -92,16 +108,20 @@ class ServiceFactory:
         self._discussion_store: Optional["DiscussionStore"] = None
         self._interview_session_store: Optional["InterviewSessionStore"] = None
         self._custom_persona_data_store: Optional["CustomPersonaDataStore"] = None
+        self._source_file_store: Optional["SourceFileStore"] = None
+        self._advanced_generation_store: Optional["AdvancedGenerationStore"] = None
+        self._app_settings_store: Optional["AppSettingsStore"] = None
+        self._sandbox_service: Optional["SandboxService"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
 
     def get_ai_service(self) -> AIService:
         """
-        AIServiceのシングルトンインスタンスを取得
+        Get the singleton instance of AIService
 
         Returns:
-            AIService: AIサービスインスタンス
+            AIService: AI service instance
         """
         if self._ai_service is None:
             with self._lock:
@@ -112,10 +132,10 @@ class ServiceFactory:
 
     def get_agent_service(self) -> AgentService:
         """
-        AgentServiceのシングルトンインスタンスを取得
+        Get the singleton instance of AgentService
 
         Returns:
-            AgentService: エージェントサービスインスタンス
+            AgentService: Agent service instance
         """
         if self._agent_service is None:
             with self._lock:
@@ -126,10 +146,10 @@ class ServiceFactory:
 
     def is_memory_enabled(self) -> bool:
         """
-        長期記憶機能が有効かどうかを確認
+        Check whether the long-term memory feature is enabled
 
         Returns:
-            bool: 長期記憶が有効な場合True
+            bool: True if long-term memory is enabled
         """
         from .memory.session_manager_factory import is_memory_enabled
 
@@ -137,31 +157,31 @@ class ServiceFactory:
 
     def get_memory_service(self) -> Optional["MemoryService"]:
         """
-        MemoryServiceのシングルトンインスタンスを取得
+        Get the singleton instance of MemoryService
 
-        UIからの記憶管理（一覧表示、削除など）に使用。
-        エージェントのメモリ統合にはAgentCoreMemorySessionManagerを使用。
+        Used for memory management from the UI (listing, deletion, etc.).
+        Agent memory integration uses AgentCoreMemorySessionManager.
 
-        ENABLE_LONG_TERM_MEMORYがFalseの場合、またはAGENTCORE_MEMORY_IDが
-        設定されていない場合はNoneを返す。
+        Returns None if ENABLE_LONG_TERM_MEMORY is False or AGENTCORE_MEMORY_ID is
+        not set.
 
         Returns:
-            MemoryService or None: メモリサービスインスタンス、
-                                   または機能が無効の場合はNone
+            MemoryService or None: Memory service instance,
+                                   or None if the feature is disabled
         """
-        # 機能が無効の場合はNoneを返す
+        # Return None if the feature is disabled
         if not config.ENABLE_LONG_TERM_MEMORY:
             self.logger.debug("Long-term memory is disabled by configuration")
             return None
 
-        # AGENTCORE_MEMORY_IDが設定されていない場合はNoneを返す
+        # Return None if AGENTCORE_MEMORY_ID is not set
         if not config.AGENTCORE_MEMORY_ID:
             self.logger.warning(
                 "ENABLE_LONG_TERM_MEMORY is True but AGENTCORE_MEMORY_ID is not set"
             )
             return None
 
-        # 既に作成を試みて失敗している場合はNoneを返す
+        # Return None if creation was already attempted and failed
         if self._memory_service_attempted and self._memory_service is None:
             return None
 
@@ -170,7 +190,7 @@ class ServiceFactory:
                 if self._memory_service is None and not self._memory_service_attempted:
                     self._memory_service_attempted = True
                     try:
-                        # 遅延インポートで循環参照を回避
+                        # Lazy import to avoid a circular reference
                         from .memory.memory_service import MemoryService
 
                         self.logger.info(
@@ -185,25 +205,25 @@ class ServiceFactory:
                         )
                     except Exception as e:
                         self.logger.error(f"Failed to create MemoryService: {e}")
-                        # 失敗してもアプリケーションは継続可能
-                        # Noneを返すことで呼び出し側が適切に処理できる
+                        # The application can continue even on failure
+                        # Returning None lets callers handle it appropriately
                         self._memory_service = None
 
         return self._memory_service
 
     def resolve_memory_strategies(self) -> None:
-        """起動時に AgentCore Memory の Strategy ID を GetMemory で引き、config に入れる。
+        """Look up the AgentCore Memory strategy IDs with GetMemory at startup and put them in config.
 
-        環境変数で渡されていればそれを使う。引けなければ長期記憶を無効にする。
+        IDs passed as environment variables are used as is. If the lookup fails, long-term memory is disabled.
         """
         from .memory.strategy_lookup import resolve_memory_strategies
 
         resolve_memory_strategies(config)
 
     def check_stm_session_exists(self, session_id: str) -> bool:
-        """AgentCore Memory STMにセッション履歴が存在するか確認する。
+        """Check whether session history exists in AgentCore Memory STM.
 
-        SDK呼び出しをService層に閉じ込める。
+        Keeps SDK calls inside the Service layer.
         """
         try:
             if not self.is_memory_enabled():
@@ -236,7 +256,7 @@ class ServiceFactory:
             return False
 
     def get_s3_service(self) -> "S3Service":
-        """S3Serviceのシングルトンインスタンスを取得。S3_BUCKET_NAME未設定時はRuntimeError。"""
+        """Get the singleton instance of S3Service. Raises RuntimeError if S3_BUCKET_NAME is not set."""
         if self._s3_service is None:
             with self._lock:
                 if self._s3_service is None:
@@ -257,13 +277,13 @@ class ServiceFactory:
         return self._s3_service
 
     def get_optional_s3_service(self) -> Optional["S3Service"]:
-        """The S3 service, or ``None`` when ``S3_BUCKET_NAME`` is not set (U5)."""
+        """The S3 service, or ``None`` when ``S3_BUCKET_NAME`` is not set."""
         if not config.S3_BUCKET_NAME:
             return None
         return self.get_s3_service()
 
     def get_survey_batch_service(self) -> "SurveyBatchService":
-        """SurveyBatchServiceのシングルトンインスタンスを取得"""
+        """Get the singleton instance of SurveyBatchService."""
         if self._survey_batch_service is None:
             with self._lock:
                 if self._survey_batch_service is None:
@@ -277,9 +297,9 @@ class ServiceFactory:
         return self._survey_batch_service
 
     def get_dataset_analysis_service(self) -> "DatasetAnalysisService":
-        """DatasetAnalysisServiceのシングルトンインスタンスを取得。
+        """Get the singleton instance of DatasetAnalysisService.
 
-        analyze_dataset ツール（DuckDB backend）の組み立てを担う。
+        Assembles the analyze_dataset tool (DuckDB backend).
         """
         if self._dataset_analysis_service is None:
             with self._lock:
@@ -299,8 +319,8 @@ class ServiceFactory:
     def get_session_store(self) -> "SessionStore":
         """Return the LoginSession store for the running AUTH_MODE.
 
-        ``local`` keeps sessions in the process (BR1.15); ``oidc`` uses the
-        DynamoDB Sessions table so every task reads the same session (BR1.18).
+        ``local`` keeps sessions in the process; ``oidc`` uses the
+        DynamoDB Sessions table so every task reads the same session.
 
         Raises:
             CodedError: ``AUTH_CONFIG_INVALID`` when ``oidc`` has no table name.
@@ -366,7 +386,7 @@ class ServiceFactory:
         )
 
     def get_cognito_auth_service(self) -> "CognitoAuthService":
-        """Return the Cognito admin API client (AUTH_MODE=admin_api only, U8).
+        """Return the Cognito admin API client (AUTH_MODE=admin_api only).
 
         Raises:
             CodedError: ``AUTH_CONFIG_INVALID`` when a Cognito setting is missing.
@@ -401,7 +421,7 @@ class ServiceFactory:
     def get_authz_lookup_service(self) -> "AuthzLookupService":
         """Return the reader of authorization columns and of the Jobs table.
 
-        Its DynamoDB client has the short limits of ``reliability-design.md``
+        Its DynamoDB client has the short timeouts and limited retries
         and is separate from the clients of the table stores.
         """
         if self._authz_lookup_service is None:
@@ -440,7 +460,7 @@ class ServiceFactory:
         return self._cognito_groups_service
 
     def get_resource_share_store(self) -> "ResourceShareStore":
-        """Return the store of department shares (U4, ADR-003).
+        """Return the store of department shares.
 
         The body tables it also writes are passed per call from
         ``ResourceSharing``'s registration, so only the ResourceShares table
@@ -459,7 +479,7 @@ class ServiceFactory:
         return self._resource_share_store
 
     def get_persona_candidate_store(self) -> "PersonaCandidateStore":
-        """Return the store of generated personas waiting to be saved (U5)."""
+        """Return the store of generated personas waiting to be saved."""
         if self._persona_candidate_store is None:
             with self._lock:
                 if self._persona_candidate_store is None:
@@ -472,8 +492,116 @@ class ServiceFactory:
                     )
         return self._persona_candidate_store
 
+    def get_source_file_store(self) -> "SourceFileStore":
+        """Return the store of uploaded source files."""
+        if self._source_file_store is None:
+            with self._lock:
+                if self._source_file_store is None:
+                    from .stores.source_file_store import SourceFileStore
+
+                    self.logger.info("Creating new SourceFileStore instance")
+                    self._source_file_store = SourceFileStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.SOURCE_FILES_TABLE_NAME,
+                    )
+        return self._source_file_store
+
+    def get_advanced_generation_store(self) -> "AdvancedGenerationStore":
+        """Return the store of advanced generations."""
+        if self._advanced_generation_store is None:
+            with self._lock:
+                if self._advanced_generation_store is None:
+                    from .stores.advanced_generation_store import (
+                        AdvancedGenerationStore,
+                    )
+
+                    self.logger.info("Creating new AdvancedGenerationStore instance")
+                    self._advanced_generation_store = AdvancedGenerationStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.ADVANCED_GENERATIONS_TABLE_NAME,
+                        source_files_table_name=config.SOURCE_FILES_TABLE_NAME,
+                    )
+        return self._advanced_generation_store
+
+    def get_app_settings_store(self) -> "AppSettingsStore":
+        """Return the reader of application settings."""
+        if self._app_settings_store is None:
+            with self._lock:
+                if self._app_settings_store is None:
+                    from .stores.app_settings_store import AppSettingsStore
+
+                    self.logger.info("Creating new AppSettingsStore instance")
+                    self._app_settings_store = AppSettingsStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.APP_SETTINGS_TABLE_NAME,
+                    )
+        return self._app_settings_store
+
+    def get_sandbox_service(self) -> "SandboxService":
+        """Return the analysis sandbox on Code Interpreter.
+
+        Raises:
+            CodedError: ``ADVANCED_GENERATION_UNAVAILABLE`` when no Code
+                Interpreter is configured.
+        """
+        if not config.CODE_INTERPRETER_ID:
+            raise CodedError(
+                "CODE_INTERPRETER_ID is not set",
+                code=ErrorCode.ADVANCED_GENERATION_UNAVAILABLE,
+            )
+        if self._sandbox_service is None:
+            with self._lock:
+                if self._sandbox_service is None:
+                    from .sandbox_service import CodeInterpreterSandbox
+
+                    self.logger.info("Creating new CodeInterpreterSandbox instance")
+                    self._sandbox_service = CodeInterpreterSandbox(
+                        code_interpreter_id=config.CODE_INTERPRETER_ID,
+                        region_name=config.AWS_REGION,
+                        library_path=str(_SANDBOX_LIBRARY_PATH),
+                        max_output_chars=config.ADVANCED_TOOL_MAX_OUTPUT_CHARS,
+                    )
+        return self._sandbox_service
+
+    def create_analysis_tools(
+        self,
+        session: Any,
+        policy: "AnalysisToolPolicy",
+        *,
+        source_id: str = "",
+        columns: Sequence[str] = (),
+        persona_count: int,
+        sandbox: Optional["SandboxService"] = None,
+        tables: Optional[Sequence["AnalysisTable"]] = None,
+        gate: Optional["RunCodeGate"] = None,
+        expected_library_sha256: Optional[str] = None,
+        expected_parquet_sha256: Optional[Mapping[str, str]] = None,
+    ) -> "AnalysisToolService":
+        """Build the tools of one generation's analysis (never cached).
+
+        ``sandbox`` defaults to :meth:`get_sandbox_service`; pass the one the
+        session was opened on when it is another (the in-process version).
+        ``tables`` are the generation's tables (``source_1``...), ``gate``
+        decides on ``run_code`` (the Manager's budget) and the expected hashes
+        are the trust anchor of the check after each ``run_code``.
+        """
+        from .dataset_analysis.analysis_tool_service import AnalysisToolService
+
+        return AnalysisToolService(
+            sandbox if sandbox is not None else self.get_sandbox_service(),
+            session,
+            policy,
+            source_id=source_id,
+            columns=columns,
+            persona_count=persona_count,
+            tables=tables,
+            gate=gate,
+            expected_library_sha256=expected_library_sha256,
+            expected_parquet_sha256=expected_parquet_sha256,
+        )
+
     def get_persona_binding_store(self) -> "PersonaBindingStore":
-        """Return the store of persona bindings (U5, ADR-007)."""
+        """Return the store of persona bindings."""
         if self._persona_binding_store is None:
             with self._lock:
                 if self._persona_binding_store is None:
@@ -487,7 +615,7 @@ class ServiceFactory:
         return self._persona_binding_store
 
     def get_job_store(self) -> "JobStore":
-        """Return the writer of job records (contract C14)."""
+        """Return the writer of job records."""
         if self._job_store is None:
             with self._lock:
                 if self._job_store is None:
@@ -501,7 +629,7 @@ class ServiceFactory:
         return self._job_store
 
     def get_dataset_store(self) -> "DatasetStore":
-        """Return the store of registered datasets (U5, U7)."""
+        """Return the store of registered datasets."""
         if self._dataset_store is None:
             with self._lock:
                 if self._dataset_store is None:
@@ -515,7 +643,7 @@ class ServiceFactory:
         return self._dataset_store
 
     def get_persona_store(self) -> "PersonaStore":
-        """Return the store of persona bodies (U4, U5)."""
+        """Return the store of persona bodies."""
         if self._persona_store is None:
             with self._lock:
                 if self._persona_store is None:
@@ -529,7 +657,7 @@ class ServiceFactory:
         return self._persona_store
 
     def get_survey_store(self) -> "SurveyStore":
-        """Return the store of survey bodies (U7)."""
+        """Return the store of survey bodies."""
         if self._survey_store is None:
             with self._lock:
                 if self._survey_store is None:
@@ -543,7 +671,7 @@ class ServiceFactory:
         return self._survey_store
 
     def get_survey_run_lease_store(self) -> "SurveyRunLeaseStore":
-        """Return the store of the survey runner's lease (BR2.3)."""
+        """Return the store of the survey runner's lease."""
         if self._survey_run_lease_store is None:
             with self._lock:
                 if self._survey_run_lease_store is None:
@@ -561,7 +689,7 @@ class ServiceFactory:
 
         Raises:
             RuntimeError: ``SURVEY_STATE_MACHINE_ARN`` is not set (callers check
-                ``config.survey_runner_configured`` first, BR9.1).
+                ``config.survey_runner_configured`` first).
         """
         if self._survey_runner_service is None:
             with self._lock:
@@ -579,7 +707,7 @@ class ServiceFactory:
         return self._survey_runner_service
 
     def get_survey_template_store(self) -> "SurveyTemplateStore":
-        """Return the store of survey template bodies (U7)."""
+        """Return the store of survey template bodies."""
         if self._survey_template_store is None:
             with self._lock:
                 if self._survey_template_store is None:
@@ -593,7 +721,7 @@ class ServiceFactory:
         return self._survey_template_store
 
     def get_knowledge_base_store(self) -> "KnowledgeBaseStore":
-        """Return the store of registered knowledge bases (U7)."""
+        """Return the store of registered knowledge bases."""
         if self._knowledge_base_store is None:
             with self._lock:
                 if self._knowledge_base_store is None:
@@ -607,7 +735,7 @@ class ServiceFactory:
         return self._knowledge_base_store
 
     def get_custom_persona_data_store(self) -> "CustomPersonaDataStore":
-        """Return the store of custom persona data records (U7)."""
+        """Return the store of custom persona data records."""
         if self._custom_persona_data_store is None:
             with self._lock:
                 if self._custom_persona_data_store is None:
@@ -621,7 +749,7 @@ class ServiceFactory:
         return self._custom_persona_data_store
 
     def get_uploaded_file_store(self) -> "UploadedFileStore":
-        """Return the store of upload metadata (U5)."""
+        """Return the store of upload metadata."""
         if self._uploaded_file_store is None:
             with self._lock:
                 if self._uploaded_file_store is None:
@@ -635,7 +763,7 @@ class ServiceFactory:
         return self._uploaded_file_store
 
     def get_discussion_store(self) -> "DiscussionStore":
-        """Return the store of discussion bodies, messages and reports (U6)."""
+        """Return the store of discussion bodies, messages and reports."""
         if self._discussion_store is None:
             with self._lock:
                 if self._discussion_store is None:
@@ -651,7 +779,7 @@ class ServiceFactory:
         return self._discussion_store
 
     def get_interview_session_store(self) -> "InterviewSessionStore":
-        """Return the store of running interviews (U6, ADR-004)."""
+        """Return the store of running interviews."""
         if self._interview_session_store is None:
             with self._lock:
                 if self._interview_session_store is None:
@@ -666,7 +794,7 @@ class ServiceFactory:
         return self._interview_session_store
 
     def get_user_directory_service(self) -> "UserDirectoryService":
-        """Return the user-list reader for owner names (U4, BR5.1).
+        """Return the user-list reader for owner names.
 
         Raises:
             CodedError: ``AUTH_CONFIG_INVALID`` when ``COGNITO_USER_POOL_ID``
@@ -689,7 +817,7 @@ class ServiceFactory:
         return self._user_directory_service
 
     def get_department_source(self) -> Any:
-        """Return where the departments come from (U4).
+        """Return where the departments come from.
 
         The Cognito ``group:`` groups when a user pool is configured; under
         ``AUTH_MODE=local`` without one, the development user's groups.
@@ -702,7 +830,7 @@ class ServiceFactory:
         return self._local_directory()
 
     def get_user_source(self) -> Any:
-        """Return where the owner names come from (U4).
+        """Return where the owner names come from.
 
         Raises:
             CodedError: ``AUTH_CONFIG_INVALID`` outside local mode without a pool.
@@ -719,10 +847,10 @@ class ServiceFactory:
 
     def get_data_agent_service(self) -> Optional["DataAgentService"]:
         """
-        DataAgentServiceのインスタンスを取得
+        Get the DataAgentService instance
 
         Returns:
-            DataAgentService: データ分析エージェントサービス（設定なしの場合はNone）
+            DataAgentService: Data analysis agent service (None if not configured)
         """
         if not config.DATA_AGENT_RUNTIME_ARN:
             return None
@@ -731,5 +859,5 @@ class ServiceFactory:
         return DataAgentService(config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION)
 
 
-# グローバルファクトリーインスタンス
+# Global factory instance
 service_factory = ServiceFactory()

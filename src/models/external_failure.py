@@ -1,4 +1,4 @@
-"""How a failed call to an external service is handled (reliability 3.1).
+"""How a failed call to an external service is handled.
 
 The survey runner treats every failed external call the same way whichever
 stage it happens in (starting, monitoring, finishing). The Service layer turns
@@ -9,7 +9,7 @@ from enum import StrEnum
 
 
 class FailureClass(StrEnum):
-    """The four classes of reliability-requirements.md 3.1."""
+    """The four classes of failure of an external call."""
 
     #: The execution or its input / output is not there; waiting will not help.
     NOT_FOUND = "not_found"
@@ -21,9 +21,9 @@ class FailureClass(StrEnum):
     TRANSIENT = "transient"
 
 
-#: SDK error codes of Step Functions, S3 and the credential chain
-#: (reliability-requirements.md 3.1). Codes not listed are TRANSIENT, so a
-#: wrong guess still ends at a count or time limit (BR3.2, BR3.7, NFR4.7).
+#: SDK error codes of Step Functions, S3 and the credential chain.
+#: Codes not listed are TRANSIENT, so a wrong guess still ends at a count or
+#: time limit.
 _FAILURE_BY_CODE: dict[str, FailureClass] = {
     # Not found
     "ExecutionDoesNotExist": FailureClass.NOT_FOUND,

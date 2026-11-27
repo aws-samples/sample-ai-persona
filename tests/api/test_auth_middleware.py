@@ -1,10 +1,7 @@
-"""AuthMiddleware（入口の判定）の API テスト。
+"""API tests for AuthMiddleware (the entrance check).
 
-US1.1（AC1.1.1、AC1.1.2）、US1.3（AC1.3.3、AC1.3.4）、BR1.1、BR1.2、BR1.9、
-BR1.17、BR1.18、BR1.20、BR1.21、NFR4.1、NFR4.8、NFR8.5、NFR9.4、NFR9.8。
-
-実アプリ（AUTH_MODE=local）での振る舞いと、小さな Starlette アプリに
-AuthManager のモックを入れた振る舞いの両方で確かめる。
+Covers both the real app (AUTH_MODE=local) and a small Starlette app with a mocked
+AuthManager.
 """
 
 import asyncio
@@ -38,7 +35,7 @@ _PRINCIPAL = Principal(sub="user-1", roles=frozenset({Role.MEMBER}))
 
 
 # =============================================================================
-# 小さなアプリ（AuthManager はモック）
+# Small app (AuthManager is mocked)
 # =============================================================================
 
 
@@ -122,7 +119,7 @@ class TestUnauthenticatedResponses:
         assert query["next"] == ["/page"]
         assert api.status_code == 401
         assert api.json()["error_code"] == ErrorCode.SESSION_EXPIRED
-        # 消えたセッションの Cookie は消す
+        # The cookie of a vanished session is cleared
         assert any(
             c.startswith("session_id=") for c in page.headers.get_list("set-cookie")
         )
@@ -163,7 +160,7 @@ class TestPublicPaths:
                 "/api/health",
                 "/login",
                 "/auth/callback",
-                "/auth/new-password",  # U8: 初回パスワード変更（M3）
+                "/auth/new-password",  # first-login password change
                 "/signout",
             }
         )
@@ -184,9 +181,9 @@ class TestSignedInRequests:
             assert c.get("/page").json() == {"sub": "user-1"}
 
     def test_users_without_roles_are_stopped_at_the_entrance(self):
-        """U1 の「ロールがなくても既存の画面を使える」は U2 の BR2.8 で置き換えた。
+        """Without a role, users are stopped at the entrance.
 
-        詳しい振る舞いは ``tests/api/test_role_required.py``。
+        See ``tests/api/test_role_required.py`` for the detailed behavior.
         """
         manager = _manager(return_value=Principal(sub="user-1"))
         with TestClient(_small_app(manager), follow_redirects=False) as c:
@@ -211,12 +208,19 @@ class TestSignedInRequests:
     @pytest.mark.parametrize(
         ("method", "path", "expected"),
         [
-            # 議論の開始は利用者の操作（POST、NFR4.13）。受け身にしない
+            # Starting a discussion is a user action (POST), never passive
             ("POST", "/discussion/stream", False),
             ("GET", "/interview/abc-123/stream", True),
             ("GET", "/interview/abc-123/status", True),
             ("GET", "/survey/persona-data/nemotron-status", True),
             ("GET", "/api/jobs/job-1", True),
+            # Advanced generation: progress SSE, and the 2-second re-read of rows under inspection
+            ("GET", "/persona/advanced/generations/gen-1/events", True),
+            ("GET", "/persona/advanced/uploads/src-1", True),
+            # Deleting a row, starting generation and the record dialog are user actions
+            ("DELETE", "/persona/advanced/uploads/src-1", False),
+            ("POST", "/persona/advanced/generations", False),
+            ("GET", "/persona/advanced/generations/gen-1/record", False),
             ("POST", "/interview/abc-123/message/stream", False),
             ("GET", "/interview/abc-123", False),
             ("GET", "/persona/management", False),
@@ -283,7 +287,7 @@ class TestTimingLog:
 
 
 # =============================================================================
-# 網羅テスト（NFR4.1）: 例外の一覧にない URL は、未ログインで 200 を返さない
+# Exhaustive test: any URL not in the exception list must not return 200 when logged out
 # =============================================================================
 
 
@@ -295,7 +299,7 @@ def _walk(routes: list[Any], prefix: str, found: list[tuple[str, str]]) -> None:
     for route in routes:
         context = getattr(route, "include_context", None)
         if context is not None:
-            # FastAPI 0.137 は include_router した Router を遅延の入れ物で持つ
+            # FastAPI 0.137 holds an included Router in a lazy container
             _walk(route.original_router.routes, prefix + context.prefix, found)
         elif isinstance(route, Mount):
             found.append(("GET", f"{prefix}{route.path}/js/app.js"))
@@ -313,7 +317,7 @@ def _all_routes(test_app: Any) -> list[tuple[str, str]]:
 
 def test_every_route_requires_login_unless_listed(test_app):
     routes = _all_routes(test_app)
-    assert len(routes) > 50  # 全 Router が登録されていること
+    assert len(routes) > 50  # All Routers are registered
 
     with TestClient(
         test_app,

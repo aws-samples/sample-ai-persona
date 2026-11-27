@@ -2,19 +2,19 @@
 Interview Manager for AI Persona System.
 Handles interview session setup, execution, and persistence.
 
-v1.0.0 U6（``functional-design/rules.md`` BR3.1〜BR3.8、ADR-004）:
+Rules:
 
-- セッションと発言はアプリの外（``InterviewSessionStore``）に置き、どの台でも会話を続けられる
-- 送信・参照・保存・終了は持ち主だけ。他人・期限切れ・存在しないは区別せず
-  ``INTERVIEW_SESSION_NOT_FOUND``（admin でも他人のセッションは使えない）
-- 送信は (a) 利用者の発言と応答中の印、(b) ペルソナ 1 体ごとの応答を、それぞれ
-  ``last_seq`` を条件にしたトランザクションで書く。応答中の別の送信と保存は
-  ``CONCURRENT_UPDATE``。印は AI の失敗でもジェネレータのクローズでも外す
-- 手元のエージェントは ``(session_id, owner_sub)`` で引き、ない・番号がずれていれば
-  保存した発言から作り直す。8 時間使わなければ捨てる
-- 添付は ID で持ち、紐付け前は ``attachable_file``、保存した議論に紐付いたあとは
-  ``readable_file`` で読む。読めないファイルは外して名前を返す
-- 保存は ``DiscussionRecords``（初回 ``save_new``、2 回目以降 ``append_messages``）
+- Sessions and messages are kept outside the app (``InterviewSessionStore``) so any task can continue the conversation
+- Send, read, save and end belong to the owner only. Someone else's, expired and missing sessions are not told apart:
+  ``INTERVIEW_SESSION_NOT_FOUND`` (even an admin cannot use someone else's session)
+- A send writes (a) the user's message plus an in-progress mark and (b) each persona's reply,
+  each in a transaction conditioned on ``last_seq``. Another send or a save during a reply
+  is ``CONCURRENT_UPDATE``. The mark is removed on AI failure and on generator close
+- The local agent is looked up by ``(session_id, owner_sub)``; if missing or the sequence number
+  is off, it is rebuilt from the stored messages. Dropped after 8 hours unused
+- Attachments are held by ID: read with ``attachable_file`` before being attached, and with
+  ``readable_file`` once attached to the saved discussion. Unreadable files are dropped and their names returned
+- Saving goes through ``DiscussionRecords`` (``save_new`` first, ``append_messages`` afterwards)
 """
 
 import logging
@@ -133,10 +133,10 @@ class InterviewPersistenceError(InterviewManagerError):
     pass
 
 
-#: 利用者の発言の表示名。
+#: Display name of the user's messages.
 USER_NAME = "ユーザー"
 
-#: セッション ID から保存先の議論の ID を決める名前空間（固定の値。変えると再保存で別の議論になる）
+#: Namespace that derives the saved discussion's ID from the session ID (fixed value; changing it makes a re-save create a different discussion)
 _SAVED_DISCUSSION_NAMESPACE = uuid.UUID("6f4b8a52-2d0e-4c1a-9b7e-3a5d1c8e0f21")
 
 
@@ -155,7 +155,7 @@ def _utc_now() -> datetime:
 
 @dataclass
 class _LocalAgents:
-    """This task's agents of one session (BR3.4)."""
+    """This task's agents of one session."""
 
     agents: List[PersonaAgent]
     known_seq: int
@@ -172,7 +172,7 @@ def _access_parts() -> AccessParts:
 
 
 def _history_for(persona_id: str, messages: Sequence[Message]) -> List[dict[str, Any]]:
-    """The conversation one persona's agent is rebuilt with (BR3.4 (3)).
+    """The conversation one persona's agent is rebuilt with.
 
     The user's messages and the persona's own replies, in order. Consecutive
     messages of the same side are merged (the model needs alternating turns);
@@ -220,9 +220,9 @@ class InterviewManager:
     Manager class for handling interview operations.
     """
 
-    #: インタビュー参加ペルソナ数の上限。
+    #: Maximum number of personas in an interview.
     MAX_PERSONAS = 5
-    #: 1メッセージあたりの最大文字数。
+    #: Maximum characters per message.
     MAX_MESSAGE_LENGTH = 2000
 
     def __init__(
@@ -249,12 +249,12 @@ class InterviewManager:
             dataset_analysis_service: Dataset tools (the singleton when omitted)
             knowledge_base_store: Registered knowledge bases for the KB tool
                 (the singleton when omitted)
-            binding_store: ``PersonaBindings`` for the KB / dataset tools (U5)
-            session_store: Sessions and messages outside the app (U6)
-            discussion_records: Saves the interview as a discussion (U6)
-            participants: Checks the participants on every send and save (U6)
-            file_attachments: Reads the attachments by ID (U5)
-            resource_lookup: Usage scopes of organization assets (U6)
+            binding_store: ``PersonaBindings`` for the KB / dataset tools
+            session_store: Sessions and messages outside the app
+            discussion_records: Saves the interview as a discussion
+            participants: Checks the participants on every send and save
+            file_attachments: Reads the attachments by ID
+            resource_lookup: Usage scopes of organization assets
             s3_service: Reads attachments kept on S3 (the singleton when omitted)
             clock: Aware UTC now (tests replace it)
         """
@@ -281,13 +281,13 @@ class InterviewManager:
         self._s3 = s3_service
         self._clock = clock
 
-        # This task's agents, keyed by (session_id, owner_sub) (BR3.4)
+        # This task's agents, keyed by (session_id, owner_sub)
         self._local: Dict[tuple[str, str], _LocalAgents] = {}
         self._local_lock = threading.Lock()
 
         self.logger.info("Interview Manager initialized")
 
-    # --- 部品（遅延取得） ------------------------------------------------------------
+    # --- Components (lazily obtained) ------------------------------------------------------------
 
     @property
     def _discussion_records(self) -> DiscussionRecords:
@@ -315,9 +315,9 @@ class InterviewManager:
     def _now(self) -> datetime:
         return self._clock()
 
-    # =========================================================================
-    # 開始（BR3.1）
-    # =========================================================================
+    # ==========================================================================
+    # Start
+    # ==========================================================================
 
     def start_interview_session(
         self,
@@ -338,16 +338,16 @@ class InterviewManager:
                 (``PersonaManager.get_personas_for_use``)
             enable_memory: Whether to use long-term memory
             memory_mode: ``full`` / ``retrieve_only`` / ``disabled``; personas the
-                user does not own only retrieve (BR6.1)
+                user does not own only retrieve
             enable_dataset: Whether to enable dataset tools
             enable_kb: Whether to enable knowledge base tools
-            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
+            persona_models: persona_id -> model_id map (default model if omitted)
 
         Returns:
             InterviewSession: The stored session
 
         Raises:
-            AccessDeniedError: ``ai:execute`` がない
+            AccessDeniedError: No ``ai:execute``
             InterviewValidationError: If input validation fails
             InterviewAgentError: If agent creation fails
             InterviewSessionError: If the session could not be stored
@@ -394,10 +394,10 @@ class InterviewManager:
     def _validate_model_selection(
         self, model_ids: Optional[Mapping[str, Optional[str]]]
     ) -> None:
-        """選択されたmodel_idが利用可能か検証する。
+        """Check that the selected model_id is available.
 
-        未対応のmodel_idはVALIDATION、追加ペルソナベースモデルだが
-        ENABLE_ADDITIONAL_PERSONA_MODELS無効時はCONFIG。
+        An unsupported model_id is VALIDATION; an additional persona base model
+        while ENABLE_ADDITIONAL_PERSONA_MODELS is off is CONFIG.
         """
         validate_model_selection(
             model_ids,
@@ -414,10 +414,10 @@ class InterviewManager:
     def _validate_document_size(
         self, session: InterviewSession, documents: Sequence[DocumentRef]
     ) -> None:
-        """選択モデルのmax_request_bytes（Gemma4等）に対しドキュメント合計サイズを検証する。
+        """Check the total document size against the selected model's max_request_bytes (Gemma4 etc.).
 
-        インタビューはターンを跨いでドキュメントを蓄積するため、セッションに既に
-        添付済みのドキュメントも合計に含める。
+        An interview accumulates documents across turns, so documents already
+        attached to the session are included in the total.
         """
         total_size = sum(d.file_size for d in list(session.documents) + list(documents))
         validate_document_size_for_models(
@@ -429,9 +429,9 @@ class InterviewManager:
             ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE,
         )
 
-    # =========================================================================
-    # 持ち主と期限（BR3.2、BR3.5）
-    # =========================================================================
+    # ==========================================================================
+    # Owner and expiry
+    # ==========================================================================
 
     def _owned_session(self, principal: Principal, session_id: str) -> InterviewSession:
         """The session, if ``principal`` owns it and it has not expired.
@@ -452,9 +452,9 @@ class InterviewManager:
                 f"interview session unreadable ({type(e).__name__})",
                 code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
             ) from e
-        # admin でも他人のセッションは使えない（実行中の会話は持ち主だけのもの、BR3.2）。
-        # 存在しない・期限切れは「持ち主なし」として同じ照合に通し、他人のものと同じ
-        # 応答と同じ 1 行の authz.denied にする（NFR1.56、NFR8.22）
+        # Even an admin cannot use someone else's session (a running conversation belongs only to its owner).
+        # A missing or expired session goes through the same check as one with "no owner" and gets the
+        # same response and the same single authz.denied line as someone else's
         alive = session if session and not session.is_expired(self._now()) else None
         try:
             AccessPolicy.ensure_owner(
@@ -467,7 +467,7 @@ class InterviewManager:
                 "interview session not found",
                 code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
             ) from e
-        if alive is None:  # 持ち主なしは上で断っている。型のための確認
+        if alive is None:  # No-owner was refused above; this is for typing
             raise InterviewSessionNotFoundError(
                 "interview session not found",
                 code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
@@ -511,9 +511,9 @@ class InterviewManager:
             f"a reply is in progress ({phase})", code=ErrorCode.CONCURRENT_UPDATE
         )
 
-    # =========================================================================
-    # 送信（BR3.3、BR3.6、BR7.2）
-    # =========================================================================
+    # ==========================================================================
+    # Send
+    # ==========================================================================
 
     def send_user_message(
         self,
@@ -642,8 +642,8 @@ class InterviewManager:
             for index, agent in enumerate(local.agents):
                 is_last = index == len(local.agents) - 1
                 name = agent.get_persona_name()
-                # これまでの会話は 1 体ごとに作り直す。今回の送信で先に答えたペルソナの
-                # 応答も入る（今の会話の進め方と同じ、BR3.4）
+                # The conversation so far is rebuilt per persona. It includes the replies of
+                # personas that already answered in this send (same as how the conversation proceeds now)
                 prompt = self._create_interview_prompt(
                     agent, message.strip(), list(local.messages)
                 )
@@ -738,10 +738,10 @@ class InterviewManager:
         try:
             self._store.release_reply(session_id, token)
         except InterviewSessionStoreError:
-            # 外せなくても 5 分で無効になる（BR3.3）
+            # Even if it cannot be removed, it becomes invalid after 5 minutes
             self.logger.warning("Releasing the reply mark failed", exc_info=True)
 
-    # --- 添付（BR3.6） ---------------------------------------------------------------
+    # --- Attachments ---------------------------------------------------------------
 
     def _read_new_attachments(
         self,
@@ -792,7 +792,7 @@ class InterviewManager:
         s3 = self._s3 or service_factory.get_optional_s3_service()
         return prepare_document_contents(metadata, s3)
 
-    # --- 手元のエージェント（BR3.4、BR3.5） ------------------------------------------
+    # --- Local agents ------------------------------------------
 
     def _keep_local(
         self, principal: Principal, session_id: str, local: _LocalAgents
@@ -810,7 +810,7 @@ class InterviewManager:
             self._dispose(old.agents)
 
     def _evict_idle(self) -> None:
-        """Drop the agents not used for eight hours (BR3.5)."""
+        """Drop the agents not used for eight hours."""
         limit = self._now() - timedelta(seconds=SESSION_IDLE_SECONDS)
         with self._local_lock:
             idle = [k for k, v in self._local.items() if v.last_used <= limit]
@@ -832,8 +832,8 @@ class InterviewManager:
             local.last_used = self._now()
             return local, []
         if local is not None:
-            # 同じ台で送信が重なったとき、先の送信が使っているエージェントを捨てない。
-            # 作り直す前にセッションを読み直し、応答中なら衝突として断る
+            # When sends overlap on the same task, do not discard the agents the earlier send is using.
+            # Re-read the session before rebuilding, and refuse as a conflict if a reply is in progress
             session = self._fresh_session(session)
             if session.reply_in_progress(self._now()):
                 raise self._conflict(session.id, "a")
@@ -894,10 +894,10 @@ class InterviewManager:
         One agent per persona for ``principal`` (allows a single persona).
 
         Args:
-            principal: The session's owner (memory: BR6.1)
+            principal: The session's owner (decides memory writes)
             session: Memory, dataset, KB and model settings
             personas: The participants' bodies
-            history: Stored messages to rebuild the conversation with (BR3.4)
+            history: Stored messages to rebuild the conversation with
 
         Returns:
             List[PersonaAgent]: Created persona agents
@@ -933,7 +933,7 @@ class InterviewManager:
                     )
                 )
             except AgentConfigurationError as e:
-                # 追加ペルソナベースモデル無効等の設定不足は CONFIG のまま即時通知する
+                # Configuration shortfalls such as disabled additional persona base models are reported immediately as CONFIG
                 self.logger.error(
                     f"Configuration error creating agent for persona {persona.name}: "
                     f"{type(e).__name__}"
@@ -968,7 +968,7 @@ class InterviewManager:
         return persona_agents
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
-        """インタビュー用システムプロンプトを生成する。"""
+        """Generate the system prompt for interviews."""
         from ..prompts.discussion_interview_prompts import build_interview_system_prompt
 
         return build_interview_system_prompt(persona)
@@ -982,9 +982,9 @@ class InterviewManager:
             ),
         )
 
-    # =========================================================================
-    # 保存（BR3.7、BR3.8）
-    # =========================================================================
+    # ==========================================================================
+    # Save
+    # ==========================================================================
 
     def save_interview_session(
         self, principal: Principal, session_id: str, session_name: str | None = None
@@ -1052,7 +1052,7 @@ class InterviewManager:
         session_name: Optional[str],
         now: datetime,
     ) -> tuple[str, bool]:
-        """Run the first save of a session; only one request at a time (BR3.7).
+        """Run the first save of a session; only one request at a time.
 
         Returns:
             The discussion ID, and whether this call wrote the discussion
@@ -1070,7 +1070,7 @@ class InterviewManager:
                 code=ErrorCode.INTERVIEW_SAVE_FAILED,
             ) from e
         if not took:
-            # 別の要求が初回の保存を終えていればそれに合流し、保存中なら断る
+            # If another request already finished the first save, join it; if it is still saving, refuse
             fresh = self._store.get(session.id)
             if fresh is not None and fresh.saved_discussion_id:
                 return fresh.saved_discussion_id, False
@@ -1079,8 +1079,8 @@ class InterviewManager:
         discussion_id = _discussion_id_for(session.id)
         try:
             if self._discussion_records.can_manage(principal, discussion_id):
-                # 前回の保存で議論はできたが、セッションへの記録だけ失敗した。
-                # 同じ議論を記録し直して書き足す（別の議論を作らない）
+                # The previous save created the discussion but only the record on the session failed.
+                # Record the same discussion again and append (do not create another discussion)
                 self._record_saved(session.id, discussion_id, now)
                 return discussion_id, False
             topic = (
@@ -1105,7 +1105,7 @@ class InterviewManager:
             try:
                 self._store.release_save(session.id, token)
             except InterviewSessionStoreError:
-                # 外せなくても 5 分で解ける
+                # Even if it cannot be removed, it clears after 5 minutes
                 self.logger.warning("Releasing the save mark failed", exc_info=True)
             raise
 
@@ -1120,9 +1120,9 @@ class InterviewManager:
                 code=ErrorCode.INTERVIEW_SAVE_FAILED,
             ) from e
 
-    # =========================================================================
-    # 参照・状態・終了
-    # =========================================================================
+    # ==========================================================================
+    # Read, status, end
+    # ==========================================================================
 
     def get_interview_session(
         self, principal: Principal, session_id: str
@@ -1197,9 +1197,9 @@ class InterviewManager:
         with self._local_lock:
             return len(self._local)
 
-    # =========================================================================
-    # 検証と文面
-    # =========================================================================
+    # ==========================================================================
+    # Validation and wording
+    # ==========================================================================
 
     def _validate_session_creation_input(self, personas: List[Persona]) -> None:
         """

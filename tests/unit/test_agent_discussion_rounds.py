@@ -1,7 +1,7 @@
 """
 Integration tests for Agent Discussion Manager
 
-U6: the round loop is ``_rounds`` (run by a principal, checking the
+The round loop is ``_rounds`` (run by a principal, checking the
 participants before each statement) and the result is saved through
 ``DiscussionRecords``.
 """
@@ -195,5 +195,5 @@ class TestAgentDiscussionManager:
             )
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_OPERATION_FAILED
-        # 診断メッセージには不正だったモードが残る（ログ用）
+        # The diagnostic message keeps the invalid mode (for logging)
         assert "'classic'" in str(exc_info.value)

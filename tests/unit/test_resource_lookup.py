@@ -1,8 +1,8 @@
-"""ResourceLookup（判定に要る項目の読み取り、約束 C3、ADR-011）の単体テスト。
+"""Unit tests for ResourceLookup (reads the fields a decision needs).
 
-BR2.10（登録制・失敗を許可に倒さない）、NFR1.3、NFR8.8、NFR8.9、NFR9.11、NFR9.12、
-NFR9.18（呼び出しごとに 3 秒の締め切り）、NFR Design R-01（締め切りを読み方に渡す）、
-Q2（500 件超は想定外）。時刻は注入した時計で進め、time.sleep は使わない。
+Registered kinds only; a failed read never falls back to allow. Each call has a 3-second
+deadline that is passed down to the read. More than 500 items is out of scope. Time
+advances through an injected clock; time.sleep is not used.
 """
 
 import json
@@ -149,7 +149,7 @@ class TestLimits:
         assert reader.calls == []
 
     def test_slow_reads_stop_at_the_deadline(self, capsys):
-        """1 回の読み取りが 1 秒かかるとき、3 秒 + 0.2 秒以内に 503（NFR9.18）。"""
+        """When one read takes 1 second, a 503 is raised within 3 + 0.2 seconds."""
         clock = FakeClock()
         started = clock.now
         reader = StubReader(clock=clock, seconds_per_read=1.0)
@@ -215,7 +215,7 @@ class TestTimingLog:
 
 
 class TestDiscussionRegistration:
-    """U6: 議論を ResourceLookup に登録する（表示名は topic、約束 C3・C8）。"""
+    """Registers a discussion with ResourceLookup (display name is the topic)."""
 
     def test_discussions_are_registered_with_their_topic(self):
         from src.managers.components.sharing_runtime import lookup_tables
@@ -273,7 +273,7 @@ class TestDiscussionRegistration:
 
 
 class TestSurveyOrgAssetRegistration:
-    """U7: テンプレート・結果・カスタムペルソナデータを登録する（約束 C3、BR5.7）。"""
+    """Registers templates, results and custom persona data."""
 
     def _tables(self):
         from src.managers.components.sharing_runtime import lookup_tables

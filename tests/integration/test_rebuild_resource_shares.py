@@ -1,7 +1,8 @@
-"""ResourceShares を本体から作り直すスクリプトの結合テスト（moto、NFR1.20）。
+"""Integration tests for the script that rebuilds ResourceShares from the source records (moto).
 
-本体の shared_group_ids が正。既定は差分を出すだけで書かない。--apply で直す。
-owner_sub のない本体は数えて飛ばす。種類は ResourceSharing の登録から読む。
+The source shared_group_ids is authoritative. By default it only reports diffs and
+writes nothing; --apply fixes them. Sources without owner_sub are counted and skipped.
+The resource type is read from the ResourceSharing registration.
 """
 
 from typing import Any
@@ -77,12 +78,12 @@ def _entry(
 
 @pytest.fixture
 def drifted(aws, store) -> ResourceShareStore:
-    _body(aws, "p1", "sub-a", ["sales", "plan"])  # plan の項目が足りない
-    _body(aws, "p2", "sub-a", [])  # 共有なしなのに項目がある（余分）
-    _body(aws, "p3", "sub-a", ["sales"])  # created_at が食い違う
-    _body(aws, "p4", "sub-b", ["hr"])  # owner_sub が食い違う
-    _body(aws, "p5", None, [])  # 所有者のない旧データ（数えて飛ばす）
-    _body(aws, "p6", "sub-b", ["plan"])  # 正しい
+    _body(aws, "p1", "sub-a", ["sales", "plan"])  # plan is missing an entry
+    _body(aws, "p2", "sub-a", [])  # An entry exists although nothing is shared (extra)
+    _body(aws, "p3", "sub-a", ["sales"])  # created_at differs
+    _body(aws, "p4", "sub-b", ["hr"])  # owner_sub differs
+    _body(aws, "p5", None, [])  # Legacy data without an owner (counted and skipped)
+    _body(aws, "p6", "sub-b", ["plan"])  # Correct
     store.put_entries(
         [
             _entry("sales", "p1", "sub-a"),
@@ -146,7 +147,7 @@ def test_clean_index_reports_nothing_to_fix(aws, store, capsys):
     store.put_entries([_entry("sales", "p1", "sub-a")])
     plan = plan_rebuild(store, TABLES)
     assert plan.is_clean
-    apply_plan(store, plan)  # 何もしない
+    apply_plan(store, plan)  # Does nothing
     main([], store=store, tables=TABLES)
     assert "ずれはありません" in capsys.readouterr().out
 

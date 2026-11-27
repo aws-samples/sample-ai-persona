@@ -1,7 +1,7 @@
-"""ReportManager のユニットテスト（U6: 生成は読める人、保存・変更は管理できる人）。
+"""Unit tests for ReportManager (generation needs read access; save/change need manage access).
 
-BR4.1〜BR4.4、NFR1.45、NFR1.52、NFR1.62。DiscussionRecords・ParticipantReader・
-AccessPolicy は本物、テーブルは tests/unit/discussion_world.py の偽物、AI はモック。
+DiscussionRecords, ParticipantReader and AccessPolicy are real, the tables are the fakes in
+tests/unit/discussion_world.py, and the AI is mocked.
 """
 
 from unittest.mock import Mock, patch
@@ -91,7 +91,7 @@ def _generate(manager, principal, discussion_id, template_type="summary"):
 
 
 # =============================================================================
-# 生成（BR4.1、BR4.3）
+# Generation
 # =============================================================================
 
 
@@ -127,7 +127,7 @@ class TestGenerate:
         text = ai.generate_standard_report_streaming.call_args.kwargs[
             "converse_messages"
         ][0]["content"][0]["text"]
-        # p1 は本人の、p2 は営業部に共有。p3 は読めない
+        # p1 is the user's own, p2 is shared with the sales department. p3 is unreadable
         assert "### 佐藤" in text and "### 鈴木" in text
         assert "### 田中" not in text
 
@@ -146,7 +146,7 @@ class TestGenerate:
         assert sessions[1] == report_session_id(discussion.id, PEER.sub)
         assert sessions[0] != sessions[1]
 
-    # --- 閉域対応 U3 BR3.2 の (5)、BR3.7 ---
+    # --- Closed-network stage: DWH data is blocked ---
 
     @pytest.fixture
     def not_allowed(self, monkeypatch):
@@ -203,7 +203,7 @@ class TestGenerate:
 
     @patch("src.managers.report_manager.service_factory")
     def test_followup_with_stm_available(self, mock_sf, manager, world, agent_service):
-        """STM有効時にフォローアップが追加指示のみで生成されること"""
+        """Follow-up is generated from the additional instruction only when STM is enabled."""
         mock_sf.check_stm_session_exists.return_value = True
         discussion = _seed(world)
 
@@ -222,7 +222,7 @@ class TestGenerate:
 
     @patch("src.managers.report_manager.service_factory")
     def test_followup_with_stm_expired(self, mock_sf, manager, world, agent_service):
-        """STM期限切れ時にフォールバックでレポートが注入されること"""
+        """The report is injected as a fallback when STM has expired."""
         mock_sf.check_stm_session_exists.return_value = False
         discussion = _seed(world)
 
@@ -247,7 +247,7 @@ class TestGenerate:
 
 
 # =============================================================================
-# 保存・更新・削除（BR4.2、BR4.4、NFR1.45、NFR1.62）
+# Save, update, delete
 # =============================================================================
 
 
@@ -285,7 +285,7 @@ class TestSave:
             manager.save_report(OWNER, discussion.id, "poem", "内容", None)
 
     def test_invalid_template_type_on_a_missing_discussion_is_not_found(self, manager):
-        # 権限確認をテンプレート種別の検証より先に行う（入力をプレビューに戻さない）
+        # the permission check runs before template type validation (input is not echoed back to the preview)
         with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
             manager.save_report(OWNER, "no-such-discussion", "poem", "内容", None)
 

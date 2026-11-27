@@ -11,7 +11,7 @@
       hx-indicator="#mapping-spinner">
     <input type="hidden" name="filename" value="{{ filename }}">
     <input type="hidden" name="temp_key" value="{{ temp_key }}">
-    {#- 名前（前後の空白を除いて 1〜100 文字、重なる名前は使えない）と利用範囲（既定は admin のみ、BR4.4・BR5.2） #}
+    {#- Name: 1-100 characters after trimming, must not duplicate another; usage scope defaults to admin only. #}
     <div class="mb-4">
         <label for="custom-data-name" class="block text-sm font-medium text-gray-700 mb-1">データセット名</label>
         <input type="text" id="custom-data-name" name="dataset_name" value="{{ dataset_name }}" required maxlength="100"
@@ -19,7 +19,7 @@
                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                placeholder="データセット名を確認・編集してください">
     </div>
-    {#- 新規の登録なので外す部署はない。department_picker（変更の有無で保存を止める）は使わず、選ぶだけの欄にする #}
+    {#- No department is removed since this is a new registration. department_picker (which blocks saving when nothing changed) is not used; this is a plain selection field. #}
     <fieldset class="mb-4" data-testid="custom-data-scope-field">
         <legend class="text-sm font-medium text-gray-700 mb-2">利用できるグループ（複数選択可）</legend>
         {%- if scope_choices %}
@@ -37,7 +37,7 @@
         <p class="text-xs text-gray-600 mt-1">どのグループも選ばないと、admin だけが使えます（既定）。あとから一覧の「利用範囲」で変えられます。</p>
     </fieldset>
 
-    <!-- CSVカラムのサンプルデータ表示 -->
+    <!-- Sample data of the CSV columns -->
     <div class="mb-4 overflow-x-auto">
         <table class="w-full text-xs border">
             <thead class="bg-gray-100">
@@ -59,7 +59,7 @@
         </table>
     </div>
 
-    <!-- マッピング設定 -->
+    <!-- Mapping settings -->
     <h4 class="text-sm font-semibold text-gray-700 mb-2">属性</h4>
     {% for std_col, info in standard_columns.items() %}
     {% if info.group == '属性' %}
@@ -100,7 +100,7 @@
     {% endif %}
     {% endfor %}
 
-    <!-- その他カラム -->
+    <!-- Other columns -->
     <div class="mt-4">
         <div class="flex items-center gap-2 mb-2">
             <h4 class="text-sm font-semibold text-gray-700">その他</h4>
@@ -184,7 +184,7 @@
     }
     </script>
 
-    <!-- プレビューエリア -->
+    <!-- Preview area -->
     <div id="prompt-preview" class="mt-4"></div>
 
     <div class="flex justify-end gap-3 mt-4">

@@ -2,27 +2,27 @@
 Login check at the entrance of every request (``AuthMiddleware``).
 
 A plain ASGI middleware (not ``BaseHTTPMiddleware``) so that SSE streams pass
-through untouched. Rules (``functional-design/rules.md``):
+through untouched. Rules:
 
-- BR1.1: deny by default; only :data:`PUBLIC_PATHS` and :data:`PUBLIC_PREFIXES`
+- Deny by default; only :data:`PUBLIC_PATHS` and :data:`PUBLIC_PREFIXES`
   pass without a session. ``tests/api/test_auth_middleware.py`` enumerates
-  every registered route against this list (NFR4.1).
-- BR1.2: not signed in -> ``/api/*`` 401 JSON, htmx 401 + ``HX-Redirect``,
+  every registered route against this list.
+- Not signed in -> ``/api/*`` 401 JSON, htmx 401 + ``HX-Redirect``,
   pages 303 to ``/login?next=...`` (``&reason=expired`` when expired).
-- BR1.9: :data:`PASSIVE_REQUESTS` (SSE streams, polling) do not count as
+- :data:`PASSIVE_REQUESTS` (SSE streams, polling) do not count as
   activity. Each entry is also marked with a comment next to its route.
-- BR1.18 / NFR9.8: Sessions table unreachable -> 503, never "signed in".
-- BR1.20: every signed-in response gets ``Cache-Control: no-store``.
-- BR2.8 (U2, replaces U1's "no role still passes"): a signed-in user without
+- Sessions table unreachable -> 503, never "signed in".
+- Every signed-in response gets ``Cache-Control: no-store``.
+- A signed-in user without
   a role may only use :data:`ROLE_EXEMPT_PATHS`; pages go to the no-role page
   (303), htmx gets ``HX-Redirect``, ``/api/*`` gets 403 ``ROLE_REQUIRED``, and
   ``authz.denied`` (``role_required``) is logged.
 
 The session check is synchronous (DynamoDB / Cognito), so it runs in a worker
 thread (``anyio.to_thread``) and never blocks the event loop; ``/health`` and
-static files are answered before any lookup (``reliability-design.md``).
+static files are answered before any lookup.
 The resolved :class:`~src.models.authz.Principal` is put on
-``request.state.principal`` (contract C1).
+``request.state.principal``.
 """
 
 import random
@@ -55,14 +55,14 @@ if TYPE_CHECKING:
 
 SESSION_COOKIE_NAME = "session_id"
 
-#: URLs reachable without a login (contract C11 ``security: []``).
+#: URLs reachable without a login (``security: []`` in the OpenAPI spec).
 PUBLIC_PATHS: frozenset[str] = frozenset(
     {
         "/health",
         "/api/health",
         "/login",
         "/auth/callback",
-        # U8: the first password change (M3) happens before a session exists
+        # The first password change happens before a session exists
         "/auth/new-password",
         "/signout",
     }
@@ -70,13 +70,13 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
 #: Static assets (CSS / JS only; the login pages need them). Never user data.
 PUBLIC_PREFIXES: tuple[str, ...] = ("/static/",)
 
-#: The no-role page (M4, BR2.8).
+#: The no-role page.
 NO_ROLE_PATH = "/no-role"
 #: URLs a signed-in user *without a role* may use, besides the public ones
-#: above (BR2.8): the no-role page itself and signing out.
+#: above: the no-role page itself and signing out.
 ROLE_EXEMPT_PATHS: frozenset[str] = frozenset({NO_ROLE_PATH, "/signout"})
 
-#: Requests the user did not trigger (BR1.9). ``(method, path pattern)``.
+#: Requests the user did not trigger. ``(method, path pattern)``.
 PASSIVE_REQUESTS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # web/routers/interview.py stream_interview_messages (SSE)
     ("GET", re.compile(r"/interview/[^/]+/stream")),
@@ -86,6 +86,12 @@ PASSIVE_REQUESTS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(r"/survey/persona-data/nemotron-status")),
     # web/routers/api.py get_job (job status polling)
     ("GET", re.compile(r"/api/jobs/[^/]+")),
+    # web/routers/persona_advanced.py generation_events (SSE; checked on connect
+    # only, up to 60 minutes)
+    ("GET", re.compile(r"/persona/advanced/generations/[^/]+/events")),
+    # web/routers/persona_advanced.py get_upload_row (an inspecting row re-reads
+    # itself, hx-trigger="every 2s")
+    ("GET", re.compile(r"/persona/advanced/uploads/[^/]+")),
 )
 
 NO_STORE = "no-store"
@@ -97,12 +103,12 @@ def is_public_path(path: str) -> bool:
 
 
 def is_role_exempt_path(path: str) -> bool:
-    """Whether a signed-in user without a role may use ``path`` (BR2.8)."""
+    """Whether a signed-in user without a role may use ``path``."""
     return is_public_path(path) or path in ROLE_EXEMPT_PATHS
 
 
 def is_passive_request(method: str, path: str) -> bool:
-    """Whether the request is an SSE stream or polling (BR1.9)."""
+    """Whether the request is an SSE stream or polling."""
     return any(
         method == expected and pattern.fullmatch(path)
         for expected, pattern in PASSIVE_REQUESTS
@@ -141,7 +147,7 @@ def _clear_session_cookie(response: Response) -> None:
 def unauthorized_response(
     request: Request, exc: CodedError, *, clear_cookie: bool = False
 ) -> Response:
-    """The not-signed-in answer of BR1.2 for this kind of request.
+    """The not-signed-in answer for this kind of request.
 
     Only ``exc.code`` is read; the exception message never reaches the body.
     """
@@ -174,7 +180,7 @@ def unauthorized_response(
 
 
 def role_required_response(request: Request) -> Response:
-    """The no-role answer of BR2.8: M4 for pages and htmx, 403 for the API."""
+    """The no-role answer: the no-role page for pages and htmx, 403 for the API."""
     response: Response
     if request.url.path.startswith("/api/"):
         code = ErrorCode.ROLE_REQUIRED
@@ -194,7 +200,7 @@ def role_required_response(request: Request) -> Response:
 
 
 def unavailable_response(request: Request) -> Response:
-    """503 when the login cannot be confirmed (BR1.18, NFR9.8)."""
+    """503 when the login cannot be confirmed."""
     error = LookupUnavailableError("login lookup unavailable")
     message = user_message_for(error)
     response: Response
@@ -275,9 +281,9 @@ class AuthMiddleware:
         self._log_timing(started, principal.sub)
         scope.setdefault("state", {})["principal"] = principal
         if not principal.roles and not is_role_exempt_path(scope["path"]):
-            # BR2.8: no role -> only the no-role page. Decided from the session's
+            # No role -> only the no-role page. Decided from the session's
             # roles of this request, so a newly assigned role works after the
-            # next login or token refresh (NFR5.5).
+            # next login or token refresh.
             record_event(
                 "authz.denied",
                 stream=self._log_stream,

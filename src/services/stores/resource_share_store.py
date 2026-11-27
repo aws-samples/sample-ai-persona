@@ -1,14 +1,14 @@
 """
-DynamoDB reads and writes for department sharing (ADR-003, contracts C7, C8).
+DynamoDB reads and writes for department sharing.
 
 ``ResourceShares`` (PK ``group_id``, SK ``{resource_type}#{created_at}#{id}``)
 is an index of ``shared_group_ids`` on the resource bodies. The body column is
 the source of truth; the two are always written in one ``TransactWriteItems``
-conditioned on the value read before (BR1.6, BR4.1). The body tables are
+conditioned on the value read before. The body tables are
 passed in by the caller from ``ResourceSharing``'s registration, so this
 service never imports another service.
 
-Failure classification (``reliability-design.md`` §1). ``TransactWriteItems``
+Failure classification. ``TransactWriteItems``
 reports both a failed condition and a concurrent transaction as
 ``TransactionCanceledException``; ``CancellationReasons`` tells them apart:
 
@@ -194,9 +194,9 @@ class ResourceShareStore:
             resource_type: Type of the body.
             resource_id: ID of the body.
             expected: ``shared_group_ids`` as read (empty = column absent).
-            new: The new set (empty removes the column, BR1.7).
-            created_at: Body ``created_at`` copied into the index (BR1.10).
-            owner_sub: Body ``owner_sub`` copied into the index (BR1.10).
+            new: The new set (empty removes the column).
+            created_at: Body ``created_at`` copied into the index.
+            owner_sub: Body ``owner_sub`` copied into the index.
 
         Raises:
             ShareConditionFailed: The body is gone or its shares changed.
@@ -249,7 +249,7 @@ class ResourceShareStore:
         created_at: str,
         cleanup: Mapping[str, Any],
     ) -> None:
-        """Delete the body and its index items in one transaction (BR4.1).
+        """Delete the body and its index items in one transaction.
 
         Args:
             expected: ``shared_group_ids`` as read.
@@ -361,7 +361,7 @@ class ResourceShareStore:
         limit: int,
         start_key: Mapping[str, Any] | None = None,
     ) -> tuple[list[str], dict[str, Any] | None]:
-        """One newest-first page of ``OwnerIndex`` (BR3.2).
+        """One newest-first page of ``OwnerIndex``.
 
         Returns:
             The IDs and the ``LastEvaluatedKey`` (``None`` on the last page).
@@ -384,7 +384,7 @@ class ResourceShareStore:
         return ids, response.get("LastEvaluatedKey")
 
     def count_owner(self, table: str, owner_sub: str) -> int:
-        """Count the ``OwnerIndex`` entries of ``owner_sub`` (BR3.4)."""
+        """Count the ``OwnerIndex`` entries of ``owner_sub``."""
         return self._count(
             "query",
             TableName=table,
@@ -396,7 +396,7 @@ class ResourceShareStore:
     def query_group(
         self, group_id: str, resource_type: ResourceType
     ) -> list[ResourceShareEntry]:
-        """Every share of one type with one department, newest first (BR3.3).
+        """Every share of one type with one department, newest first.
 
         Strongly consistent: the index is written in the body's transaction.
         """
@@ -446,7 +446,7 @@ class ResourceShareStore:
         attributes: Sequence[str],
         start_key: Mapping[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        """One ``Scan`` page of a body table (BR3.9, ``resource:read_all`` only).
+        """One ``Scan`` page of a body table (``resource:read_all`` only).
 
         Raises:
             ShareStartKeyInvalid: DynamoDB refused ``start_key``.
@@ -463,7 +463,7 @@ class ResourceShareStore:
         return items, response.get("LastEvaluatedKey")
 
     def scan_count(self, table: str) -> int:
-        """Count the items of a body table with ``Scan`` (BR3.4)."""
+        """Count the items of a body table with ``Scan``."""
         return self._count("scan", TableName=table)
 
     def scan_items(self, table: str, attributes: Sequence[str]) -> list[dict[str, Any]]:

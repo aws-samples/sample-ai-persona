@@ -1,4 +1,4 @@
-"""KnowledgeBase / KB の紐付け（PersonaBinding）モデルの単体テスト"""
+"""Unit tests for the KnowledgeBase model and the KB binding (PersonaBinding)."""
 
 from datetime import datetime
 
@@ -74,7 +74,7 @@ class TestKnowledgeBase:
 
 
 class TestPersonaKBBinding:
-    """KB の紐付けは U5 から PersonaBinding（固定キー KB）が持つ。"""
+    """The KB binding is held by PersonaBinding (fixed key KB)."""
 
     def test_create_new(self):
         binding = PersonaBinding.for_kb("persona-1", "kb-1")
@@ -107,7 +107,7 @@ class TestPersonaKBBinding:
 
 
 class TestKnowledgeBaseScope:
-    """U7: 利用範囲（shared_group_ids、BR5.1、約束 C8）。"""
+    """Scope of use (shared_group_ids)."""
 
     def test_new_kb_is_admin_only(self):
         kb = KnowledgeBase.create_new("KB1", "n")

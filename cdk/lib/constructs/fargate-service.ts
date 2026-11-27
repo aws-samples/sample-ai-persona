@@ -8,10 +8,10 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 /**
- * AWS 管理のプレフィックスリスト com.amazonaws.global.cloudfront.origin-facing の ID。
- * CloudFront の VPC オリジンの通信はこの範囲から来る（infrastructure-specification.md）。
- * fromLookup は synth のたびに AWS へ問い合わせるため（CI は AWS に触れない）、リージョンごとの
- * ID を持つ。デプロイ前に次で確かめる:
+ * ID of the AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing.
+ * Traffic from a CloudFront VPC origin comes from this range.
+ * fromLookup queries AWS on every synth (CI never touches AWS), so keep the per-region
+ * IDs here. Verify before deploying with:
  *   aws ec2 describe-managed-prefix-lists --region <region> \
  *     --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
  */
@@ -20,18 +20,18 @@ export const CLOUDFRONT_ORIGIN_FACING_PREFIX_LISTS: Record<string, string> = {
   'us-east-1': 'pl-3b927c52',
 };
 
-/** 公開構成の ALB リスナー（CloudFront の VPC オリジンからの HTTP）。 */
+/** ALB listener for the public configuration (HTTP from the CloudFront VPC origin). */
 const HTTP_LISTENER_PORT = 80;
-/** アプリのコンテナポート。コンテナは非ルートで動くため 1024 以上にする（Dockerfile の EXPOSE と揃える）。 */
+/** App container port. The container runs as non-root, so it is 1024 or above (keep in line with EXPOSE in the Dockerfile). */
 const CONTAINER_PORT = 8080;
 const HTTPS_PORT = 443;
 
 /**
- * 内部 ALB の入口の形（U1 閉域、ADR-005、NFR3.4）。
+ * Shape of the internal ALB entry point.
  *
- * - cloudfront: CloudFront の VPC オリジンからの HTTP 80（公開構成。今のまま）
- * - closed: HTTPS 443 だけ（ACM の証明書、TLS 1.3・1.2）。受け入れの送り元とタスクの外向きは
- *   App スタックが SG に足す（AppStack.wireClosedSecurityGroups）
+ * - cloudfront: HTTP 80 from the CloudFront VPC origin (public configuration)
+ * - closed: HTTPS 443 only (ACM certificate, TLS 1.3 and 1.2). The App stack adds the allowed
+ *   sources and the task egress to the SGs (AppStack.wireClosedSecurityGroups)
  */
 export type FargateIngress = { kind: 'cloudfront' } | { kind: 'closed'; certificateArn: string };
 
@@ -39,35 +39,35 @@ export interface FargateAppServiceProps {
   vpc: ec2.IVpc;
   repository: ecr.IRepository;
   imageTag: string;
-  /** CPU ユニット（1024 = 1 vCPU）。 */
+  /** CPU units (1024 = 1 vCPU). */
   cpu: number;
-  /** メモリ（MiB）。 */
+  /** Memory (MiB). */
   memoryLimitMiB: number;
   desiredCount: number;
   logGroup: logs.ILogGroup;
   environment: Record<string, string>;
   secrets: Record<string, ecs.Secret>;
-  /** 入口の形（既定 cloudfront）。 */
+  /** Entry point shape (default cloudfront). */
   ingress?: FargateIngress;
-  /** ALB とサービスを置くサブネットの種類（既定 PRIVATE_WITH_EGRESS。閉域は PRIVATE_ISOLATED）。 */
+  /** Subnet type for the ALB and service (default PRIVATE_WITH_EGRESS; PRIVATE_ISOLATED for closed). */
   subnetType?: ec2.SubnetType;
   /**
-   * サービス（タスク）だけを置くサブネット（閉域対応 U2 BR2.4）。省略時は ALB と同じ subnetType の
-   * サブネット。閉域で AZ の数 1 のとき、タスクをエンドポイントと同じ AZ に置くために渡す。
+   * Subnets for the service (tasks) only. Defaults to the subnets of the same subnetType as the ALB.
+   * Passed in the closed configuration with one AZ to place tasks in the same AZ as the endpoints.
    */
   serviceSubnets?: ec2.SubnetSelection;
 }
 
 /**
- * アプリの ECS Fargate サービスと内部 ALB（FR9.3、ecs-patterns は使わない）。
+ * The app ECS Fargate service and internal ALB (ecs-patterns is not used).
  *
- * - タスク 1 vCPU / 4 GB、デプロイのサーキットブレーカーと自動ロールバック、
- *   ローリング（最小 100%・最大 200%）、stopTimeout 120 秒
- * - 内部 ALB は HTTP 80、無操作タイムアウト 300 秒（SSE）。ヘルスチェック /health
- * - ターゲット（コンテナ）は HTTP 8080。コンテナは非ルートで動く（Dockerfile の USER）
- * - ALB は CloudFront のプレフィックスリストからの 80 番だけを受け、タスクは ALB からの 8080 だけを受ける
- * - 閉域の入口（ingress.kind = closed）では HTTPS 443 のリスナーだけを作り、タスクの SG を
- *   外向きなしで作る（U1 閉域、BR5.1・BR5.2・BR5.4）
+ * - Task 1 vCPU / 4 GB, deployment circuit breaker with automatic rollback,
+ *   rolling update (min 100%, max 200%), stopTimeout 120 s
+ * - Internal ALB on HTTP 80, idle timeout 300 s (SSE). Health check /health
+ * - Target (container) on HTTP 8080. The container runs as non-root (USER in the Dockerfile)
+ * - The ALB accepts only port 80 from the CloudFront prefix list, and tasks accept only 8080 from the ALB
+ * - With the closed entry point (ingress.kind = closed), only an HTTPS 443 listener is created and the
+ *   task SG is created without egress
  */
 export class FargateAppService extends Construct {
   public readonly cluster: ecs.Cluster;
@@ -76,7 +76,7 @@ export class FargateAppService extends Construct {
   public readonly taskDefinition: ecs.FargateTaskDefinition;
   public readonly loadBalancer: elbv2.ApplicationLoadBalancer;
   public readonly loadBalancerSecurityGroup: ec2.SecurityGroup;
-  /** タスクの SG（公開は FargateService が作るもの、閉域は外向きなしで作るもの）。 */
+  /** Task SG (created by FargateService for public, created without egress for closed). */
   public readonly taskSecurityGroup: ec2.ISecurityGroup;
 
   constructor(scope: Construct, id: string, props: FargateAppServiceProps) {
@@ -124,11 +124,11 @@ export class FargateAppService extends Construct {
           port: HTTPS_PORT,
           protocol: elbv2.ApplicationProtocol.HTTPS,
           certificates: [elbv2.ListenerCertificate.fromArn(ingress.certificateArn)],
-          // ELBSecurityPolicy-TLS13-1-2-2021-06: TLS 1.3 と 1.2 だけ（NFR4.2）
+          // ELBSecurityPolicy-TLS13-1-2-2021-06: TLS 1.3 and 1.2 only
           sslPolicy: elbv2.SslPolicy.RECOMMENDED_TLS,
           open: false,
         });
-    // 閉域のタスクは外へ出る経路を持たない。エンドポイントへの 443 は App スタックが足す（BR5.4）
+    // Closed tasks have no route out. The App stack adds 443 to the endpoints
     const closedTaskSecurityGroup =
       ingress.kind === 'closed'
         ? new ec2.SecurityGroup(this, 'TaskSecurityGroup', {
@@ -165,7 +165,7 @@ export class FargateAppService extends Construct {
     });
     this.taskSecurityGroup = closedTaskSecurityGroup ?? this.service.connections.securityGroups[0];
 
-    // cdk-nag の抑止（U9、NFR7.15）。理由は nag-reasons.ts
+    // cdk-nag suppressions; reasons are in nag-reasons.ts
     acknowledgeAll(this.cluster, ['ECS4'], NAG_REASONS.containerInsights);
     acknowledgeAll(this.loadBalancer, ['ELB2'], NAG_REASONS.accessLogs);
     acknowledgeAll(this.taskDefinition, ['ECS2'], NAG_REASONS.ecsEnvironment);

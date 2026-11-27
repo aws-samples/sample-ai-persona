@@ -1,0 +1,119 @@
+{% from "components/dialog.html" import dialog, dialog_open_button %}
+{% from "components/datetime.html" import iso_datetime %}
+{% from "components/icons.html" import icon_check_circle, icon_x_circle %}
+{% from "persona/partials/advanced_labels.html" import encoding_label, type_label, format_label, man_chars %}
+{#
+  One file row of section A. Column names, values, and file names are output as data with auto-escaping (the safe filter is not used). Status is shown in text, not only by color.
+  Rows being checked are re-read by advanced-upload.js every 2 seconds and given up after 15 minutes.
+  Arguments:
+    source_file ... SourceFile
+    item        ... SourceFileListItem (display name, planned deletion day, in use, selectable)
+    row_error   ... message for an error (resolved from the error code)
+    stuck       ... whether a check has been stalled for 15 minutes or more (can be deleted)
+#}
+{% set f = source_file %}
+{% set state = f.status.value %}
+{% set m = f.metadata %}
+{% set tm = f.table_metadata %}
+{% set dm = f.document_metadata %}
+{% set name = item.display_name %}
+{% set deletable = state in ("ready", "error", "deleting") or (state == "inspecting" and stuck) %}
+<tr data-testid="advanced-upload-row" data-source-file-id="{{ f.source_file_id }}" data-state="{{ state }}"
+    data-kind="{{ f.kind.value }}"{% if dm %} data-estimated-chars="{{ dm.estimated_chars }}"{% endif %}
+    data-display-name="{{ name }}" class="border-b align-top">
+    <td class="py-2 pr-3 whitespace-nowrap">
+        {% if item.selectable and m %}
+        {# One table and any number of documents can be selected (the server rejects two tables). #}
+        <input type="checkbox" name="source_file_ids" value="{{ f.source_file_id }}" id="advanced-use-{{ f.source_file_id }}"
+               data-testid="advanced-upload-select" data-kind="{{ f.kind.value }}" class="w-4 h-4">
+        <label for="advanced-use-{{ f.source_file_id }}" class="sr-only">{{ name }}を今回の生成に使う</label>
+        {% else %}
+        <span class="sr-only">選べません</span>
+        {% endif %}
+    </td>
+    <td class="py-2 pr-3 break-all"><span data-role="name">{{ name }}</span> <span class="text-gray-500 whitespace-nowrap">（{{ "%.1f" | format(f.size_bytes / 1000000) }}MB）</span></td>
+    <td class="py-2 pr-3" data-testid="advanced-upload-status">
+        {% if state == "ready" and tm %}
+        <span class="flex items-center gap-1 text-green-800">{{ icon_check_circle("w-4 h-4") }} 準備OK</span>
+        <span class="block text-xs text-gray-600">{{ tm.columns | length }} 列 / 約 {{ "{:,}".format(tm.estimated_rows) }} 行 / {{ encoding_label(tm.encoding.value) }}</span>
+        {% if item.in_use %}<span class="block text-gray-700" data-testid="advanced-upload-in-use">生成中</span>{% endif %}
+        {% elif state == "ready" and dm %}
+        {# Estimated format and character count. Page and character counts are fixed in preprocessing. #}
+        <span class="flex items-center gap-1 text-green-800">{{ icon_check_circle("w-4 h-4") }} 準備OK</span>
+        <span class="block text-xs text-gray-600" data-testid="advanced-document-summary">{{ format_label(dm.format.value) }} / 約 {{ man_chars(dm.estimated_chars) }} 万字の見込み</span>
+        <span class="block text-xs text-gray-600">ページ数と文字数は前準備で確定します</span>
+        {% if item.in_use %}<span class="block text-gray-700" data-testid="advanced-upload-in-use">生成中</span>{% endif %}
+        {% elif state == "error" %}
+        <span class="inline-flex items-start gap-1 text-red-800">{{ icon_x_circle("w-4 h-4") }} エラー: {{ row_error }}</span>
+        {% elif state == "deleting" %}
+        <span class="inline-flex items-start gap-1 text-red-800" data-testid="advanced-upload-delete-failed">{{ icon_x_circle("w-4 h-4") }} 削除できませんでした。もう一度削除してください</span>
+        {% elif state == "inspecting" %}
+        <span data-role="status">{% if stuck %}検査が止まりました。確定し直すか、削除してください{% else %}検査中{% endif %}</span>
+        {% else %}
+        <span>アップロード中</span>
+        {% endif %}
+    </td>
+    <td class="py-2 pr-3 whitespace-nowrap" data-testid="advanced-upload-expiry">
+        {% if item.expires_on %}
+        {% if f.expires_at %}<time datetime="{{ iso_datetime(f.expires_at) }}" data-fmt="date">{{ item.expires_on.strftime("%Y/%m/%d") }}</time>{% else %}{{ item.expires_on.strftime("%Y/%m/%d") }}{% endif %}
+        {% else %}<span class="sr-only">まだ決まっていません</span>{% endif %}
+    </td>
+    <td class="py-2">
+        <div class="flex flex-wrap items-start gap-x-3 gap-y-1 whitespace-nowrap">
+        {% if state == "ready" and tm %}
+        {{ dialog_open_button("advanced-columns-" ~ f.source_file_id, "プレビュー", "text-sm text-blue-700 underline hover:text-blue-900") }}
+        {% call dialog("advanced-columns-" ~ f.source_file_id, name ~ " の列", panel_class="max-w-3xl") %}
+        <p class="text-sm text-gray-700 mb-3">文字コード {{ encoding_label(m.encoding.value) }} / 区切り {{ "タブ" if m.delimiter == "\t" else "カンマ" }} / 約 {{ "{:,}".format(m.estimated_rows) }} 行（見込み）</p>
+        <table class="w-full text-sm mb-4" data-testid="advanced-columns-table">
+            <caption class="sr-only">列名と推定した型</caption>
+            <thead><tr class="text-left border-b"><th scope="col" class="py-1 pr-2">列名</th><th scope="col" class="py-1">推定した型</th></tr></thead>
+            <tbody>
+                {% for column in m.columns %}
+                <tr class="border-b"><td class="py-1 pr-2">{{ column.name }}</td><td class="py-1">{{ type_label(column.inferred_type) }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <div class="overflow-x-auto" tabindex="0" role="region" aria-label="先頭 {{ m.sample_rows | length }} 行">
+            <table class="text-sm" data-testid="advanced-sample-table">
+                <caption class="text-left font-medium mb-1">先頭 {{ m.sample_rows | length }} 行</caption>
+                <thead><tr class="text-left border-b">{% for column in m.columns[:50] %}<th scope="col" class="py-1 pr-3 whitespace-nowrap">{{ column.name }}</th>{% endfor %}</tr></thead>
+                <tbody>
+                    {% for row in m.sample_rows %}
+                    <tr class="border-b">{% for cell in row %}<td class="py-1 pr-3 whitespace-nowrap">{{ cell }}</td>{% endfor %}</tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="text-xs text-gray-600 mt-3">行数は先頭の行から見積もった値です。前準備で確定します。</p>
+        <div class="mt-4 text-right">
+            <button type="button" data-dialog-close class="px-4 py-2 text-sm border border-gray-300 rounded-md">閉じる</button>
+        </div>
+        {% endcall %}
+        {% endif %}
+        {% if state == "inspecting" and stuck %}
+        <button type="button" data-testid="advanced-upload-recomplete" data-action="recomplete"
+                class="text-sm text-blue-700 underline hover:text-blue-900">確定し直す</button>
+        {% endif %}
+        {% if deletable and item.in_use %}
+        <button type="button" data-testid="advanced-source-delete-open" aria-disabled="true" aria-label="{{ name }} を削除"
+                aria-describedby="advanced-delete-reason-{{ f.source_file_id }}"
+                class="text-sm text-gray-400 underline cursor-not-allowed">削除</button>
+        <span id="advanced-delete-reason-{{ f.source_file_id }}" class="block text-xs text-gray-600">生成中のため削除できません</span>
+        {% elif deletable %}
+        <button type="button" aria-haspopup="dialog" data-dialog-open="advanced-delete-{{ f.source_file_id }}"
+                data-testid="advanced-source-delete-open" aria-label="{{ name }} を削除"
+                class="text-sm text-red-700 underline hover:text-red-900">削除</button>
+        {% call dialog("advanced-delete-" ~ f.source_file_id, name ~ " を削除しますか", describedby="advanced-delete-note-" ~ f.source_file_id) %}
+        <p id="advanced-delete-note-{{ f.source_file_id }}" class="text-sm text-gray-700 mb-4">上げたファイルと検査の結果を消します。元に戻せません。このファイルから作って保存したペルソナと分析の記録は残ります。</p>
+        <div class="flex justify-end gap-2">
+            <button type="button" data-dialog-close class="px-4 py-2 text-sm border border-gray-300 rounded-md">やめる</button>
+            <button type="button" data-testid="advanced-source-delete-confirm"
+                    hx-delete="/persona/advanced/sources/{{ f.source_file_id }}"
+                    hx-target="closest tr" hx-swap="outerHTML"
+                    class="px-4 py-2 text-sm text-white bg-red-700 rounded-md hover:bg-red-800">削除する</button>
+        </div>
+        {% endcall %}
+        {% endif %}
+        </div>
+    </td>
+</tr>

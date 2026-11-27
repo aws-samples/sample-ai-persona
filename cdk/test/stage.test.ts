@@ -7,14 +7,13 @@ import { devParameter } from '../parameters';
 import { closedContext } from './helpers/stages';
 
 /**
- * Stage AIPersonaDev とコンテキストの検査。FR1.9、FR9.1、FR9.2、ADR-001、NFR9.3、
- * Infrastructure Design レビュー R-09（imageTag なしでも synth は通す）。
- * U9: bin/app.ts とテストが同じ組み立て（createDevStage）を通る（NFR7.15）。
- * U1 閉域: 公開の Stage は deploymentMode=closed を拒み（BR1.2）、閉域の Stage は閉域の
- * パラメータがあるときだけ createClosedDevStage が作る（BR1.1）。閉域の中身は closed-stage.test.ts。
+ * Checks of the Stage AIPersonaDev and its context. The synth also passes without imageTag.
+ * bin/app.ts and the tests go through the same assembly (createDevStage).
+ * The public Stage rejects deploymentMode=closed, and the closed Stage is created by
+ * createClosedDevStage only when the closed parameters are given. The closed contents are in closed-stage.test.ts.
  */
 
-// Stage を 2 通り synth するテストがあるため、既定の 5 秒では足りない
+// Some tests synth two Stages, so the default 5 seconds is not enough
 jest.setTimeout(60_000);
 
 const ACCOUNT = '123456789012';

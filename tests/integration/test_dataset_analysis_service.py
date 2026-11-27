@@ -1,4 +1,4 @@
-"""DatasetAnalysisService（build_binding_tools / build_source_tools）単体テスト。"""
+"""Unit tests for DatasetAnalysisService (build_binding_tools / build_source_tools)."""
 
 from datetime import datetime
 
@@ -58,11 +58,11 @@ class TestBuildBindingTools:
         assert d["alias"] == "dataset_1"
         assert d["name"] == "購買データ"
         assert d["row_count"] == 500
-        # columns は {name, data_type, description} の dict リスト
+        # columns is a list of {name, data_type, description} dicts
         col_names = [c["name"] for c in d["columns"]]
         assert "amount" in col_names
         assert any(c["data_type"] == "integer" for c in d["columns"])
-        # descriptor は backend_path / forced_filter 値を含まない
+        # The descriptor contains no backend_path / forced_filter values
         assert "s3_path" not in d and "backend_path" not in d
         assert "binding_keys" not in d and "U1" not in str(d)
 
@@ -75,12 +75,12 @@ class TestBuildBindingTools:
             ],
             [_dataset("ds-1"), _dataset("ds-2", name="行動ログ")],
         )
-        # 単一ツール（analyze_dataset 名は 1 個）
+        # A single tool (one analyze_dataset name)
         assert len(tools) == 1
         assert tools[0].tool_spec["name"] == "analyze_dataset"
         aliases = {d["alias"] for d in descriptors}
         assert aliases == {"dataset_1", "dataset_2"}
-        # 両方 alias で参照可能
+        # Both can be referenced by alias
         _fn(tools[0])(dataset_id="dataset_1")
         _fn(tools[0])(dataset_id="dataset_2")
 
@@ -129,7 +129,7 @@ class TestBuildSourceTools:
         assert backend.calls[1]["source"] == "/tmp/b.csv"
 
     def test_alias_not_reassigned_by_service(self):
-        # Service は Manager が採番した別名を保持するだけ（再採番しない）。
+        # The Service only keeps the alias the Manager assigned (it does not reassign).
         svc = _service()
         tools = svc.build_source_tools(
             [{"alias": "source_7", "path": "/tmp/x.csv", "columns": ["c"]}]
@@ -153,8 +153,8 @@ class TestBuildSourceTools:
 
 class TestConcurrencyWiring:
     def test_max_concurrent_queries_reaches_default_backend(self):
-        # 明示 backend を渡さない経路で、設定値が DuckDB backend の semaphore
-        # 上限（_value）へ伝播することを確認する。
+        # On the path with no explicit backend, check that the configured value
+        # propagates to the DuckDB backend's semaphore limit (_value).
         svc = DatasetAnalysisService(max_concurrent_queries=7)
         assert isinstance(svc.backend, DuckDBQueryBackend)
         assert svc.backend._sem._value == 7
@@ -165,7 +165,7 @@ class TestConcurrencyWiring:
         assert svc.backend._sem._value == 4
 
     def test_injected_backend_ignores_max_concurrent(self):
-        # backend 注入時は注入側の設定を尊重し、引数で上書きしない。
+        # When a backend is injected, respect its settings and do not override via arguments.
         backend = RecordingBackend()
         svc = DatasetAnalysisService(backend=backend, max_concurrent_queries=7)
         assert svc.backend is backend

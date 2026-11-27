@@ -40,7 +40,7 @@ class ErrorKind(StrEnum):
     #: May succeed on retry. Show it without destroying the user's input.
     TRANSIENT = "transient"
     #: The user must sign in (again). Pages move to the login screen, htmx gets
-    #: ``HX-Redirect``, the JSON API answers 401 (contract C5 / C13).
+    #: ``HX-Redirect``, the JSON API answers 401.
     UNAUTHORIZED = "unauthorized"
     #: Signed in but not allowed. Answer 403 without replacing the page body.
     FORBIDDEN = "forbidden"
@@ -98,77 +98,77 @@ class ErrorCode(StrEnum):
     NETWORK_ERROR = ("network_error", ErrorKind.TRANSIENT)
     JOB_NOT_FOUND = ("job_not_found", ErrorKind.NOT_FOUND)
 
-    # --- Login (v1.0.0 U1; the part of contract C5 that U1 uses) ---
-    # No valid LoginSession on a URL that requires one (BR1.1, BR1.2).
+    # --- Login ---
+    # No valid LoginSession on a URL that requires one.
     AUTH_REQUIRED = ("auth_required", ErrorKind.UNAUTHORIZED)
-    # The session hit the 8-hour idle or 7-day absolute limit (BR1.7, BR1.8).
+    # The session hit the 8-hour idle or 7-day absolute limit.
     SESSION_EXPIRED = ("session_expired", ErrorKind.UNAUTHORIZED)
-    # A state-changing request without the custom header or own Origin (BR1.19).
+    # A state-changing request without the custom header or own Origin.
     CSRF_FAILED = ("csrf_failed", ErrorKind.FORBIDDEN)
     # The lookup needed to decide (Sessions table, Cognito) is unreachable;
-    # fail closed with 503 instead of treating the user as signed in (BR1.18).
+    # fail closed with 503 instead of treating the user as signed in.
     LOOKUP_UNAVAILABLE = ("lookup_unavailable", ErrorKind.TRANSIENT)
     # Login settings are missing or malformed (AUTH_MODE, token key list).
-    # Only an operator can fix it; the app refuses to start (BR1.15).
+    # Only an operator can fix it; the app refuses to start.
     AUTH_CONFIG_INVALID = ("auth_config_invalid", ErrorKind.CONFIG)
 
-    # --- Closed-network login (v1.0.0 U8, AUTH_MODE=admin_api; contract C5) ---
-    # M2 and M3 are full-page forms: VALIDATION and TRANSIENT are both shown
-    # inside the form, never as a toast (there is no page header before login).
+    # --- Closed-network login (AUTH_MODE=admin_api) ---
+    # The login and first-password forms are full-page forms: VALIDATION and TRANSIENT
+    # are both shown inside the form, never as a toast (there is no page header
+    # before login).
     # Wrong password, disabled / unknown user, reset required, bad input,
-    # unsupported challenge or an unacceptable ID token: one answer (BR1.4).
+    # unsupported challenge or an unacceptable ID token: one answer.
     LOGIN_FAILED = ("login_failed", ErrorKind.VALIDATION)
-    # Cognito's attempt limit or throttling (BR1.5).
+    # Cognito's attempt limit or throttling.
     LOGIN_RATE_LIMITED = ("login_rate_limited", ErrorKind.TRANSIENT)
     # Cognito unreachable, timed out, 5xx, breaker open, or an unexpected
-    # answer; never treated as success (BR1.5, NFR4.22).
+    # answer; never treated as success.
     LOGIN_UNAVAILABLE = ("login_unavailable", ErrorKind.TRANSIENT)
-    # The new password misses a rule of the User Pool (BR2.5, BR2.6).
+    # The new password misses a rule of the User Pool.
     PASSWORD_POLICY_NOT_MET = ("password_policy_not_met", ErrorKind.VALIDATION)
-    # The confirmation field differs from the new password (BR2.5).
+    # The confirmation field differs from the new password.
     PASSWORD_CONFIRMATION_MISMATCH = (
         "password_confirmation_mismatch",
         ErrorKind.VALIDATION,
     )
-    # The first-password-change challenge expired or was used (BR2.4, BR2.7):
+    # The first-password-change challenge expired or was used:
     # start again from the login screen.
     LOGIN_CHALLENGE_EXPIRED = ("login_challenge_expired", ErrorKind.UNAUTHORIZED)
 
-    # --- Authorization (v1.0.0 U2; the rest of contract C5) ---
-    # Signed in without any role: only the no-role page is usable (BR2.8).
+    # --- Authorization ---
+    # Signed in without any role: only the no-role page is usable.
     ROLE_REQUIRED = ("role_required", ErrorKind.FORBIDDEN)
     # The user can read the target but not manage it, or lacks the permission
-    # for the operation (BR2.2, BR2.7).
+    # for the operation.
     ACCESS_DENIED = ("access_denied", ErrorKind.FORBIDDEN)
-    # The JSON API request did not match its schema (422, contract C13).
+    # The JSON API request did not match its schema (422).
     REQUEST_INVALID = ("request_invalid", ErrorKind.VALIDATION)
     # Another send (another task, or a double click) is answering in the same
     # interview session, or a save arrived while a reply is in progress. Waiting
-    # for the reply and trying again resolves it (contract C5, ADR-004, U6
-    # NFR1.59 / NFR1.60). The input is kept (toast).
+    # for the reply and trying again resolves it. The input is kept (toast).
     CONCURRENT_UPDATE = ("concurrent_update", ErrorKind.TRANSIENT)
     # FastAPI's own HTTPException (unknown URL 404, 405, ...) carried in the
-    # JSON API body. The HTTP status stays as raised (contract C13).
+    # JSON API body. The HTTP status stays as raised.
     HTTP_ERROR = ("http_error", ErrorKind.NOT_FOUND)
 
-    # --- Department sharing (v1.0.0 U4, functional-spec.md §5) ---
+    # --- Department sharing ---
     # A department outside the user's choices was added or removed, a removed
-    # department no longer exists, or the same one is added and removed (BR1.2,
-    # BR1.5). Reachable only through a tampered form; nothing is written.
+    # department no longer exists, or the same one is added and removed.
+    # Reachable only through a tampered form; nothing is written.
     SHARE_SCOPE_INVALID = ("share_scope_invalid", ErrorKind.VALIDATION)
-    # The user belongs to no department, so there is nothing to choose (BR1.4).
+    # The user belongs to no department, so there is nothing to choose.
     SHARE_NO_DEPARTMENT = ("share_no_department", ErrorKind.VALIDATION)
-    # The resource has no owner_sub (made before v1.0.0); it cannot be shared
-    # (BR1.10).
+    # The resource has no owner_sub (created before owners were recorded); it
+    # cannot be shared.
     SHARE_OWNER_MISSING = ("share_owner_missing", ErrorKind.VALIDATION)
-    # A bulk share without any target (BR2.1).
+    # A bulk share without any target.
     SHARE_NO_TARGET = ("share_no_target", ErrorKind.VALIDATION)
-    # More than 100 targets in one bulk share (BR2.1).
+    # More than 100 targets in one bulk share.
     SHARE_TOO_MANY_TARGETS = ("share_too_many_targets", ErrorKind.CAPACITY)
-    # A resource would be shared with more than 99 departments (BR1.11).
+    # A resource would be shared with more than 99 departments.
     SHARE_TOO_MANY_GROUPS = ("share_too_many_groups", ErrorKind.CAPACITY)
     # Concurrent changes kept the conditional write from succeeding three
-    # times, or DynamoDB failed (BR1.9). Retrying can succeed.
+    # times, or DynamoDB failed. Retrying can succeed.
     SHARE_UPDATE_FAILED = ("share_update_failed", ErrorKind.TRANSIENT)
 
     # --- Generation capacity ---
@@ -188,7 +188,7 @@ class ErrorCode(StrEnum):
         ErrorKind.VALIDATION,
     )
     GENERATION_FILES_REQUIRED = ("generation_files_required", ErrorKind.VALIDATION)
-    # Generated personas wait in PersonaCandidates (8 hours, U5 BR1.3) until
+    # Generated personas wait in PersonaCandidates (8 hours) until
     # the user who generated them saves them. An expired, someone else's or
     # already-being-saved candidate all get this code (they are not told
     # apart). Retrying "save" cannot recover it and no input fixes it either;
@@ -198,7 +198,7 @@ class ErrorCode(StrEnum):
         "generation_persona_cache_expired",
         ErrorKind.NOT_FOUND,
     )
-    # One candidate would exceed the 350KB item limit (U5 BR1.6). The user
+    # One candidate would exceed the 350KB item limit. The user
     # generates fewer personas or changes the conditions.
     GENERATION_RESULT_TOO_LARGE = ("generation_result_too_large", ErrorKind.CAPACITY)
     # Catch-all for generation failures that are not capacity-related (agent
@@ -207,6 +207,95 @@ class ErrorCode(StrEnum):
         "generation_operation_failed",
         ErrorKind.TRANSIENT,
     )
+
+    # --- Advanced generation (beta) ---
+    # GENERATION_RESULT_TOO_LARGE (above) is reused for the result size limits.
+    # The user does not meet the release conditions (environment, sandbox,
+    # audience); only an operator or administrator can change that.
+    ADVANCED_GENERATION_UNAVAILABLE = (
+        "advanced_generation_unavailable",
+        ErrorKind.CONFIG,
+    )
+    # Every generation slot of this task is taken; retry later.
+    ADVANCED_GENERATION_BUSY = ("advanced_generation_busy", ErrorKind.TRANSIENT)
+    # The user already has a running generation.
+    ADVANCED_GENERATION_ALREADY_RUNNING = (
+        "advanced_generation_already_running",
+        ErrorKind.TRANSIENT,
+    )
+    # Wrong format, undecidable encoding, two tables chosen, a part number out
+    # of range, or too many URL refreshes.
+    UPLOAD_SOURCE_INVALID = ("upload_source_invalid", ErrorKind.VALIDATION)
+    UPLOAD_TOO_LARGE = ("upload_too_large", ErrorKind.CAPACITY)
+    UPLOAD_TOO_MANY_FILES = ("upload_too_many_files", ErrorKind.CAPACITY)
+    # Someone else's, missing or already completed upload (not told apart).
+    UPLOAD_NOT_FOUND = ("upload_not_found", ErrorKind.NOT_FOUND)
+    # A running generation uses the file; wait until it ends.
+    SOURCE_FILE_IN_USE = ("source_file_in_use", ErrorKind.TRANSIENT)
+    # What the inspection of the head found, one code per fix.
+    SOURCE_EMPTY_COLUMN_NAME = ("source_empty_column_name", ErrorKind.VALIDATION)
+    SOURCE_DUPLICATE_COLUMN_NAME = (
+        "source_duplicate_column_name",
+        ErrorKind.VALIDATION,
+    )
+    SOURCE_ENCODING_UNKNOWN = ("source_encoding_unknown", ErrorKind.VALIDATION)
+    SOURCE_NOT_A_TABLE = ("source_not_a_table", ErrorKind.VALIDATION)
+    # The bytes do not match the document's extension.
+    SOURCE_NOT_A_DOCUMENT = ("source_not_a_document", ErrorKind.VALIDATION)
+    # A password-protected PDF, or an OLE file (an encrypted docx or an
+    # old .doc that cannot be told apart).
+    DOCUMENT_ENCRYPTED = ("document_encrypted", ErrorKind.VALIDATION)
+    # No page of a document holds text; the user removes the file.
+    DOCUMENT_NO_TEXT = ("document_no_text", ErrorKind.VALIDATION)
+    # The documents' settled characters exceed the limit.
+    GENERATION_SOURCE_TOO_LARGE = ("generation_source_too_large", ErrorKind.CAPACITY)
+    # The chosen file is not the user's ready table.
+    GENERATION_SOURCE_NOT_FOUND = ("generation_source_not_found", ErrorKind.NOT_FOUND)
+    # Someone else's or missing generation (events, record, save).
+    GENERATION_NOT_FOUND = ("generation_not_found", ErrorKind.NOT_FOUND)
+    # More than 24 hours since it finished; the user generates again.
+    GENERATION_EXPIRED = ("generation_expired", ErrorKind.NOT_FOUND)
+    # The preparation could not read the table.
+    GENERATION_SOURCE_UNREADABLE = (
+        "generation_source_unreadable",
+        ErrorKind.VALIDATION,
+    )
+    # The preparation ran out of memory or disk.
+    GENERATION_CAPACITY = ("generation_capacity", ErrorKind.CAPACITY)
+    # Fewer rows than persona count x 10 after the preparation.
+    GENERATION_INSUFFICIENT_DATA = (
+        "generation_insufficient_data",
+        ErrorKind.VALIDATION,
+    )
+    # No segment, or clustering failed twice.
+    GENERATION_ANALYSIS_FAILED = ("generation_analysis_failed", ErrorKind.VALIDATION)
+    # The result did not pass the verification.
+    GENERATION_VERIFICATION_FAILED = (
+        "generation_verification_failed",
+        ErrorKind.VALIDATION,
+    )
+    # The whole generation took more than 60 minutes.
+    GENERATION_TIMEOUT = ("generation_timeout", ErrorKind.TRANSIENT)
+    # Code Interpreter or the model failed after retries.
+    GENERATION_SANDBOX_UNAVAILABLE = (
+        "generation_sandbox_unavailable",
+        ErrorKind.TRANSIENT,
+    )
+    # The instruction is longer than PURPOSE_MAX_CHARS.
+    GENERATION_PURPOSE_TOO_LONG = ("generation_purpose_too_long", ErrorKind.VALIDATION)
+    # --- Plan approval and cancel ---
+    # No heartbeat for 5 minutes: the task running it is gone; start again.
+    GENERATION_STALLED = ("generation_stalled", ErrorKind.TRANSIENT)
+    # An approve / replan for a generation not waiting for the plan, or with
+    # a cancel pending; the user looks at the progress again.
+    GENERATION_NOT_AWAITING_PLAN = (
+        "generation_not_awaiting_plan",
+        ErrorKind.TRANSIENT,
+    )
+    # A cancel for a generation that has already ended.
+    GENERATION_ALREADY_FINISHED = ("generation_already_finished", ErrorKind.TRANSIENT)
+    # A chosen file is still uploading or being inspected; wait.
+    GENERATION_SOURCE_NOT_READY = ("generation_source_not_ready", ErrorKind.TRANSIENT)
 
     # --- Files ---
     FILE_TOO_LARGE = ("file_too_large", ErrorKind.CAPACITY)
@@ -233,12 +322,12 @@ class ErrorCode(StrEnum):
     # Catch-all for file operations that failed for internal reasons.
     FILE_OPERATION_FAILED = ("file_operation_failed", ErrorKind.TRANSIENT)
     # An upload that does not exist, is someone else's, has expired or is
-    # already attached (U5 BR5.3〜BR5.5, BR5.7). Not told apart (NFR1.14).
+    # already attached. Not told apart.
     FILE_NOT_FOUND = ("file_not_found", ErrorKind.NOT_FOUND)
-    # More than 100 files attached to one parent (the transaction limit,
-    # security-design.md §3). The user attaches fewer files.
+    # More than 100 files attached to one parent (the transaction limit).
+    # The user attaches fewer files.
     FILE_ATTACH_LIMIT_EXCEEDED = ("file_attach_limit_exceeded", ErrorKind.CAPACITY)
-    # Closed network U4 (BR2.3): a stored file is above the limit for streaming
+    # Closed network: a stored file is above the limit for streaming
     # it through the app. The user cannot fix a stored file, so an operator
     # handles it (CONFIG, not CAPACITY).
     ASSET_TOO_LARGE = ("asset_too_large", ErrorKind.CONFIG)
@@ -322,41 +411,41 @@ class ErrorCode(StrEnum):
         "survey_dataset_not_downloaded",
         ErrorKind.CONFIG,
     )
-    # Closed network U3: the Parquet must be placed beforehand and is not at
+    # Closed network: the Parquet must be placed beforehand and is not at
     # NEMOTRON_DATASET_KEY. An operator places it (the docs/closed_network.md procedure);
     # the settings screen cannot fix it.
     NEMOTRON_DATASET_NOT_PLACED = ("nemotron_dataset_not_placed", ErrorKind.CONFIG)
-    # Closed network U3: this environment never downloads from Hugging Face.
+    # Closed network: this environment never downloads from Hugging Face.
     NEMOTRON_DOWNLOAD_NOT_ALLOWED = (
         "nemotron_download_not_allowed",
         ErrorKind.FORBIDDEN,
     )
     # Batch inference codes. No new code raises them since surveys run on Step
     # Functions; records that failed before the switch still hold them, so they
-    # stay readable with ``parse()`` and keep their wording (FR11.2).
+    # stay readable with ``parse()`` and keep their wording.
     SURVEY_BATCH_ROLE_NOT_CONFIGURED = (
         "survey_batch_role_not_configured",
         ErrorKind.CONFIG,
     )
     SURVEY_BATCH_JOB_FAILED = ("survey_batch_job_failed", ErrorKind.TRANSIENT)
     SURVEY_BATCH_JOB_TIMED_OUT = ("survey_batch_job_timed_out", ErrorKind.TRANSIENT)
-    # --- Surveys on Step Functions (functional-spec.md ch.3) ---
-    # No state machine (or lease table) is configured, e.g. local runs (BR9.1).
+    # --- Surveys on Step Functions ---
+    # No state machine (or lease table) is configured, e.g. local runs.
     SURVEY_RUNNER_NOT_CONFIGURED = ("survey_runner_not_configured", ErrorKind.CONFIG)
-    # Starting kept failing on permissions or configuration for 30 minutes
-    # (NFR4.9a); an operator has to fix the deployment.
+    # Starting kept failing on permissions or configuration for 30 minutes;
+    # an operator has to fix the deployment.
     SURVEY_RUNNER_UNAVAILABLE = ("survey_runner_unavailable", ErrorKind.CONFIG)
-    # The execution ended FAILED or ABORTED (BR3.4).
+    # The execution ended FAILED or ABORTED.
     SURVEY_INFERENCE_FAILED = ("survey_inference_failed", ErrorKind.TRANSIENT)
-    # The execution ran past its time limit (BR3.3).
+    # The execution ran past its time limit.
     SURVEY_EXECUTION_TIMED_OUT = ("survey_execution_timed_out", ErrorKind.TRANSIENT)
-    # More than 5% of the answers (or all of them) could not be had (BR4.5).
+    # More than 5% of the answers (or all of them) could not be had.
     # Context: ``failed_count``, ``total``.
     SURVEY_TOO_MANY_FAILED_ANSWERS = (
         "survey_too_many_failed_answers",
         ErrorKind.TRANSIENT,
     )
-    # Running or pending when the switch happened; it can never finish (BR8.1).
+    # Running or pending when the switch happened; it can never finish.
     SURVEY_EXECUTION_INTERRUPTED = (
         "survey_execution_interrupted",
         ErrorKind.TRANSIENT,
@@ -377,19 +466,19 @@ class ErrorCode(StrEnum):
     # Catch-alls for survey operations that failed for internal reasons.
     SURVEY_OPERATION_FAILED = ("survey_operation_failed", ErrorKind.TRANSIENT)
     SURVEY_EXECUTION_FAILED = ("survey_execution_failed", ErrorKind.TRANSIENT)
-    # U7 (NFR2.25): a template body over 200KB, or a survey body (with its
+    # A template body over 200KB, or a survey body (with its
     # template snapshot) over 350KB. The user shortens the questions.
     SURVEY_TEMPLATE_TOO_LARGE = ("survey_template_too_large", ErrorKind.CAPACITY)
-    # U7 (NFR2.25): the insight report would push the survey body over 350KB.
+    # The insight report would push the survey body over 350KB.
     SURVEY_REPORT_TOO_LARGE = ("survey_report_too_large", ErrorKind.CAPACITY)
-    # U7 (BR2.2 (b)): an image of the template snapshot could not be read while
+    # An image of the template snapshot could not be read while
     # the survey ran. The survey stops instead of answering without the image.
     SURVEY_TEMPLATE_IMAGE_UNAVAILABLE = (
         "survey_template_image_unavailable",
         ErrorKind.TRANSIENT,
     )
-    # --- Custom persona data (U7, BR4.2〜BR4.4) ---
-    # Missing, or outside the user's usage scope (not told apart, NFR1.79).
+    # --- Custom persona data ---
+    # Missing, or outside the user's usage scope (not told apart).
     CUSTOM_PERSONA_DATA_NOT_FOUND = (
         "custom_persona_data_not_found",
         ErrorKind.NOT_FOUND,
@@ -402,10 +491,13 @@ class ErrorCode(StrEnum):
         "custom_persona_data_name_taken",
         ErrorKind.VALIDATION,
     )
-    # --- Settings (U7, BR3.1) ---
+    # --- Settings ---
     # A settings screen or API for a user without ``settings:manage``: the same
     # 404 as a missing page, so the screen's existence is not revealed.
     SETTINGS_NOT_FOUND = ("settings_not_found", ErrorKind.NOT_FOUND)
+    # Someone saved the advanced generation setting first; the
+    # section is shown again with the latest values and saved once more.
+    SETTINGS_VERSION_CONFLICT = ("settings_version_conflict", ErrorKind.TRANSIENT)
 
     # --- Personas ---
     # Field-level validation is expressed as a validation *kind* plus a stable
@@ -459,7 +551,7 @@ class ErrorCode(StrEnum):
     DATASET_COLUMN_NOT_FOUND = ("dataset_column_not_found", ErrorKind.VALIDATION)
     DATASET_NOT_FOUND = ("dataset_not_found", ErrorKind.NOT_FOUND)
     DATASET_BINDING_NOT_FOUND = ("dataset_binding_not_found", ErrorKind.NOT_FOUND)
-    # The persona has no knowledge-base binding to remove (U5 BR2.5).
+    # The persona has no knowledge-base binding to remove.
     KB_BINDING_NOT_FOUND = ("kb_binding_not_found", ErrorKind.NOT_FOUND)
     # Catch-all for dataset operations that failed for internal reasons
     # (including a binding referencing a column that no longer passes the
@@ -521,7 +613,7 @@ class ErrorCode(StrEnum):
         ErrorKind.CAPACITY,
     )
     DISCUSSION_NOT_FOUND = ("discussion_not_found", ErrorKind.NOT_FOUND)
-    # The body of the discussion would exceed 350KB (BR2.7, U6). Fewer
+    # The body of the discussion would exceed 350KB. Fewer
     # insights or attachments make it fit; nothing was written.
     DISCUSSION_TOO_LARGE = ("discussion_too_large", ErrorKind.CAPACITY)
     DISCUSSION_ROUNDS_TOO_FEW = ("discussion_rounds_too_few", ErrorKind.VALIDATION)
@@ -555,19 +647,20 @@ class ErrorCode(StrEnum):
         "discussion_memory_mode_invalid",
         ErrorKind.VALIDATION,
     )
-    # 選択された model_id が model_registry に未登録（フォーム改竄・古いUI等）。
+    # The selected model_id is not in model_registry (tampered form, stale UI, etc.).
     DISCUSSION_MODEL_UNSUPPORTED = (
         "discussion_model_unsupported",
         ErrorKind.VALIDATION,
     )
-    # 追加ペルソナベースモデル（非Anthropicモデル。Bedrock Mantle経由）が選択されたが、
-    # 運用者がENABLE_ADDITIONAL_PERSONA_MODELSを有効化していない。設定画面での対応を要する。
+    # An additional persona base model (non-Anthropic, via Bedrock Mantle) was
+    # selected but the operator has not enabled ENABLE_ADDITIONAL_PERSONA_MODELS.
+    # Needs action on the settings screen.
     DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED = (
         "discussion_model_additional_models_disabled",
         ErrorKind.CONFIG,
     )
-    # ドキュメント（画像含む）合計サイズが選択モデルの上限（Gemma4=3.5MB等）を超過。
-    # モデルを変えるか添付を減らせば解決するため CAPACITY。
+    # The total size of documents (images included) exceeds the selected model's limit
+    # (Gemma4 = 3.5MB, etc.). CAPACITY, since changing the model or attaching less fixes it.
     DISCUSSION_MODEL_INPUT_TOO_LARGE = (
         "discussion_model_input_too_large",
         ErrorKind.CAPACITY,
@@ -586,7 +679,7 @@ class ErrorCode(StrEnum):
     # The data agent returned no CSV URL: an internal outcome, retry may work.
     SEGMENT_CSV_URL_MISSING = ("segment_csv_url_missing", ErrorKind.TRANSIENT)
     DATA_AGENT_NOT_CONFIGURED = ("data_agent_not_configured", ErrorKind.CONFIG)
-    # Closed network U3: DATA_AGENT_ALLOWED=false. No setting can turn it on.
+    # DATA_AGENT_ALLOWED=false. No setting can turn it on.
     DATA_AGENT_NOT_ALLOWED = ("data_agent_not_allowed", ErrorKind.FORBIDDEN)
     # The runtime ARN is set, but the service failed to initialize or the
     # connection test itself failed. Retry can succeed once the transient
@@ -675,19 +768,20 @@ class ErrorCode(StrEnum):
         ErrorKind.TRANSIENT,
     )
     INTERVIEW_SAVE_FAILED = ("interview_save_failed", ErrorKind.TRANSIENT)
-    # 選択された model_id が model_registry に未登録（フォーム改竄・古いUI等）。
+    # The selected model_id is not in model_registry (tampered form, stale UI, etc.).
     INTERVIEW_MODEL_UNSUPPORTED = (
         "interview_model_unsupported",
         ErrorKind.VALIDATION,
     )
-    # 追加ペルソナベースモデル（非Anthropicモデル。Bedrock Mantle経由）が選択されたが、
-    # 運用者がENABLE_ADDITIONAL_PERSONA_MODELSを有効化していない。設定画面での対応を要する。
+    # An additional persona base model (non-Anthropic, via Bedrock Mantle) was
+    # selected but the operator has not enabled ENABLE_ADDITIONAL_PERSONA_MODELS.
+    # Needs action on the settings screen.
     INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED = (
         "interview_model_additional_models_disabled",
         ErrorKind.CONFIG,
     )
-    # ドキュメント（画像含む）合計サイズが選択モデルの上限（Gemma4=3.5MB等）を超過。
-    # モデルを変えるか添付を減らせば解決するため CAPACITY。
+    # The total size of documents (images included) exceeds the selected model's limit
+    # (Gemma4 = 3.5MB, etc.). CAPACITY, since changing the model or attaching less fixes it.
     INTERVIEW_MODEL_INPUT_TOO_LARGE = (
         "interview_model_input_too_large",
         ErrorKind.CAPACITY,
@@ -700,9 +794,10 @@ class ErrorCode(StrEnum):
     # resolve to user-facing wording; they exist so no CodedError subclass in
     # this codebase is raised without a code.
     AGENT_SDK_UNAVAILABLE = ("agent_sdk_unavailable", ErrorKind.CONFIG)
-    # 追加ペルソナベースモデルがENABLE_ADDITIONAL_PERSONA_MODELS無効時に選択された場合。
-    # Managerが DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED /
-    # INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED に変換する。
+    # An additional persona base model was selected while
+    # ENABLE_ADDITIONAL_PERSONA_MODELS is off. The Manager converts it to
+    # DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED /
+    # INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED.
     AGENT_MODEL_ADDITIONAL_MODELS_DISABLED = (
         "agent_model_additional_models_disabled",
         ErrorKind.CONFIG,
@@ -727,9 +822,9 @@ class ErrorCode(StrEnum):
     # Cognito unreachable, timed out, 5xx, 429, or the circuit breaker is open.
     OIDC_UNAVAILABLE = ("oidc_unavailable", ErrorKind.TRANSIENT)
     # Cognito rejected the grant (refresh token revoked/expired, user disabled):
-    # permanent, the session must end (BR1.11).
+    # permanent, the session must end.
     OIDC_GRANT_INVALID = ("oidc_grant_invalid", ErrorKind.UNAUTHORIZED)
-    # ID token failed signature / iss / aud / exp / nonce verification (BR1.4).
+    # ID token failed signature / iss / aud / exp / nonce verification.
     OIDC_TOKEN_INVALID = ("oidc_token_invalid", ErrorKind.UNAUTHORIZED)
 
 
@@ -763,7 +858,7 @@ class CodedError(Exception):
 
 
 class AuthRequiredError(CodedError):
-    """The request needs a valid login (contract C5).
+    """The request needs a valid login.
 
     ``SESSION_EXPIRED`` is expressed by overriding ``code`` rather than by a
     separate class, so callers catch one type for both.
@@ -779,28 +874,28 @@ class LookupUnavailableError(CodedError):
 
 
 class AccessDeniedError(CodedError):
-    """Readable but not manageable, or the permission is missing (403, C5)."""
+    """Readable but not manageable, or the permission is missing (403)."""
 
     code = ErrorCode.ACCESS_DENIED
 
 
 class RoleRequiredError(CodedError):
-    """Signed in without any role (403 on the JSON API, BR2.8)."""
+    """Signed in without any role (403 on the JSON API)."""
 
     code = ErrorCode.ROLE_REQUIRED
 
 
 class ConcurrentUpdateError(CodedError):
-    """A reply is in progress in the same interview session (C5, ADR-004)."""
+    """A reply is in progress in the same interview session."""
 
     code = ErrorCode.CONCURRENT_UPDATE
 
 
 class ParticipantNotFoundError(CodedError):
-    """A participant of a discussion or interview can no longer be read (U6).
+    """A participant of a discussion or interview can no longer be read.
 
-    The same ``PERSONA_NOT_FOUND`` as an unreadable persona (NFR1.56); the
-    type lets the screen show the stop panel (M12, BR7.5) without reading
+    The same ``PERSONA_NOT_FOUND`` as an unreadable persona; the
+    type lets the screen show the stop panel without reading
     the code of the exception.
     """
 

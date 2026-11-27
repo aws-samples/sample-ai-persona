@@ -1,7 +1,6 @@
-"""
-共通テストフィクスチャ
+"""Shared test fixtures
 
-CI環境でのテスト実行に必要な共通設定とフィクスチャを提供します。
+Provides the common settings and fixtures needed to run tests in CI.
 """
 
 import functools
@@ -16,18 +15,26 @@ from unittest.mock import Mock
 import botocore.session
 import pytest
 
-# web.main を import する前にログイン方式を手元専用にする（BR1.15、WF5 の 4）。
-# 開発者のシェルに別の値があってもテストは常に local で動かす。
+# Force local login before importing web.main.
+# Tests always run with local auth, even if the developer's shell sets another value.
 os.environ["AUTH_MODE"] = "local"
 os.environ.pop("ECS_CONTAINER_METADATA_URI_V4", None)
-# 長期記憶は CI（test.yml）と同じく無効にする。シェルに AgentCore Memory の設定が
-# あると、memory_service=None のテストが本物の MemoryService を作ってしまうため。
+# Disable long-term memory, as CI (test.yml) does. If the shell has AgentCore Memory
+# settings, tests with memory_service=None would build a real MemoryService.
 os.environ["ENABLE_LONG_TERM_MEMORY"] = "false"
-# S3 のバケット名も CI と同じく持たせない。シェルにあると、モックを渡していない
-# テストが本物の S3 へ書き込みに行く。
+# Also drop the S3 bucket name, as CI does. If the shell has it, tests that do not
+# inject a mock would write to real S3.
 os.environ.pop("S3_BUCKET_NAME", None)
+# Use the same values as CI for advanced generation (beta). Empty the Code Interpreter ID
+# so tests without a mock never open a real session. CI sets no value for the table names
+# or ENABLE_ADVANCED_GENERATION, so unset them to get the defaults (prefix-based names, true).
+os.environ["CODE_INTERPRETER_ID"] = ""
+os.environ.pop("ENABLE_ADVANCED_GENERATION", None)
+os.environ.pop("SOURCE_FILES_TABLE_NAME", None)
+os.environ.pop("ADVANCED_GENERATIONS_TABLE_NAME", None)
+os.environ.pop("APP_SETTINGS_TABLE_NAME", None)
 
-# プロジェクトルートをパスに追加
+# Add the project root to the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models.authz import Principal, Role
@@ -36,10 +43,10 @@ from src.models.discussion import Discussion
 from src.models.message import Message
 from src.models.insight import Insight
 
-# botocore の Loader（サービス定義の読み込み）をセッション間で使い回す。moto は始めるたびに
-# boto3.DEFAULT_SESSION を捨てるため、テストごとに新しいセッションが Loader を作り直し、
-# データディレクトリを走査し直していた（クライアント 1 つで約 35 ms。moto のテストの準備時間の
-# 大半）。Loader が持つのは読み取り専用のサービス定義だけなので、共有しても結果は変わらない。
+# Reuse botocore's Loader (service definition loading) across sessions. moto discards
+# boto3.DEFAULT_SESSION on every start, so each test's new session rebuilt the Loader and
+# rescanned the data directory (about 35 ms per client, most of moto's test setup time).
+# The Loader holds only read-only service definitions, so sharing it does not change results.
 botocore.session.create_loader = functools.lru_cache(maxsize=None)(  # type: ignore[assignment]
     botocore.session.create_loader
 )
@@ -48,8 +55,8 @@ botocore.session.create_loader = functools.lru_cache(maxsize=None)(  # type: ign
 def pytest_configure(config: pytest.Config) -> None:
     """Register markers that are not declared in pyproject.toml.
 
-    ``ui`` (U3) and ``infra`` are registered here because pyproject.toml is a protected
-    config file that is not edited by hand (team practices).
+    ``ui`` and ``infra`` are registered here because pyproject.toml is a protected
+    config file that is not edited by hand.
     """
     config.addinivalue_line(
         "markers",
@@ -64,25 +71,25 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 # =============================================================================
-# ディレクトリフィクスチャ
+# Directory fixtures
 # =============================================================================
 
 
 @pytest.fixture
 def temp_upload_dir() -> Generator[str, None, None]:
-    """一時的なアップロードディレクトリを作成"""
+    """Create a temporary upload directory."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         yield tmp_dir
 
 
 # =============================================================================
-# モデルフィクスチャ
+# Model fixtures
 # =============================================================================
 
 
 @pytest.fixture
 def sample_persona() -> Persona:
-    """テスト用ペルソナを提供"""
+    """Provide a test persona."""
     return Persona.create_new(
         name="田中花子",
         age=35,
@@ -96,7 +103,7 @@ def sample_persona() -> Persona:
 
 @pytest.fixture
 def sample_persona_2() -> Persona:
-    """2人目のテスト用ペルソナを提供"""
+    """Provide a second test persona."""
     return Persona.create_new(
         name="佐藤太郎",
         age=28,
@@ -110,7 +117,7 @@ def sample_persona_2() -> Persona:
 
 @pytest.fixture
 def sample_message() -> Message:
-    """テスト用メッセージを提供"""
+    """Provide test messages."""
     return Message.create_new(
         persona_id="test-persona-id",
         persona_name="田中花子",
@@ -120,7 +127,7 @@ def sample_message() -> Message:
 
 @pytest.fixture
 def sample_insight() -> Insight:
-    """テスト用インサイトを提供"""
+    """Provide test insights."""
     return Insight.create_new(
         category="顧客ニーズ",
         description="効率性を重視する顧客層が存在する",
@@ -131,7 +138,7 @@ def sample_insight() -> Insight:
 
 @pytest.fixture
 def sample_discussion(sample_persona: Persona, sample_persona_2: Persona) -> Discussion:
-    """テスト用議論を提供"""
+    """Provide a test discussion."""
     discussion = Discussion.create_new(
         topic="新商品のマーケティング戦略について",
         participants=[sample_persona.id, sample_persona_2.id],
@@ -141,7 +148,7 @@ def sample_discussion(sample_persona: Persona, sample_persona_2: Persona) -> Dis
 
 @pytest.fixture
 def sample_interview_text() -> str:
-    """テスト用インタビューテキストを提供"""
+    """Provide a test interview text."""
     return """
     インタビュー対象者: 田中花子さん（35歳、会社員）
     
@@ -167,13 +174,13 @@ def sample_interview_text() -> str:
 
 
 # =============================================================================
-# モックサービスフィクスチャ
+# Mock service fixtures
 # =============================================================================
 
 
 @pytest.fixture
 def mock_ai_service() -> Mock:
-    """モック化されたAIServiceを提供"""
+    """Provide a mocked AIService."""
     mock = Mock()
     mock.generate_persona.return_value = Persona.create_new(
         name="生成されたペルソナ",
@@ -200,10 +207,10 @@ def mock_ai_service() -> Mock:
 
 @pytest.fixture
 def mock_agent_service() -> Mock:
-    """モック化されたAgentServiceを提供"""
+    """Provide a mocked AgentService."""
     mock = Mock()
 
-    # PersonaAgentのモック
+    # PersonaAgent mock
     mock_persona_agent = Mock()
     mock_persona_agent.get_persona_id.return_value = "test-persona-id"
     mock_persona_agent.get_persona_name.return_value = "テストペルソナ"
@@ -212,7 +219,7 @@ def mock_agent_service() -> Mock:
 
     mock.create_persona_agent.return_value = mock_persona_agent
 
-    # FacilitatorAgentのモック
+    # FacilitatorAgent mock
     mock_facilitator = Mock()
     mock_facilitator.rounds = 1
     mock_facilitator.additional_instructions = ""
@@ -226,7 +233,7 @@ def mock_agent_service() -> Mock:
 
 @pytest.fixture
 def mock_persona_store() -> Mock:
-    """モック化されたPersonaStoreを提供"""
+    """Provide a mocked PersonaStore."""
     from src.services.stores.persona_store import PersonaStore
 
     mock = Mock(spec=PersonaStore)
@@ -237,7 +244,7 @@ def mock_persona_store() -> Mock:
 
 @pytest.fixture
 def file_manager(temp_upload_dir) -> Generator:
-    """テスト用FileManagerを提供"""
+    """Provide a test FileManager."""
     from src.managers.file_manager import FileManager
     from pathlib import Path
     from unittest.mock import Mock
@@ -252,7 +259,7 @@ def file_manager(temp_upload_dir) -> Generator:
 
 @pytest.fixture
 def persona_manager(mock_persona_store) -> Generator:
-    """テスト用PersonaManagerを提供"""
+    """Provide a test PersonaManager."""
     from src.managers.persona_manager import PersonaManager
 
     manager = PersonaManager(persona_store=mock_persona_store)
@@ -260,13 +267,13 @@ def persona_manager(mock_persona_store) -> Generator:
 
 
 # =============================================================================
-# FastAPIテスト用フィクスチャ
+# FastAPI test fixtures
 # =============================================================================
 
 
 @pytest.fixture
 def test_app():
-    """テスト用FastAPIアプリケーションを提供"""
+    """Provide a test FastAPI application."""
     try:
         from web.main import app
 
@@ -303,7 +310,7 @@ def login_as(
 
 @pytest.fixture(name="login_as")
 def login_as_fixture() -> Callable[..., None]:
-    """`login_as(client, name=..., roles=..., groups=...)` を返す。"""
+    """Return `login_as(client, name=..., roles=..., groups=...)`."""
     return login_as
 
 
@@ -346,7 +353,7 @@ class SampleUser:
         )
 
 
-#: The four users of the authorization tests (U2): two members in different
+#: The four users of the authorization tests: two members in different
 #: departments, an admin, and a user without any role.
 MEMBER_A = SampleUser("メンバーA", "member-a@example.com", ("member",), ("sales",))
 MEMBER_B = SampleUser("メンバーB", "member-b@example.com", ("member",), ("dev",))
@@ -374,16 +381,16 @@ def admin_user() -> SampleUser:
 
 @pytest.fixture
 def no_role_user() -> SampleUser:
-    """Signed-in user in ``sales`` without any role (FR1.7)."""
+    """Signed-in user in ``sales`` without any role."""
     return NO_ROLE
 
 
 @pytest.fixture
 def client(test_app) -> Generator:
-    """ログイン済み（開発用の利用者）の同期テストクライアント（CSRF対策ヘッダー付き）。
+    """Synchronous test client signed in as the dev user, with the CSRF header.
 
-    既存の画面・API のテストを変えずに通すため、既定でログイン済みにする。
-    未ログインの振る舞いは Cookie を持たない TestClient を個別に作って確かめる。
+    Signed in by default so existing screen and API tests pass unchanged.
+    Signed-out behavior is checked with a separate TestClient that has no cookie.
     """
     try:
         from fastapi.testclient import TestClient
@@ -397,7 +404,7 @@ def client(test_app) -> Generator:
 
 @pytest.fixture
 async def async_client(test_app):
-    """非同期テストクライアントを提供"""
+    """Provide an async test client."""
     try:
         from httpx import AsyncClient, ASGITransport
 
@@ -409,15 +416,15 @@ async def async_client(test_app):
 
 
 # =============================================================================
-# 環境設定フィクスチャ
+# Environment fixtures
 # =============================================================================
 
 
 @pytest.fixture(autouse=True)
 def reset_singletons():
-    """各テスト後にシングルトンをリセット"""
+    """Reset singletons after each test."""
     yield
-    # テスト後にルーターのシングルトンをリセット
+    # Reset router singletons after each test
     try:
         from web.routers import api, persona, discussion, interview
 
@@ -439,6 +446,14 @@ def reset_singletons():
         interview._persona_manager = None
         interview._interview_manager = None
         interview._file_manager = None
+    except (ImportError, AttributeError):
+        pass
+    try:
+        # The two advanced generation (beta) Managers
+        from web.routers import persona_advanced
+
+        persona_advanced._source_upload_manager = None
+        persona_advanced._advanced_generation_manager = None
     except (ImportError, AttributeError):
         pass
     try:
@@ -465,7 +480,7 @@ def reset_singletons():
     except (ImportError, AttributeError):
         pass
     try:
-        # 共有の入口（U4）と、タスクごとに 1 つの共有の部品（写しを持つ）
+        # The shared entry point and one shared part per task (holding a copy)
         from src.managers.components.sharing_runtime import reset_shared_parts
         from web.routers import sharing
 
@@ -477,7 +492,7 @@ def reset_singletons():
 
 @pytest.fixture
 def env_dynamodb(monkeypatch):
-    """DynamoDBバックエンドの環境変数を設定"""
+    """Set the DynamoDB backend environment variables."""
     monkeypatch.setenv("DATABASE_BACKEND", "dynamodb")
     monkeypatch.setenv("DYNAMODB_TABLE_PREFIX", "Test")
     monkeypatch.setenv("DYNAMODB_REGION", "us-east-1")

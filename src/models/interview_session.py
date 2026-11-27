@@ -1,16 +1,16 @@
-"""Interview sessions kept outside the app (v1.0.0 U6, ADR-004, entities.md).
+"""Interview sessions kept outside the app.
 
 A session and its messages live in ``InterviewSessions`` / ``InterviewMessages``
-(both with a DynamoDB TTL) so that any task can carry the conversation on
-(FR7.2). Only the user who started it may use it (BR3.2).
+(both with a DynamoDB TTL) so that any task can carry the conversation on.
+Only the user who started it may use it.
 
 - The session expires ``min(last_active_at + 8 h, created_at + 7 days)``; the
-  check is made on every read, before the TTL removes the item (BR3.5).
+  check is made on every read, before the TTL removes the item.
 - ``reply_token`` / ``reply_started_at`` mark a reply in progress. A mark older
   than five minutes counts as absent, so a crashed task frees the session
-  (BR3.3, NFR1.59; ``reply_started_at`` is renewed after each persona reply).
+  (``reply_started_at`` is renewed after each persona reply).
 - A message expires eight days after it was written, always after its
-  session (BR3.5).
+  session.
 """
 
 from dataclasses import dataclass, field, replace
@@ -21,11 +21,11 @@ import uuid
 from .discussion import DocumentRef
 from .message import Message
 
-#: Idle limit of a session (BR3.5).
+#: Idle limit of a session.
 SESSION_IDLE_SECONDS = 8 * 3600
-#: Hard limit from the start of a session (the login's longest, FR1.5).
+#: Hard limit from the start of a session (the login's longest).
 SESSION_MAX_SECONDS = 7 * 24 * 3600
-#: Age after which a reply mark is ignored (BR3.3).
+#: Age after which a reply mark is ignored.
 REPLY_TIMEOUT_SECONDS = 5 * 60
 #: Lifetime of a stored interview message (longer than any session).
 MESSAGE_TTL_SECONDS = 8 * 24 * 3600
@@ -58,27 +58,27 @@ def stamp(value: datetime) -> str:
 
 @dataclass(frozen=True)
 class InterviewSession:
-    """A running interview (entities.md InterviewSession).
+    """A running interview.
 
     Attributes:
         id: UUID.
         owner_sub: The user who started it.
-        persona_ids: 1〜5 participants.
+        persona_ids: 1 to 5 participants.
         persona_names: Persona ID -> name at the start.
         memory_mode: The user's choice (``full`` / ``retrieve_only`` /
-            ``disabled``); personas the user does not own only retrieve (BR6.1).
+            ``disabled``); personas the user does not own only retrieve.
         created_at: Start (aware UTC).
         last_active_at: Last send or save (aware UTC).
         expires_at: Epoch seconds; the TTL attribute.
         enable_dataset: Whether dataset tools are used.
         enable_kb: Whether knowledge-base tools are used.
         persona_models: Persona ID -> model ID.
-        document_ids: Attached upload IDs (read again on a rebuild, BR3.6).
+        document_ids: Attached upload IDs (read again on a rebuild).
         documents: Display metadata of the attachments.
-        last_seq: Number of the last message (BR3.3).
+        last_seq: Number of the last message.
         reply_token: Mark of a reply in progress.
         reply_started_at: When the mark was set or last renewed.
-        saved_discussion_id: The discussion it was saved as (BR3.8).
+        saved_discussion_id: The discussion it was saved as.
     """
 
     id: str
@@ -118,7 +118,7 @@ class InterviewSession:
         enable_kb: bool = False,
         persona_models: Optional[Dict[str, str]] = None,
     ) -> "InterviewSession":
-        """A new session owned by ``owner_sub`` (BR3.1)."""
+        """A new session owned by ``owner_sub``."""
         now = _utc(now)
         return cls(
             id=str(uuid.uuid4()),
@@ -136,7 +136,7 @@ class InterviewSession:
 
     @staticmethod
     def expiry_for(created_at: datetime, last_active_at: datetime) -> datetime:
-        """``min(last_active_at + 8 h, created_at + 7 days)`` (BR3.5)."""
+        """``min(last_active_at + 8 h, created_at + 7 days)``."""
         return min(
             _utc(last_active_at) + timedelta(seconds=SESSION_IDLE_SECONDS),
             _utc(created_at) + timedelta(seconds=SESSION_MAX_SECONDS),
@@ -147,7 +147,7 @@ class InterviewSession:
         return _utc(now) >= self.expiry_for(self.created_at, self.last_active_at)
 
     def reply_in_progress(self, now: datetime) -> bool:
-        """A reply mark that is less than five minutes old (BR3.3)."""
+        """A reply mark that is less than five minutes old."""
         if not self.reply_token or self.reply_started_at is None:
             return False
         age = _utc(now) - _utc(self.reply_started_at)
@@ -234,7 +234,7 @@ class InterviewSession:
 
 @dataclass(frozen=True)
 class InterviewMessage:
-    """One message of a running interview (entities.md InterviewMessage).
+    """One message of a running interview.
 
     Read only after the session's owner and expiry were checked.
     """
@@ -268,7 +268,7 @@ class InterviewMessage:
         now: datetime,
         document_ids: tuple[str, ...] = (),
     ) -> "InterviewMessage":
-        """A new message that expires eight days from ``now`` (BR3.5)."""
+        """A new message that expires eight days from ``now``."""
         now = _utc(now)
         return cls(
             session_id=session_id,
@@ -355,7 +355,7 @@ class InterviewView:
 
 @dataclass(frozen=True)
 class InterviewReply:
-    """The replies to one send (BR3.3, BR3.6).
+    """The replies to one send.
 
     Attributes:
         responses: One message per persona that answered.
@@ -369,7 +369,7 @@ class InterviewReply:
 
 @dataclass(frozen=True)
 class InterviewSaveResult:
-    """A saved interview (BR3.7, BR3.8).
+    """A saved interview.
 
     Attributes:
         discussion_id: The ``mode=interview`` discussion it is saved as.

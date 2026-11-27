@@ -1,7 +1,7 @@
 """
-Config クラスの単体テスト
+Unit tests for the Config class.
 
-設定管理、環境変数読み込み、デフォルト値をテストします。
+Covers settings management, environment variable loading, and default values.
 """
 
 import os
@@ -13,10 +13,10 @@ import pytest  # noqa: F401 - used by test_invalid_value_raises
 
 
 class TestConfigDefaults:
-    """Config デフォルト値のテスト"""
+    """Tests for Config default values."""
 
     def test_default_dynamodb_settings(self):
-        """デフォルトのDynamoDB設定を確認"""
+        """Default DynamoDB settings."""
         from src.config import Config
 
         with patch.dict(os.environ, {}, clear=True):
@@ -25,7 +25,7 @@ class TestConfigDefaults:
             assert config.DYNAMODB_REGION == "us-east-1"
 
     def test_default_file_settings(self):
-        """デフォルトのファイル設定を確認"""
+        """Default file settings."""
         from src.config import Config
 
         config = Config()
@@ -35,10 +35,10 @@ class TestConfigDefaults:
         assert config.MAX_REQUEST_PAYLOAD_SIZE == 32 * 1024 * 1024  # 32MB
 
     def test_size_limits_are_single_source_of_truth(self):
-        """サイズ上限がconfigを single source of truth として参照されることを確認
+        """Size limits are referenced from config as the single source of truth.
 
-        画像5MB・リクエスト合計32MBの定数が各Managerでハードコードされず
-        configに集約されていることを検証する（重複定義の再発防止）。
+        Verifies the 5MB image and 32MB total-request constants live in config
+        instead of being hardcoded in each Manager (prevents duplicate definitions).
         """
         from src.config import config
         from src.managers.file_manager import FileManager
@@ -51,7 +51,7 @@ class TestConfigDefaults:
         )
 
     def test_default_aws_settings(self):
-        """デフォルトのAWS設定を確認"""
+        """Default AWS settings."""
         from src.config import Config
 
         with patch.dict(os.environ, {}, clear=True):
@@ -63,14 +63,14 @@ class TestConfigDefaults:
             )
 
     def test_default_ai_settings(self):
-        """デフォルトのAI生成設定を確認"""
+        """Default AI generation settings."""
         from src.config import Config
 
         config = Config()
         assert config.MAX_TOKENS == 4000
 
     def test_default_agent_settings(self):
-        """デフォルトのエージェント設定を確認"""
+        """Default agent settings."""
         from src.config import Config
 
         config = Config()
@@ -80,10 +80,10 @@ class TestConfigDefaults:
 
 
 class TestConfigEnvironmentVariables:
-    """環境変数からの設定読み込みテスト"""
+    """Tests for loading settings from environment variables."""
 
     def test_aws_region_from_env(self):
-        """AWS_REGIONが環境変数から読み込まれることを確認"""
+        """AWS_REGION is read from the environment."""
         from src.config import Config
 
         with patch.dict(os.environ, {"AWS_REGION": "ap-northeast-1"}):
@@ -91,7 +91,7 @@ class TestConfigEnvironmentVariables:
             assert config.AWS_REGION == "ap-northeast-1"
 
     def test_bedrock_model_id_from_env(self):
-        """BEDROCK_MODEL_IDが環境変数から読み込まれることを確認"""
+        """BEDROCK_MODEL_ID is read from the environment."""
         from src.config import Config
 
         with patch.dict(os.environ, {"BEDROCK_MODEL_ID": "custom-model-id"}):
@@ -99,7 +99,7 @@ class TestConfigEnvironmentVariables:
             assert config.BEDROCK_MODEL_ID == "custom-model-id"
 
     def test_dynamodb_table_prefix_from_env(self):
-        """DYNAMODB_TABLE_PREFIXが環境変数から読み込まれることを確認"""
+        """DYNAMODB_TABLE_PREFIX is read from the environment."""
         from src.config import Config
 
         with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "CustomPrefix"}):
@@ -107,7 +107,7 @@ class TestConfigEnvironmentVariables:
             assert config.DYNAMODB_TABLE_PREFIX == "CustomPrefix"
 
     def test_dynamodb_region_from_env(self):
-        """DYNAMODB_REGIONが環境変数から読み込まれることを確認"""
+        """DYNAMODB_REGION is read from the environment."""
         from src.config import Config
 
         with patch.dict(os.environ, {"DYNAMODB_REGION": "eu-west-1"}):
@@ -116,15 +116,15 @@ class TestConfigEnvironmentVariables:
 
 
 class TestConfigProperties:
-    """Config プロパティのテスト"""
+    """Tests for Config properties."""
 
     def test_upload_dir_property(self):
-        """upload_dirプロパティがPathオブジェクトを返すことを確認"""
+        """The upload_dir property returns a Path object."""
         from src.config import Config
 
         config = Config()
         assert isinstance(config.upload_dir, Path)
-        # UPLOAD_DIRの末尾スラッシュを除去して比較
+        # Compare after stripping the trailing slash from UPLOAD_DIR
         expected = config.UPLOAD_DIR.rstrip("/")
         assert (
             str(config.upload_dir) == expected
@@ -133,10 +133,10 @@ class TestConfigProperties:
 
 
 class TestConfigAWSCredentials:
-    """AWS認証情報取得のテスト"""
+    """Tests for retrieving AWS credentials."""
 
     def test_get_aws_credentials_from_env(self):
-        """AWS認証情報が環境変数から取得されることを確認"""
+        """AWS credentials are read from the environment."""
         from src.config import Config
 
         with patch.dict(
@@ -156,11 +156,11 @@ class TestConfigAWSCredentials:
             assert credentials["region_name"] == config.AWS_REGION
 
     def test_get_aws_credentials_missing(self):
-        """AWS認証情報が設定されていない場合、Noneを返すことを確認"""
+        """Returns None when no AWS credentials are set."""
         from src.config import Config
 
         with patch.dict(os.environ, {}, clear=True):
-            # 環境変数をクリアしてテスト
+            # Clear the environment for the test
             for key in [
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
@@ -177,10 +177,10 @@ class TestConfigAWSCredentials:
 
 
 class TestConfigDirectoryCreation:
-    """ディレクトリ作成のテスト"""
+    """Tests for directory creation."""
 
     def test_ensure_directories_creates_upload_dir(self):
-        """アップロードディレクトリが作成されることを確認"""
+        """The upload directory is created."""
         from src.config import Config
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -196,11 +196,11 @@ class TestConfigDirectoryCreation:
                 config.UPLOAD_DIR = original_upload_dir
 
     def test_ensure_directories_handles_existing(self):
-        """既存のディレクトリがあっても問題なく動作することを確認"""
+        """An existing directory causes no problem."""
         from src.config import Config
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            # 事前にディレクトリを作成
+            # Create the directory beforehand
             Path(f"{tmp_dir}/existinguploads").mkdir(parents=True)
 
             config = Config()
@@ -209,7 +209,7 @@ class TestConfigDirectoryCreation:
             try:
                 config.UPLOAD_DIR = f"{tmp_dir}/existinguploads/"
 
-                # エラーが発生しないことを確認
+                # No error is raised
                 config._ensure_directories()
 
                 assert Path(f"{tmp_dir}/existinguploads").exists()
@@ -218,13 +218,13 @@ class TestConfigDirectoryCreation:
 
 
 class TestConfigMemorySettings:
-    """AgentCore Memory設定のテスト"""
+    """Tests for AgentCore Memory settings."""
 
     def test_default_memory_settings(self):
-        """デフォルトのメモリ設定を確認"""
+        """Default memory settings."""
         from src.config import Config
 
-        # 環境変数をクリアして、メモリ関連の変数も明示的にNoneに設定
+        # Clear the environment and explicitly set memory-related variables to None
         with patch.dict(
             os.environ,
             {"AGENTCORE_MEMORY_ID": "", "ENABLE_LONG_TERM_MEMORY": "false"},
@@ -239,7 +239,7 @@ class TestConfigMemorySettings:
             assert config.MEMORY_MAX_RESULTS == 5
 
     def test_agentcore_memory_id_from_env(self):
-        """AGENTCORE_MEMORY_IDが環境変数から読み込まれることを確認"""
+        """AGENTCORE_MEMORY_ID is read from the environment."""
         from src.config import Config
 
         with patch.dict(os.environ, {"AGENTCORE_MEMORY_ID": "test-memory-id-123"}):
@@ -247,7 +247,7 @@ class TestConfigMemorySettings:
             assert config.AGENTCORE_MEMORY_ID == "test-memory-id-123"
 
     def test_agentcore_memory_region_from_env(self):
-        """AGENTCORE_MEMORY_REGIONが環境変数から読み込まれることを確認"""
+        """AGENTCORE_MEMORY_REGION is read from the environment."""
         from src.config import Config
 
         with patch.dict(os.environ, {"AGENTCORE_MEMORY_REGION": "ap-northeast-1"}):
@@ -255,7 +255,7 @@ class TestConfigMemorySettings:
             assert config.AGENTCORE_MEMORY_REGION == "ap-northeast-1"
 
     def test_enable_long_term_memory_true(self):
-        """ENABLE_LONG_TERM_MEMORYがtrueで有効になることを確認"""
+        """ENABLE_LONG_TERM_MEMORY=true enables it."""
         from src.config import Config
 
         for value in ["true", "1", "yes", "TRUE", "True"]:
@@ -264,7 +264,7 @@ class TestConfigMemorySettings:
                 assert config.ENABLE_LONG_TERM_MEMORY is True
 
     def test_enable_long_term_memory_false(self):
-        """ENABLE_LONG_TERM_MEMORYがfalseで無効になることを確認"""
+        """ENABLE_LONG_TERM_MEMORY=false disables it."""
         from src.config import Config
 
         for value in ["false", "0", "no", "FALSE", "False"]:
@@ -273,7 +273,7 @@ class TestConfigMemorySettings:
                 assert config.ENABLE_LONG_TERM_MEMORY is False
 
     def test_memory_max_results_from_env(self):
-        """MEMORY_MAX_RESULTSが環境変数から読み込まれることを確認"""
+        """MEMORY_MAX_RESULTS is read from the environment."""
         from src.config import Config
 
         with patch.dict(os.environ, {"MEMORY_MAX_RESULTS": "10"}):
@@ -282,7 +282,7 @@ class TestConfigMemorySettings:
 
 
 class TestDatasetAnalysisConcurrency:
-    """analyze_dataset の同時実行数設定のテスト"""
+    """Tests for the analyze_dataset concurrency setting."""
 
     def test_default_is_four(self):
         from src.config import Config
@@ -307,7 +307,7 @@ class TestDatasetAnalysisConcurrency:
 
 
 class TestClosedFeatureSettings:
-    """U3 の機能ごとの値（BR1.1〜BR1.4）。"""
+    """Per-feature values."""
 
     _NAMES = ("NEMOTRON_SOURCE", "NEMOTRON_DATASET_KEY", "DATA_AGENT_ALLOWED")
 
@@ -383,7 +383,7 @@ class TestClosedFeatureSettings:
 
 
 class TestAssetDeliverySetting:
-    """U4 の配信の方式 ASSET_DELIVERY（BR1.1、BR1.2）。"""
+    """The ASSET_DELIVERY delivery method."""
 
     def _config(self, **env: str):
         from src.config import Config
@@ -411,7 +411,7 @@ class TestAssetDeliverySetting:
 
 
 class TestInferenceScopeSetting:
-    """閉域対応 U5 の推論の範囲 INFERENCE_SCOPE（BR3.1〜BR3.4）。"""
+    """The INFERENCE_SCOPE inference scope for closed-network support."""
 
     _MODEL_KEYS = ("BEDROCK_MODEL_ID", "AGENT_MODEL_ID", "SURVEY_MODEL_ID")
 
@@ -479,7 +479,7 @@ class TestInferenceScopeSetting:
 
 
 class TestSurveyRunnerSettings:
-    """アンケートの実行基盤の設定（基盤設計 4 章、BR9.1、BR3.3）。"""
+    """Settings for the survey execution platform."""
 
     _KEYS = (
         "SURVEY_STATE_MACHINE_ARN",
@@ -506,7 +506,7 @@ class TestSurveyRunnerSettings:
         assert cfg.survey_runner_configured
 
     def test_timeout_defaults_to_two_hours(self):
-        """BR3.3: 既定はステートマシンの TimeoutSeconds の既定と同じ 7200 秒。"""
+        """The default equals the state machine's default TimeoutSeconds, 7200 seconds."""
         assert self._config().SURVEY_EXECUTION_TIMEOUT_SECONDS == 7200
 
     @pytest.mark.parametrize(
@@ -519,7 +519,7 @@ class TestSurveyRunnerSettings:
         ],
     )
     def test_not_configured_when_either_is_missing(self, env):
-        """BR9.1: どちらかがなければアンケートを実行しない（手元の実行）。"""
+        """If either is missing, the survey is not run (local execution)."""
         assert not self._config(**env).survey_runner_configured
 
     @pytest.mark.parametrize("value", ["0", "-1", "abc"])
@@ -529,10 +529,10 @@ class TestSurveyRunnerSettings:
 
 
 class TestConfigInsightCategories:
-    """インサイトカテゴリー設定のテスト"""
+    """Tests for insight category settings."""
 
     def test_get_default_insight_categories(self):
-        """デフォルトのインサイトカテゴリーが取得できることを確認"""
+        """The default insight categories can be retrieved."""
         from src.config import Config
         from src.models.insight_category import InsightCategory
 
@@ -543,7 +543,7 @@ class TestConfigInsightCategories:
         assert all(isinstance(cat, InsightCategory) for cat in categories)
 
     def test_default_insight_categories_content(self):
-        """デフォルトのインサイトカテゴリーの内容を確認"""
+        """Contents of the default insight categories."""
         from src.config import Config
 
         config = Config()
@@ -556,15 +556,15 @@ class TestConfigInsightCategories:
         assert "マーケティング" in category_names
         assert "その他" in category_names
 
-        # すべてのカテゴリーに説明があることを確認
+        # Every category has a description
         assert all(len(cat.description) > 0 for cat in categories)
 
 
 class TestTableNames:
-    """テーブルごとの物理名（v1.0.0 U1、FR9.2、約束 C10）。
+    """Physical names per table.
 
-    CDK が自動生成した名前を App スタックが環境変数で渡す。なければ手元の .env のため
-    DYNAMODB_TABLE_PREFIX から組み立てる。
+    The App stack passes the CDK-generated names via environment variables.
+    When absent (local .env), they are built from DYNAMODB_TABLE_PREFIX.
     """
 
     def test_explicit_table_name_wins(self):
@@ -588,7 +588,7 @@ class TestTableNames:
         with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
             config = Config()
             names = {kind: config.table_name(kind) for kind in TABLE_NAME_SETTINGS}
-        # U5: 古い 2 つの紐付けのテーブルは読まない（PersonaBindings にまとめた）
+        # The two old binding tables are not read (merged into PersonaBindings)
         assert len(names) == 8
         assert names["Jobs"] == "Local_Jobs"
         assert "PersonaKBBindings" not in names
@@ -602,7 +602,7 @@ class TestTableNames:
 
 
 class TestResourceSharesTableName:
-    """ResourceShares の物理名（U4。TABLE_NAME_SETTINGS とは別の項目）。"""
+    """Physical name of ResourceShares (a separate item from TABLE_NAME_SETTINGS)."""
 
     def test_falls_back_to_the_prefix(self):
         from src.config import Config
@@ -630,7 +630,7 @@ class TestResourceSharesTableName:
 
 
 class TestPersonaU5Tables:
-    """U5 の 2 テーブルの物理名と候補の保持時間（infrastructure-specification.md）。"""
+    """Physical names of the two persona tables and the candidate retention time."""
 
     @pytest.mark.parametrize(
         ("setting", "suffix"),
@@ -670,7 +670,7 @@ class TestPersonaU5Tables:
 
 
 class TestDiscussionInterviewTables:
-    """U6 の 4 テーブルの物理名（infrastructure-specification.md）。"""
+    """Physical names of the four discussion tables."""
 
     @pytest.mark.parametrize(
         ("setting", "suffix"),
@@ -717,7 +717,7 @@ class TestDiscussionInterviewTables:
 
 
 class TestCustomPersonaDataTable:
-    """U7: CustomPersonaData の物理名（Infrastructure Design の指摘、U6 と同じ形）。"""
+    """Physical name of CustomPersonaData (same shape as the discussion tables)."""
 
     def test_falls_back_to_the_prefix(self):
         from src.config import Config
@@ -742,7 +742,7 @@ class TestCustomPersonaDataTable:
 
 
 class TestPasswordPolicySettings:
-    """U8 BR4.3: パスワードの条件の 5 つは AUTH_MODE=admin_api のときだけ読む。"""
+    """The five password rules are read only when AUTH_MODE=admin_api."""
 
     _ENV = {
         "PASSWORD_MIN_LENGTH": "10",
@@ -781,3 +781,190 @@ class TestPasswordPolicySettings:
         with patch.dict(os.environ, {**env, "AUTH_MODE": "admin_api"}, clear=True):
             cfg = Config()
         assert cfg.PASSWORD_MIN_LENGTH is None
+
+
+class TestAdvancedGenerationSettings:
+    """Settings of advanced generation (beta)."""
+
+    _NAMES = (
+        "ENABLE_ADVANCED_GENERATION",
+        "CODE_INTERPRETER_ID",
+        "ADVANCED_GENERATION_MODEL_ID",
+        "ADVANCED_GENERATION_MAX_CONCURRENT",
+        "SOURCE_FILES_TABLE_NAME",
+        "ADVANCED_GENERATIONS_TABLE_NAME",
+        "APP_SETTINGS_TABLE_NAME",
+        "BEDROCK_MODEL_ID",
+        "ADVANCED_EVIDENCE_MODEL_ID",
+    )
+
+    def _config(self, **env: str):
+        from src.config import Config
+
+        base = {k: v for k, v in os.environ.items() if k not in self._NAMES}
+        with patch.dict(os.environ, {**base, **env}, clear=True):
+            return Config()
+
+    def test_defaults(self):
+        cfg = self._config()
+        assert cfg.ENABLE_ADVANCED_GENERATION is True
+        assert cfg.CODE_INTERPRETER_ID == ""
+        assert cfg.ADVANCED_GENERATION_MAX_CONCURRENT == 3
+        assert cfg.ADVANCED_GENERATION_MODEL_ID == cfg.BEDROCK_MODEL_ID
+
+    def test_limits_match_the_reliability_requirements(self):
+        cfg = self._config()
+        assert cfg.ADVANCED_UPLOAD_MAX_BYTES == 1_000_000_000
+        assert cfg.ADVANCED_UPLOAD_MAX_FILES == 10
+        assert cfg.ADVANCED_UPLOAD_PART_SIZE_BYTES == 16 * 1024 * 1024
+        assert cfg.ADVANCED_UPLOAD_URL_EXPIRATION_SECONDS == 3600
+        assert cfg.ADVANCED_UPLOAD_URL_REFRESH_MAX == 24
+        assert cfg.ADVANCED_UPLOAD_PENDING_MAX_SECONDS == 24 * 3600
+        assert cfg.ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS == 15 * 60
+        assert cfg.ADVANCED_INSPECT_BYTES == 4 * 1024 * 1024
+        assert cfg.ADVANCED_GENERATION_TIMEOUT_SECONDS == 60 * 60
+        assert cfg.ADVANCED_GENERATION_PREPARE_TIMEOUT_SECONDS == 20 * 60
+        assert cfg.ADVANCED_GENERATION_MODEL_MIN_REMAINING_SECONDS == 10 * 60
+        assert cfg.ADVANCED_GENERATION_LOCK_SECONDS == 75 * 60
+        # 60 minutes of work + 60 minutes of plan waits + 10 spare
+        assert cfg.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS == 7800
+        assert cfg.ADVANCED_GENERATION_HEARTBEAT_SECONDS == 30
+        assert cfg.ADVANCED_GENERATION_RESULT_READABLE_SECONDS == 24 * 3600
+        assert cfg.ADVANCED_GENERATION_ITEM_TTL_SECONDS == 48 * 3600
+        assert cfg.ADVANCED_GENERATION_DOWNLOAD_URL_SECONDS == 900
+        assert cfg.ADVANCED_GENERATION_ITEM_MAX_BYTES == 64 * 1024
+        assert cfg.ADVANCED_GENERATION_PART_MAX_BYTES == 100 * 1024
+        assert cfg.ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES == 2 * 1024 * 1024
+        assert cfg.ADVANCED_TOOL_MAX_CALLS == 30
+        assert cfg.ADVANCED_TOOL_MAX_TOTAL_SECONDS == 20 * 60
+        assert cfg.ADVANCED_TOOL_MAX_OUTPUT_CHARS == 20_000
+
+    def test_detailed_analysis_limits(self):
+        # AI-written code, tables and the join check
+        cfg = self._config()
+        assert cfg.ADVANCED_RUN_CODE_MAX_FAILURES == 5
+        assert cfg.ADVANCED_RUN_CODE_TIMEOUT_SECONDS == 120
+        assert cfg.ADVANCED_RUN_CODE_MAX_CHARS == 20_000
+        assert cfg.ADVANCED_MAX_TABLES == 3
+        assert cfg.ADVANCED_JOIN_MIN_MATCH_RATE == 0.5
+        assert cfg.ADVANCED_JOIN_CHECK_TIMEOUT_SECONDS == 120
+
+    def test_generation_control_values(self):
+        # 15 minutes per plan card, 60 in total, stalled after
+        # 5 minutes without a heartbeat, requests read every 5 seconds
+        cfg = self._config()
+        assert cfg.ADVANCED_GENERATION_PLAN_WAIT_SECONDS == 900
+        assert cfg.ADVANCED_GENERATION_PLAN_WAIT_TOTAL_SECONDS == 3600
+        assert cfg.ADVANCED_GENERATION_STALL_SECONDS == 300
+        assert cfg.ADVANCED_GENERATION_CONTROL_POLL_SECONDS == 5
+
+    def test_prepare_progress_is_read_every_five_seconds(self):
+        # The preparation's progress file is read at most 5 s apart
+        cfg = self._config()
+        assert cfg.ADVANCED_GENERATION_PREPARE_POLL_SECONDS == 5
+
+    def test_table_analysis_depth_constants(self):
+        # 1% bad-row limit, 10 rows per persona, 60 s notice
+        cfg = self._config()
+        assert cfg.ADVANCED_SOURCE_MAX_EXCLUDED_PERCENT == 1
+        assert cfg.ADVANCED_MIN_ROWS_PER_PERSONA == 10
+        assert cfg.ADVANCED_GENERATION_PREPARE_NOTICE_SECONDS == 60
+
+    def test_document_limits(self):
+        # Document and evidence limits; the sandbox gets them as args
+        cfg = self._config()
+        assert cfg.ADVANCED_DOCUMENT_MAX_BYTES == 100_000_000
+        assert cfg.ADVANCED_INSPECT_TAIL_BYTES == 1024 * 1024
+        assert cfg.ADVANCED_DOCUMENT_CHARS_PER_MB_PDF > 0
+        assert cfg.ADVANCED_DOCUMENT_CHARS_PER_MB_DOCX > 0
+        assert cfg.ADVANCED_DOCUMENT_CHUNK_CHARS == 15_000
+        assert cfg.ADVANCED_DOCUMENT_CHUNK_OVERLAP_CHARS == 500
+        assert cfg.ADVANCED_DOCUMENT_MAX_TOTAL_CHARS == 2_000_000
+        # Step 1: stdout of Code Interpreter returned 4,000,000 characters
+        # whole, so one transfer is 10,000 characters (under the 20,000 cut)
+        assert cfg.ADVANCED_DOCUMENT_TRANSFER_CHARS == 10_000
+        assert cfg.ADVANCED_EVIDENCE_MAX_CONCURRENT == 4
+        assert cfg.ADVANCED_EVIDENCE_PER_CHUNK_MAX == 20
+        assert cfg.ADVANCED_EVIDENCE_QUOTE_MAX_CHARS == 200
+        assert cfg.ADVANCED_EVIDENCE_QUOTE_MIN_CHARS == 10
+        assert cfg.ADVANCED_EVIDENCE_VERIFY_BATCH == 50
+        assert cfg.ADVANCED_EVIDENCE_MAX_RETRIES == 2
+        assert cfg.ADVANCED_EVIDENCE_RETRY_BASE_SECONDS == 2
+
+    def test_evidence_model_follows_the_survey_model(self):
+        cfg = self._config(SURVEY_MODEL_ID="light-model")
+        assert cfg.ADVANCED_EVIDENCE_MODEL_ID == "light-model"
+
+    def test_evidence_model_overrides_the_default(self):
+        cfg = self._config(
+            SURVEY_MODEL_ID="light-model", ADVANCED_EVIDENCE_MODEL_ID="model-e"
+        )
+        assert cfg.ADVANCED_EVIDENCE_MODEL_ID == "model-e"
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("true", True), ("FALSE", False), ("1", True), ("0", False), ("", True)],
+    )
+    def test_enable_is_read(self, value, expected):
+        assert (
+            self._config(ENABLE_ADVANCED_GENERATION=value).ENABLE_ADVANCED_GENERATION
+            is expected
+        )
+
+    def test_unknown_enable_value_stops_the_start(self):
+        with pytest.raises(ValueError, match="ENABLE_ADVANCED_GENERATION"):
+            self._config(ENABLE_ADVANCED_GENERATION="maybe")
+
+    def test_code_interpreter_id_is_read_and_stripped(self):
+        cfg = self._config(CODE_INTERPRETER_ID="  ci-abc123  ")
+        assert cfg.CODE_INTERPRETER_ID == "ci-abc123"
+
+    def test_model_id_overrides_the_default(self):
+        cfg = self._config(ADVANCED_GENERATION_MODEL_ID="model-x")
+        assert cfg.ADVANCED_GENERATION_MODEL_ID == "model-x"
+
+    def test_model_id_follows_bedrock_model_id(self):
+        cfg = self._config(BEDROCK_MODEL_ID="base-model")
+        assert cfg.ADVANCED_GENERATION_MODEL_ID == "base-model"
+
+    def test_max_concurrent_from_env(self):
+        assert (
+            self._config(
+                ADVANCED_GENERATION_MAX_CONCURRENT="5"
+            ).ADVANCED_GENERATION_MAX_CONCURRENT
+            == 5
+        )
+
+    @pytest.mark.parametrize("value", ["0", "-1", "x"])
+    def test_bad_max_concurrent_stops_the_start(self, value):
+        with pytest.raises(ValueError, match="ADVANCED_GENERATION_MAX_CONCURRENT"):
+            self._config(ADVANCED_GENERATION_MAX_CONCURRENT=value)
+
+    @pytest.mark.parametrize(
+        ("setting", "suffix"),
+        [
+            ("SOURCE_FILES_TABLE_NAME", "SourceFiles"),
+            ("ADVANCED_GENERATIONS_TABLE_NAME", "AdvancedGenerations"),
+            ("APP_SETTINGS_TABLE_NAME", "AppSettings"),
+        ],
+    )
+    def test_table_falls_back_to_the_prefix(self, setting, suffix):
+        cfg = self._config(DYNAMODB_TABLE_PREFIX="Local")
+        assert getattr(cfg, setting) == f"Local_{suffix}"
+
+    @pytest.mark.parametrize(
+        "setting",
+        [
+            "SOURCE_FILES_TABLE_NAME",
+            "ADVANCED_GENERATIONS_TABLE_NAME",
+            "APP_SETTINGS_TABLE_NAME",
+        ],
+    )
+    def test_table_reads_the_cdk_name(self, setting):
+        assert getattr(self._config(**{setting: "Data-T1"}), setting) == "Data-T1"
+
+    def test_new_tables_are_not_bulk_granted(self):
+        from src.config import TABLE_NAME_SETTINGS
+
+        for kind in ("SourceFiles", "AdvancedGenerations", "AppSettings"):
+            assert kind not in TABLE_NAME_SETTINGS

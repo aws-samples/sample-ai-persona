@@ -1,10 +1,9 @@
-"""
-Message data model for the AI Persona System.
+"""Message data model for the AI Persona System.
 
 ``Message`` is the in-memory and display shape of one utterance.
-``DiscussionMessage`` (v1.0.0 U6) is how a saved discussion keeps it in
+``DiscussionMessage`` is how a saved discussion keeps it in
 ``DiscussionMessages``: keyed by the discussion and a sequence number, with
-the speaker's name at the time it was said (entities.md DiscussionMessage).
+the speaker's name at the time it was said.
 """
 
 from dataclasses import dataclass, asdict
@@ -84,10 +83,10 @@ class Message:
 
 @dataclass(frozen=True)
 class DiscussionMessage:
-    """One saved message of a discussion (``DiscussionMessages``, ADR-002).
+    """One saved message of a discussion (``DiscussionMessages``).
 
     It has no owner: it is read only through its discussion's body, after the
-    body passed ``can_read`` (BR1.3).
+    body passed ``can_read``.
 
     Attributes:
         discussion_id: The discussion.

@@ -1,11 +1,11 @@
-"""The department list, cached per task (ADR-009, contract C4).
+"""The department list, cached per task.
 
 Departments are the Cognito ``group:`` groups. Each task keeps one copy of the
 list and refreshes it at most every five minutes, so requests do not call
-Cognito (NFR9.14). The list is never used to decide who may read what; that
-uses the user's own ``group_ids`` (BR2.11).
+Cognito. The list is never used to decide who may read what; that
+uses the user's own ``group_ids``.
 
-Refresh rules (BR2.11, NFR9.17, NFR9.19, NFR Design R-02):
+Refresh rules:
 
 - Younger than :data:`REFRESH_INTERVAL_SECONDS`: served as is.
 - Older: one request refreshes it. The refresher is whoever takes the
@@ -18,7 +18,7 @@ Refresh rules (BR2.11, NFR9.17, NFR9.19, NFR Design R-02):
 
 The snapshot (list and fetch time) is replaced as one value, so readers never
 see a list with another list's time. Failures and 503s write
-``authz.departments_stale`` (``age_seconds``, ``served``) (NFR8.8).
+``authz.departments_stale`` (``age_seconds``, ``served``).
 """
 
 import threading
@@ -77,7 +77,7 @@ class DepartmentDirectory:
         self._refresh_lock = threading.Lock()
         self._refreshed = threading.Event()
 
-    # --- queries (contract C4) ---------------------------------------------------
+    # --- queries ---------------------------------------------------
 
     def list_all(self) -> list[Department]:
         """Every department, ordered by display name.

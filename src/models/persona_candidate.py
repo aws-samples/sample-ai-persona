@@ -1,9 +1,9 @@
-"""Generated personas waiting to be saved (U5, ADR-008, entities.md).
+"""Generated personas waiting to be saved.
 
 A generation writes one :class:`PersonaCandidate` per persona to the
 ``PersonaCandidates`` table, outside the application process, so that the save
-request may land on another task (NFR9.27). Only the user who generated a
-candidate may save it (BR1.3); the claim marks (``claimed_at`` /
+request may land on another task. Only the user who generated a
+candidate may save it; the claim marks (``claimed_at`` /
 ``claim_token``) stop a double submit, and ``saved_at`` stops a second save
 when the candidate could not be deleted after a successful save.
 
@@ -22,9 +22,9 @@ from typing import Any, Mapping
 from .dataset import DatasetColumn
 from .persona import Persona
 
-#: A claim older than this is treated as released (a crashed request, BR1.3).
+#: A claim older than this is treated as released (a crashed request).
 CLAIM_TIMEOUT_SECONDS = 300
-#: Largest item a candidate may serialize to (BR1.6, NFR2.12).
+#: Largest item a candidate may serialize to.
 MAX_CANDIDATE_ITEM_BYTES = 350 * 1024
 #: Key prefix of the temporary behaviour CSVs (the lifecycle rule's filter).
 CANDIDATE_TEMP_PREFIX = "candidates"
@@ -62,7 +62,7 @@ def _epoch(value: datetime) -> int:
 
 @dataclass(frozen=True)
 class BehaviorDatasetCandidate:
-    """One behaviour CSV fetched for a DWH generation (BR1.2).
+    """One behaviour CSV fetched for a DWH generation.
 
     The CSV itself stays in S3 under :attr:`temp_s3_key`; only its shape is
     kept here.
@@ -93,7 +93,7 @@ class BehaviorDatasetCandidate:
 
     @staticmethod
     def temp_key(owner_sub: str, candidate_id: str, temp_id: str) -> str:
-        """The temporary S3 key of one CSV (BR1.2, BR1.8)."""
+        """The temporary S3 key of one CSV."""
         return f"{CANDIDATE_TEMP_PREFIX}/{owner_sub}/{candidate_id}/{temp_id}.csv"
 
     @property
@@ -144,11 +144,11 @@ class BehaviorDatasetCandidate:
 
 @dataclass(frozen=True)
 class PersonaCandidate:
-    """A generated persona that is not saved yet (entities.md PersonaCandidate).
+    """A generated persona that is not saved yet.
 
     Attributes:
         candidate_id: ID shown to the screen; never reused as the saved
-            persona's ID (BR1.5).
+            persona's ID.
         owner_sub: The user who generated it.
         generation_id: Groups the candidates of one generation.
         persona_payload: The generated fields (see ``_PAYLOAD_FIELDS``).
@@ -157,7 +157,7 @@ class PersonaCandidate:
         generation_log: The generation's thinking log.
         generation_context: The generation conditions (no file contents).
         behavior_datasets: Behaviour CSVs fetched for it.
-        claimed_at: Set while a save is in progress (BR1.3).
+        claimed_at: Set while a save is in progress.
         claim_token: Token of the request that holds the claim.
         saved_at: Set when a saved candidate could not be deleted.
     """
@@ -190,10 +190,10 @@ class PersonaCandidate:
         generation_context: dict[str, Any] | None = None,
         behavior_datasets: tuple[BehaviorDatasetCandidate, ...] = (),
     ) -> "PersonaCandidate":
-        """Make the candidate of one generated persona (BR1.1).
+        """Make the candidate of one generated persona.
 
         The generated persona's ID becomes the candidate ID; the saved persona
-        gets a new ID later (BR1.5).
+        gets a new ID later.
         """
         payload = {
             key: value
@@ -213,11 +213,11 @@ class PersonaCandidate:
         )
 
     def is_expired(self, now: datetime) -> bool:
-        """Whether ``now`` is at or past the expiry (BR1.8)."""
+        """Whether ``now`` is at or past the expiry."""
         return _epoch(now) >= self.expires_at
 
     def claim_is_active(self, now: datetime) -> bool:
-        """Whether a claim is held and younger than five minutes (BR1.3)."""
+        """Whether a claim is held and younger than five minutes."""
         if self.claimed_at is None:
             return False
         return now - self.claimed_at < timedelta(seconds=CLAIM_TIMEOUT_SECONDS)
@@ -239,7 +239,7 @@ class PersonaCandidate:
         """A new, unsaved persona with the payload and the generation record.
 
         It has a fresh ID and no owner; ``PersonaManager.save_persona`` sets the
-        owner (BR1.4, BR1.5).
+        owner.
         """
         p = self.persona_payload
         persona = Persona.create_new(
@@ -311,7 +311,7 @@ class PersonaCandidate:
 
 @dataclass(frozen=True)
 class CandidateSaveResult:
-    """Outcome of saving claimed candidates (BR1.9, WF2).
+    """Outcome of saving claimed candidates.
 
     ``PersonaManager.save_generated_personas`` returns it and
     ``PersonaGenerationManager.finish_candidates`` cleans up from it; the
@@ -338,7 +338,7 @@ class CandidateSaveResult:
 
 @dataclass(frozen=True)
 class CandidateClaim:
-    """The candidates one save request holds (BR1.3).
+    """The candidates one save request holds.
 
     Attributes:
         token: The request's claim token; cleanup only touches items holding it.

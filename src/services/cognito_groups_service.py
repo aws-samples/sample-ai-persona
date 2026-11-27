@@ -1,11 +1,11 @@
 """
-Cognito ``ListGroups`` for the department list (ADR-009, contract C4).
+Cognito ``ListGroups`` for the department list.
 
 Departments are the user pool groups named ``group:<id>``; their description
-is the display name, or ``<id>`` when the description is empty (BR2.11). Role
+is the display name, or ``<id>`` when the description is empty. Role
 groups (``role:``) and any other groups are ignored.
 
-Limits (``reliability-design.md``, NFR Design R-02 (3)):
+Limits:
 
 - The whole listing, across every page, gets :data:`LIST_GROUPS_TIMEOUT_SECONDS`.
   Before each page the remaining time is checked; a page is only requested

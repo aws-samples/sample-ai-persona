@@ -1,4 +1,4 @@
-"""Replaced modals whose behaviour changes in U3 (WF3, NFR4.9, NFR6.12).
+"""Replaced modals whose behaviour changed.
 
 KB binding and insight categories now close only when their request succeeds,
 stay open on failure, and no longer close on a backdrop click.
@@ -19,7 +19,7 @@ FAILURE_TOAST = {
 KB_BINDING = render_page(
     "persona/partials/kb_binding.html",
     persona_id="p1",
-    # U5: the template takes a KbBindingView (choices are shown to managers only)
+    # The template takes a KbBindingView (choices are shown to managers only)
     view={
         "manageable": True,
         "binding": None,
@@ -37,7 +37,7 @@ INSIGHTS = render_page(
     "discussion/partials/insights.html",
     insights=[],
     discussion_id="d1",
-    # U6: 再生成のダイアログは管理できる人だけに出る
+    # The regenerate dialog is shown only to users who can manage
     manageable=True,
     default_categories=[{"name": "顧客ニーズ", "description": "ニーズ"}],
 )

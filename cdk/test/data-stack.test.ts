@@ -5,25 +5,25 @@ import { DataStack } from '../lib/data-stack';
 import { devParameter } from '../parameters';
 
 /**
- * Data スタック（状態を持つもの）の検査。FR9.1、FR9.2、NFR3.4、NFR9.7、NFR9.10、約束 C10。
- * ステートフルなリソースはすべて RETAIN で、物理名は自動生成にする。
+ * Checks of the Data stack (the stateful resources).
+ * All stateful resources use RETAIN and auto-generated physical names.
  */
 
 /**
- * テーブルごとの GSI の名前（U9、NFR2.27）。型固定の GSI 7 つはすべて外した。
- * dev は Stage を作り直して出すため、1 回で外す（既存の環境は各テーブル 1 つずつ外した形で分けて出す）。
- * この一覧を変えるときは tests/infra/test_create_dynamodb_tables.py の EXPECTED_GSIS も直す。
+ * GSI names per table. All seven type-fixed GSIs were removed.
+ * dev recreates the Stage, so they are removed in one go (existing environments remove one per table, in steps).
+ * When changing this list, also update EXPECTED_GSIS in tests/infra/test_create_dynamodb_tables.py.
  */
 const EXPECTED_GSIS: Record<string, string[]> = {
-  // キーはテーブルの construct ID（database.ts）
+  // Keys are the table construct IDs (database.ts)
   Personas: ['OwnerIndex'],
   Discussions: ['OwnerIndex'],
   UploadedFiles: [],
   Datasets: [],
   SurveyTemplates: ['OwnerIndex'],
-  // アンケートの待ちと実行中の疎な索引（Step Functions への移行、NFR3.10）
+  // Sparse index of waiting and running surveys (moved to Step Functions)
   Surveys: ['OwnerIndex', 'RunQueueIndex'],
-  // 進行役の担当者の記録（GSI なし、BR2.3）
+  // Records of the facilitator's assignee (no GSI)
   SurveyRunLease: [],
   KnowledgeBases: [],
   Jobs: [],
@@ -36,6 +36,10 @@ const EXPECTED_GSIS: Record<string, string[]> = {
   DiscussionReports: [],
   InterviewSessions: [],
   InterviewMessages: [],
+  // Advanced generation (beta): a user's files and the generation list (projection ALL)
+  SourceFiles: ['owner_sub-created_at'],
+  AdvancedGenerations: ['owner_sub-created_at'],
+  AppSettings: [],
 };
 
 const ENV = { account: '123456789012', region: 'ap-northeast-1' };
@@ -50,11 +54,11 @@ function logicalIdOf(tableId: string): string {
 }
 
 const EXISTING_TABLES: { id: string; pk: string; pitr: boolean; ttl?: string }[] = [
-  // Personas（U4 で OwnerIndex を足した。U9 PR 1 で CreatedAtIndex を外した）
+  // Personas
   { id: 'Personas', pk: 'id', pitr: true },
-  // Discussions（U6 で OwnerIndex を足した。U9 PR 1 で CreatedAtIndex を外した）
+  // Discussions
   { id: 'Discussions', pk: 'id', pitr: true },
-  // UploadedFiles（U5 で TTL expires_at を足した。U9 PR 1 で UploadedAtIndex を外した）
+  // UploadedFiles (TTL on expires_at)
   { id: 'UploadedFiles', pk: 'id', pitr: true, ttl: 'expires_at' },
   { id: 'Jobs', pk: 'id', pitr: false, ttl: 'expires_at' },
 ];
@@ -148,7 +152,7 @@ describe('DataStack: PersonaCandidates と PersonaBindings（U5、NFR1.40、NFR9
     expect(candidates.Properties.GlobalSecondaryIndexes).toBeUndefined();
     const replica = candidates.Properties.Replicas[0];
     expect(replica.PointInTimeRecoverySpecification).toBeUndefined();
-    // 8 時間の一時データで、作り直しても失うものがない（Infrastructure Design R 2 回目）
+    // Eight-hour temporary data; nothing is lost when recreated
     expect(replica.DeletionProtectionEnabled).toBeUndefined();
   });
 
@@ -265,7 +269,7 @@ describe('DataStack: カスタムデータの登録情報とアンケートの O
     expect(table.Properties.BillingMode).toBe('PAY_PER_REQUEST');
     expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
     expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
-    // AWS 管理キー（カスタマー管理の KMS キーを指さない）
+    // AWS-managed key (not pointing at a customer-managed KMS key)
     expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true, SSEType: 'KMS' });
     const replica = table.Properties.Replicas[0];
     expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
@@ -345,8 +349,8 @@ describe('DataStack: アップロード用バケットのライフサイクル�
     return bucket.Properties.LifecycleConfiguration?.Rules ?? [];
   }
 
-  test('ルールは 4 つで、どれも有効', () => {
-    expect(rules()).toHaveLength(4);
+  test('ルールは 6 つで、どれも有効', () => {
+    expect(rules()).toHaveLength(6);
     for (const rule of rules()) {
       expect(rule.Status).toBe('Enabled');
     }
@@ -388,12 +392,131 @@ describe('DataStack: アップロード用バケットのライフサイクル�
       VersioningConfiguration: { Status: 'Enabled' },
     });
   });
+
+  // Advanced generation (beta)
+  // The current version is deleted 9 days after creation (7 days of retention plus 2 days of margin). The rule ID stays the same
+  test('sources/ は未完了のマルチパートを 1 日で中止し、古いバージョンを 1 日、今の版を 9 日で消す', () => {
+    const rule = rules().find((r) => r.Id === 'AbortIncompleteSourceUploads');
+    expect(rule).toMatchObject({
+      Prefix: 'sources/',
+      AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
+      NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+      ExpirationInDays: 9,
+    });
+    expect(rule.TagFilters).toBeUndefined();
+  });
+
+  test('sources/ 以外の規則に今の版の 9 日を足さない', () => {
+    const others = rules().filter((r) => r.Id !== 'AbortIncompleteSourceUploads');
+    expect(others.map((r) => r.ExpirationInDays).filter((d) => d === 9)).toEqual([]);
+  });
+
+  test('analysis-records/ は古いバージョンを 1 日で消す（保存前の記録は既存の pending=true の規則で消える）', () => {
+    const rule = rules().find((r) => r.Id === 'ExpireNoncurrentAnalysisRecords');
+    expect(rule).toMatchObject({
+      Prefix: 'analysis-records/',
+      NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+    });
+    expect(rule.ExpirationInDays).toBeUndefined();
+    expect(rule.TagFilters).toBeUndefined();
+  });
+
+  test('バケットの暗号化は S3_MANAGED（SSE-S3）のままで、KMS の鍵を指さない（NFR3.2）', () => {
+    const bucket = Object.values(template.findResources('AWS::S3::Bucket'))[0];
+    expect(bucket.Properties.BucketEncryption).toEqual({
+      ServerSideEncryptionConfiguration: [
+        { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+      ],
+    });
+    expect(bucket.Properties.CorsConfiguration).toBeUndefined();
+  });
+});
+
+describe('DataStack: 高度な生成の 3 つのテーブル（ベータ、U1、契約 C4・C5、NFR3.1、NFR5.24）', () => {
+  const resources = () => template.findResources('AWS::DynamoDB::GlobalTable');
+  const OWNER_KEYS = [
+    { AttributeName: 'owner_sub', KeyType: 'HASH' },
+    { AttributeName: 'created_at', KeyType: 'RANGE' },
+  ];
+
+  /** On-demand, AWS managed key, PITR and RETAIN (shared by the three tables). */
+  function expectCommon(table: any): void {
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.UpdateReplacePolicy).toBe('Retain');
+    expect(table.Properties.TableName).toBeUndefined();
+    expect(table.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    // AWS-managed key (no customer-managed KMS key is created)
+    expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true, SSEType: 'KMS' });
+    const replica = table.Properties.Replicas[0];
+    expect(replica.SSESpecification).toBeUndefined();
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+  }
+
+  test('SourceFiles は PK source_file_id、GSI owner_sub-created_at（射影 ALL）、削除保護、TTL は expires_at（U2 BR13.6）', () => {
+    const table = resources()[logicalIdOf('SourceFiles')];
+    expect(table).toBeDefined();
+    expectCommon(table);
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'source_file_id', KeyType: 'HASH' }]);
+    const [index] = table.Properties.GlobalSecondaryIndexes;
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(1);
+    expect(index.IndexName).toBe('owner_sub-created_at');
+    expect(index.KeySchema).toEqual(OWNER_KEYS);
+    expect(index.Projection).toEqual({ ProjectionType: 'ALL' });
+    expect(table.Properties.TimeToLiveSpecification).toEqual({
+      AttributeName: 'expires_at',
+      Enabled: true,
+    });
+    expect(table.Properties.Replicas[0].DeletionProtectionEnabled).toBe(true);
+  });
+
+  test('AdvancedGenerations は PK pk・SK sk、GSI owner_sub-created_at（射影 ALL）、TTL expires_at、削除保護', () => {
+    const table = resources()[logicalIdOf('AdvancedGenerations')];
+    expect(table).toBeDefined();
+    expectCommon(table);
+    expect(table.Properties.KeySchema).toEqual([
+      { AttributeName: 'pk', KeyType: 'HASH' },
+      { AttributeName: 'sk', KeyType: 'RANGE' },
+    ]);
+    const [index] = table.Properties.GlobalSecondaryIndexes;
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(1);
+    expect(index.IndexName).toBe('owner_sub-created_at');
+    expect(index.KeySchema).toEqual(OWNER_KEYS);
+    expect(index.Projection).toEqual({ ProjectionType: 'ALL' });
+    expect(table.Properties.TimeToLiveSpecification).toEqual({ AttributeName: 'expires_at', Enabled: true });
+    expect(table.Properties.Replicas[0].DeletionProtectionEnabled).toBe(true);
+  });
+
+  test('AppSettings は PK setting_key、GSI なし、TTL なし、PITR と RETAIN（設計どおり削除保護は付けない）', () => {
+    const table = resources()[logicalIdOf('AppSettings')];
+    expect(table).toBeDefined();
+    expectCommon(table);
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'setting_key', KeyType: 'HASH' }]);
+    expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties.Replicas[0].DeletionProtectionEnabled).toBeUndefined();
+  });
+
+  test('3 つのテーブルはアプリのテーブル（環境変数の名前は src/config.py と同じ）に入る', () => {
+    const tables = dataStack.database.applicationTables;
+    expect(tables.SOURCE_FILES_TABLE_NAME).toBe(dataStack.database.sourceFilesTable);
+    expect(tables.ADVANCED_GENERATIONS_TABLE_NAME).toBe(dataStack.database.advancedGenerationsTable);
+    expect(tables.APP_SETTINGS_TABLE_NAME).toBe(dataStack.database.appSettingsTable);
+  });
+
+  test('GSI は名前で付けるインデックス（queriedIndexArns）に入り、AppSettings には付かない', () => {
+    const { database } = dataStack;
+    const stack = cdk.Stack.of(database);
+    const indexArns = (table: any) => stack.resolve(database.queriedIndexArns(table));
+    expect(JSON.stringify(indexArns(database.sourceFilesTable))).toContain('/index/owner_sub-created_at');
+    expect(JSON.stringify(indexArns(database.advancedGenerationsTable))).toContain('/index/owner_sub-created_at');
+    expect(indexArns(database.appSettingsTable)).toEqual([]);
+  });
 });
 
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つ・担当者の記録を含めて 18 テーブル（U9 で古い紐付けの 2 つを外した）。物理名はなく、すべて RETAIN', () => {
+  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つ・担当者の記録・高度な生成の 3 つを含めて 21 テーブル（U9 で古い紐付けの 2 つを外した）。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(18);
+    expect(Object.keys(tables)).toHaveLength(21);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();

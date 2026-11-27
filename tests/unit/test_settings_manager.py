@@ -1,16 +1,23 @@
-"""SettingsManager のユニットテスト。
+"""Unit tests for SettingsManager.
 
-U7: BR3.1、BR3.3、BR5.1、BR5.2、NFR1.72、NFR8.23、NFR8.24、AC5.2.1、AC5.2.3、AC5.3.1、
-AC5.3.3。KB とデータ分析エージェントの設定は settings:manage（なければ 404）。
-DynamoDB は moto（tests/unit/survey_world.py）。
+KB and data analysis agent settings need settings:manage (404 otherwise).
+DynamoDB is moto (tests/unit/survey_world.py).
 """
 
+import json
 from datetime import datetime
 
 import pytest
 from unittest.mock import Mock, patch
 
+from src.config import config
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
+from src.models.authz import Department
+from src.services.stores.app_settings_store import (
+    AppSettingsStore,
+    AppSettingsStoreError,
+    SettingsVersionConflict,
+)
 from src.models.errors import CodedError, ErrorCode
 from src.models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_SELF_MANAGED
 from src.models.sharing import AssetScopeChange
@@ -68,7 +75,7 @@ class TestSettingsAreAdminOnly:
         assert [e["reason"] for e in denied] == ["hidden"]
 
     def test_availability_needs_no_permission(self):
-        # U3: the decision is DataAgentPolicy's (it reads the config itself)
+        # the decision is DataAgentPolicy's (it reads the config itself)
         with patch("src.managers.components.data_agent_policy.config") as config:
             config.DATA_AGENT_ALLOWED = True
             config.ENABLE_DATA_AGENT = True
@@ -135,7 +142,7 @@ class TestKnowledgeBases:
     def test_delete_keeps_dataset_bindings_with_the_same_id(
         self, manager, survey_world
     ):
-        """KB の削除に別の種類の ID が来ても、データセットの紐付けは消さない。"""
+        """A different kind of ID for a KB delete does not remove dataset bindings."""
         bindings = survey_world.binding_store
         bindings.put(PersonaBinding.for_dataset("p1", "x", now=NOW))
 
@@ -146,7 +153,7 @@ class TestKnowledgeBases:
     def test_delete_succeeds_when_the_bindings_cannot_be_removed(
         self, manager, survey_world, monkeypatch
     ):
-        """残った紐付けは、読むときに本体のない紐付けとして飛ばされる。"""
+        """A leftover binding is skipped on read as a binding without a body."""
         kb = survey_world.knowledge_base()
         monkeypatch.setattr(
             survey_world.binding_store,
@@ -207,7 +214,7 @@ class TestKnowledgeBaseScope:
 
 @pytest.mark.unit
 class TestSettingsManagerDataAgent:
-    """データ分析エージェント接続テストのテスト。"""
+    """Tests for the data analysis agent connection test."""
 
     def setup_method(self):
         self.manager = SettingsManager(
@@ -223,7 +230,7 @@ class TestSettingsManagerDataAgent:
 
     @patch("src.managers.settings_manager.config")
     def test_no_runtime_arn_raises_error(self, mock_config):
-        """Runtime ARN未設定時にエラーを返すこと"""
+        """Returns an error when the Runtime ARN is not set."""
         mock_config.DATA_AGENT_RUNTIME_ARN = None
 
         with raises_code(SettingsManagerError, ErrorCode.DATA_AGENT_NOT_CONFIGURED):
@@ -232,7 +239,7 @@ class TestSettingsManagerDataAgent:
     @patch("src.managers.settings_manager.service_factory")
     @patch("src.managers.settings_manager.config")
     def test_service_returns_none_raises_error(self, mock_config, mock_sf):
-        """サービスがNoneを返した場合エラーになること"""
+        """Errors when the service returns None."""
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/xxx"
         )
@@ -244,7 +251,7 @@ class TestSettingsManagerDataAgent:
     @patch("src.managers.settings_manager.service_factory")
     @patch("src.managers.settings_manager.config")
     def test_success(self, mock_config, mock_sf):
-        """正常系でクエリ結果テキストを返すこと"""
+        """Returns the query result text on success."""
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/xxx"
         )
@@ -264,7 +271,7 @@ class TestSettingsManagerDataAgent:
     @patch("src.managers.settings_manager.service_factory")
     @patch("src.managers.settings_manager.config")
     def test_exception_wrapping(self, mock_config, mock_sf):
-        """内部例外がSettingsManagerErrorにラップされること"""
+        """Internal exceptions are wrapped in SettingsManagerError."""
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/xxx"
         )
@@ -281,7 +288,7 @@ class TestSettingsManagerDataAgent:
 
 
 # =============================================================================
-# 閉域対応 U3: Data Agent を使ってよくない環境（BR3.2、BR3.4、BR3.6、BR3.8）
+# Closed network: environments where the Data Agent must not be used
 # =============================================================================
 
 
@@ -348,3 +355,165 @@ class TestDataAgentNotAllowed:
             "data_agent_runtime_arn": "arn:new",
             "data_agent_region": "us-west-2",
         }
+
+
+# --- The advanced generation section ---
+
+_STORED = {
+    "setting_key": "advanced_generation",
+    "version": 2,
+    "audience_mode": "departments",
+    "department_groups": ["group:sales"],
+    "allow_detailed_analysis": False,
+    "updated_by": "admin-9",
+    "updated_at": "2026-10-24T09:00:00+00:00",
+}
+
+
+@pytest.fixture
+def section():
+    settings = Mock(spec=AppSettingsStore)
+    settings.get.return_value = dict(_STORED)
+    settings.put_if_version.return_value = 3
+    departments = Mock()
+    departments.list_all.return_value = [
+        Department("sales", "営業部"),
+        Department("hr", "人事部"),
+    ]
+    owners = Mock()
+    owners.label.return_value = "管理 太郎"
+    manager = SettingsManager(
+        knowledge_base_store=Mock(),
+        departments=departments,
+        binding_store=Mock(),
+        settings_store=settings,
+        owners=owners,
+        clock=lambda: NOW,
+    )
+    return manager, settings, departments
+
+
+def _form(**overrides):
+    values = {
+        "audience_mode": "departments",
+        "department_groups": ["group:hr"],
+        "allow_detailed_analysis": True,
+        "version": 2,
+    }
+    values.update(overrides)
+    return values
+
+
+class TestAdvancedGenerationSection:
+    def test_admin_reads_the_section(self, section):
+        manager, _, _ = section
+
+        view = manager.advanced_generation_section(ADMIN)
+
+        assert view.setting.version == 2
+        assert view.setting.department_groups == ("sales",)
+        assert view.updated_by_name == "管理 太郎"
+
+    def test_member_gets_404_and_nothing_is_read(self, section):
+        manager, settings, departments = section
+
+        with raises_code(CodedError, ErrorCode.SETTINGS_NOT_FOUND):
+            manager.advanced_generation_section(MEMBER_A)
+        settings.get.assert_not_called()
+        departments.list_all.assert_not_called()
+
+    def test_member_save_is_forbidden_and_nothing_is_read_or_written(self, section):
+        manager, settings, departments = section
+
+        with raises_code(CodedError, ErrorCode.ACCESS_DENIED):
+            manager.save_advanced_generation_setting(MEMBER_A, _form())
+        settings.get.assert_not_called()
+        settings.put_if_version.assert_not_called()
+        departments.list_all.assert_not_called()
+
+    def test_a_save_is_logged_without_department_names(self, section, logs):
+        manager, settings, _ = section
+
+        view = manager.save_advanced_generation_setting(ADMIN, _form())
+
+        assert view.setting.version == 3 and view.notice == "saved"
+        (event,) = logs.events("settings.advanced_generation_changed")
+        assert event["actor_sub"] == ADMIN.sub
+        assert event["version"] == 3
+        assert event["audience_mode"] == "departments"
+        assert event["department_count"] == 1
+        assert event["allow_detailed_analysis"] is True
+        assert "hr" not in json.dumps(event) and "人事" not in json.dumps(event)
+
+    def test_a_lost_version_is_logged_and_raised(self, section, logs):
+        manager, settings, _ = section
+        settings.put_if_version.side_effect = SettingsVersionConflict("lost")
+
+        with raises_code(SettingsManagerError, ErrorCode.SETTINGS_VERSION_CONFLICT):
+            manager.save_advanced_generation_setting(ADMIN, _form())
+
+        (event,) = logs.events("settings.advanced_generation_conflict")
+        assert event == {**event, "actor_sub": ADMIN.sub, "sent_version": 2}
+        assert logs.events("settings.advanced_generation_changed") == []
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_the_section_is_offered_only_while_the_feature_is_on(
+        self, section, monkeypatch, enabled
+    ):
+        manager, _, _ = section
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", enabled)
+
+        assert manager.is_advanced_generation_section_offered() is enabled
+
+    def test_the_feature_off_hides_the_section_and_its_save(self, section, monkeypatch):
+        """The closed network Stage: the same 404 as a missing page."""
+        manager, settings, departments = section
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
+
+        with raises_code(SettingsManagerError, ErrorCode.SETTINGS_NOT_FOUND):
+            manager.advanced_generation_section(ADMIN)
+        with raises_code(SettingsManagerError, ErrorCode.SETTINGS_NOT_FOUND):
+            manager.save_advanced_generation_setting(ADMIN, _form())
+        settings.get.assert_not_called()
+        settings.put_if_version.assert_not_called()
+        departments.list_all.assert_not_called()
+
+    def test_the_feature_off_keeps_the_members_save_forbidden(
+        self, section, monkeypatch
+    ):
+        manager, settings, _ = section
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
+
+        with raises_code(CodedError, ErrorCode.ACCESS_DENIED):
+            manager.save_advanced_generation_setting(MEMBER_A, _form())
+        settings.put_if_version.assert_not_called()
+
+    def test_a_vanished_department_tells_the_cause(self, section):
+        manager, settings, _ = section
+
+        with raises_code(
+            SettingsManagerError,
+            ErrorCode.REQUEST_INVALID,
+            reason="vanished_departments",
+            count=1,
+        ):
+            manager.save_advanced_generation_setting(
+                ADMIN, _form(department_groups=["group:sales", "group:gone"])
+            )
+        settings.put_if_version.assert_not_called()
+
+    def test_bad_input_is_the_managers_validation_error(self, section):
+        manager, settings, _ = section
+
+        with raises_code(SettingsManagerError, ErrorCode.REQUEST_INVALID):
+            manager.save_advanced_generation_setting(
+                ADMIN, _form(department_groups=["group:gone"])
+            )
+        settings.put_if_version.assert_not_called()
+
+    def test_an_unreadable_setting_is_the_managers_error(self, section):
+        manager, settings, _ = section
+        settings.get.side_effect = AppSettingsStoreError("down")
+
+        with raises_code(SettingsManagerError, ErrorCode.DATABASE_OPERATION_FAILED):
+            manager.advanced_generation_section(ADMIN)

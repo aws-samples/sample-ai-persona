@@ -1,13 +1,11 @@
-"""SurveyExecutionManager のユニットテスト
+"""Unit tests for SurveyExecutionManager.
 
-U7: BR1.1〜BR1.4、BR1.8、BR2.1、BR2.2、BR2.6〜BR2.10、BR2.12、BR4.2、NFR1.66、
-NFR1.67、NFR1.69〜NFR1.71、NFR1.84、NFR1.86、NFR2.24、NFR2.25、NFR8.26、
-AC2.5.2、AC4.1.2、AC4.4.1、AC4.4.4。DynamoDB と S3 は moto、判定の部品は本物
-（tests/unit/survey_world.py）、ペルソナの抽出と Step Functions はモック。
+DynamoDB and S3 are moto; the decision components are real
+(tests/unit/survey_world.py); persona extraction and Step Functions are mocks.
 
-Step Functions への移行: 作成は queued で保存するだけ（WF1、BR9.1）、下限は 10
-（BR1.1〜BR1.3）、旧記録の中断（BR8.1）、削除で実行を止める（BR7）。推論と完了の
-まとめは tests/unit/test_survey_run_manager.py。
+Step Functions migration: creation only saves as queued, the minimum is 10, old records
+are interrupted, and deletion stops the run. Inference and completion are covered in
+tests/unit/test_survey_run_manager.py.
 """
 
 import dataclasses
@@ -64,7 +62,7 @@ def mock_db() -> Mock:
 @pytest.fixture
 def mock_batch_service() -> Mock:
     svc = Mock()
-    # 実件数の検証（Issue #118）を通す既定値。件数不足のケースは個別に上書きする。
+    # Default that passes the real-count validation (Issue #118); shortfall cases override it individually.
     svc.get_filtered_count.return_value = 1000
     svc.has_parquet_uri.return_value = True
     return svc
@@ -119,7 +117,7 @@ class TestValidatePersonaCount:
         SurveyExecutionManager._validate_persona_count(500)
 
     def test_too_low(self) -> None:
-        """BR1.1・FR4.1: 下限は 10（context の min_count も 10）。"""
+        """The minimum is 10 (the context min_count is also 10)."""
         with raises_code(
             SurveyExecutionValidationError,
             ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW,
@@ -131,7 +129,7 @@ class TestValidatePersonaCount:
         SurveyExecutionManager._validate_persona_count(10)
 
     def test_minimum_has_a_survey_name(self) -> None:
-        """FR4.3: バッチ推論の下限の名前ではなく、アンケートの下限として持つ。"""
+        """Held as the survey minimum, not under the batch-inference minimum name."""
         assert SurveyExecutionManager.MIN_SURVEY_PERSONAS == 10
 
     def test_images_have_their_own_max(self) -> None:
@@ -160,7 +158,7 @@ class TestValidatePersonaCount:
 
 @pytest.mark.unit
 class TestFormatQuestionsForPrompt:
-    """The question wording moved to survey_prompts unchanged (NFR2.4)."""
+    """The question wording moved to survey_prompts unchanged."""
 
     def test_free_text_format(self) -> None:
         q = Question.create_free_text("好きな食べ物は？")
@@ -235,7 +233,7 @@ class TestNormalizeFiltersEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# survey_prompts.py ヘルパー関数テスト
+# survey_prompts.py helper function tests
 # ---------------------------------------------------------------------------
 
 
@@ -335,7 +333,7 @@ class TestSurveyPromptHelpers:
         ]
         result = build_persona_system_prompt(row, extra_columns=extra)
         assert "会員ランク: ゴールド" in result
-        # description が空なので括弧表記にならない
+        # description is empty, so no parenthesized form
         assert "（" not in result
 
     def test_persona_prompt_extra_columns_none_value_skipped(self) -> None:
@@ -360,13 +358,13 @@ class TestSurveyPromptHelpers:
 
 
 # ---------------------------------------------------------------------------
-# execute_survey / _save_results_to_s3 / _ensure_parquet_uri テスト
+# execute_survey / _save_results_to_s3 / _ensure_parquet_uri tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
 class TestEnsureParquetUri:
-    """_ensure_parquet_uri のテスト（有無の確認は S3Service.exists を通す）"""
+    """Tests for _ensure_parquet_uri (the existence check goes through S3Service.exists)."""
 
     def test_custom_datasource_skips(
         self, mgr: SurveyExecutionManager, mock_batch_service: Mock
@@ -412,7 +410,7 @@ class TestEnsureParquetUri:
 
 
 # =============================================================================
-# U7: 判定・写し・裏の実行・一覧・削除（moto の世界）
+# Decision, copy, background run, listing, deletion (moto world)
 # =============================================================================
 
 SURVEY = ResourceType.SURVEY
@@ -656,7 +654,7 @@ class TestCreateSurveyDecisions:
 
 
 class TestQueueOnCreate:
-    """WF1: 実行の受付は queued で保存するだけ。推論は進行役が始める（FR3.1、BR9.1）。"""
+    """Accepting a run only saves it as queued; the runner starts inference."""
 
     def test_created_survey_waits_in_the_queue(self, em, survey_world, runner):
         template = survey_world.template("a")
@@ -694,7 +692,7 @@ class TestQueueOnCreate:
     def test_nine_available_personas_are_too_few(
         self, em, survey_world, batch, filters, code, context
     ):
-        """BR1.2: context の下限は 10。"""
+        """The context minimum is 10."""
         template = survey_world.template("a")
         batch.get_filtered_count.return_value = 9
         with raises_code(SurveyExecutionValidationError, code, **context):
@@ -702,7 +700,7 @@ class TestQueueOnCreate:
         assert _surveys(survey_world) == 0
 
     def test_no_runner_configured_is_a_config_error(self, survey_world, batch, cache):
-        """BR9.1・FR10.1: 手元（ステートマシンなし）ではアンケートを作らない。"""
+        """Locally (no state machine) no survey is created."""
         manager = SurveyExecutionManager(
             survey_store=survey_world.survey_store,
             survey_template_store=survey_world.template_store,
@@ -742,7 +740,7 @@ class TestQueueOnCreate:
 
 
 class TestLegacyInFlight:
-    """BR8.1・NFR4.19: 切り替え前の running・pending は、読まれたときに中断のエラーにする。"""
+    """running/pending records from before the switch become an interruption error when read."""
 
     @pytest.mark.parametrize("status", ["running", "pending"])
     def test_detail_turns_an_old_one_into_an_error(self, em, survey_world, status):
@@ -784,7 +782,7 @@ class TestLegacyInFlight:
         assert detail.survey.error_code == ErrorCode.SURVEY_EXECUTION_INTERRUPTED.value
 
     def test_completed_old_surveys_are_left_as_they_are(self, em, survey_world):
-        """BR8.2"""
+        """Interrupted records are marked as such."""
         survey = survey_world.survey("a")
         assert em.get_survey_detail(MEMBER_A, survey.id).survey.status == "completed"
 
@@ -861,7 +859,7 @@ class TestReadSurvey:
 
 
 class TestDownloadAndImages:
-    """BR3.2・BR3.3: 読み取りの認可のあとに、CSV と写しの画像を配る。"""
+    """After the read authorization, the CSV and the copied images are served."""
 
     def test_download_url_after_the_read_check(self, em, survey_world):
         survey = survey_world.survey("a")
@@ -1044,7 +1042,7 @@ class TestDeleteSurvey:
             em.delete_survey(MEMBER_A, "missing-id")
 
     def test_running_survey_stops_its_execution(self, em, survey_world, runner):
-        """BR7.1: 実行中なら StopExecution を呼び、実行の場所も消す。"""
+        """While running, StopExecution is called and the run location is also removed."""
         arn = "arn:aws:states:r:1:execution:sm:x"
         survey = survey_world.survey("a", status="running", execution_arn=arn)
 
@@ -1068,7 +1066,7 @@ class TestDeleteSurvey:
     def test_queued_survey_leaves_the_queue_and_stops_a_started_execution(
         self, em, survey_world, runner
     ):
-        """BR7.2: 待ちでも、開始の直後に落ちた実行（ARN の記録なし）がありうるので、名前から止める。"""
+        """Even when queued, a run may have died right after start (no ARN recorded), so it is stopped by name."""
         arn = "arn:aws:states:r:1:execution:sm:queued"
         runner.execution_arn_for.return_value = arn
         survey = survey_world.survey("a", status="queued")
@@ -1083,7 +1081,7 @@ class TestDeleteSurvey:
     def test_no_execution_to_stop_is_not_a_failure(
         self, em, survey_world, runner, logs
     ):
-        """実行がまだない（ExecutionDoesNotExist）のは普通の待ちの削除で、警告しない。"""
+        """No execution yet (ExecutionDoesNotExist) is normal for a queued deletion and does not warn."""
         runner.execution_arn_for.return_value = "arn:aws:states:r:1:execution:sm:q"
         runner.stop_execution.side_effect = _not_found()
         survey = survey_world.survey("a", status="queued")
@@ -1118,7 +1116,7 @@ class TestDeleteSurvey:
 
 @pytest.mark.unit
 class TestEnsureParquetUriUsesConfiguredKey:
-    """閉域対応 U3 BR2.1: HEAD と URI は Config.NEMOTRON_DATASET_KEY を使う。"""
+    """HEAD and the URI use Config.NEMOTRON_DATASET_KEY."""
 
     def test_heads_and_sets_the_configured_key(
         self,
@@ -1148,7 +1146,7 @@ class TestEnsureParquetUriUsesConfiguredKey:
         mock_s3_service: Mock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """BR2.4: s3 でファイルがないと閉域のコード（外へ取りに行かない）。"""
+        """With s3 and no file, the closed-network code is raised (no fetch from outside)."""
         from src.config import config
 
         monkeypatch.setattr(config, "NEMOTRON_SOURCE", "s3")

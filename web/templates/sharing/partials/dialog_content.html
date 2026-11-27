@@ -1,14 +1,11 @@
 {% from "components/department_picker.html" import department_picker %}
 {#
-  共有ダイアログの中身（M7、WF1・WF2）。components/dialog.html の share-dialog の
-  中身の読み込み（[data-share-content]）に入る。保存の結果は .share-dialog-message に
-  入る（入力の誤り・再試行で直る失敗・403・一部失敗）。全件成功は本文なしで
-  HX-Trigger（dialogClose・listReload・showToast）が閉じる。
+  Content of the share dialog. Goes into the content loader ([data-share-content]) of share-dialog in components/dialog.html. The save result goes into .share-dialog-message (input errors, failures fixed by retrying, 403, partial failure). When everything succeeds there is no body, and HX-Trigger (dialogClose, listReload, showToast) closes the dialog.
 
-  引数:
-    view           ... src/models/sharing.py の ShareDialogView
-    post_url       ... 保存の送り先（/share/{type}/{id} か /share/{type}）
-    vanished_label ... 消えた部署の表示名（「（存在しないグループ）」）
+  Arguments:
+    view           ... ShareDialogView from src/models/sharing.py
+    post_url       ... save target (/share/{type}/{id} or /share/{type})
+    vanished_label ... display name for vanished departments ("（存在しないグループ）")
 #}
 {%- set describedby = [] -%}
 {%- if view.show_persona_notice %}{% set _ = describedby.append("share-persona-notice") %}{% endif -%}
@@ -47,7 +44,7 @@
     <div id="share-persona-notice" class="text-sm text-gray-700 bg-yellow-50 border border-yellow-200 rounded-md p-3">
         <p class="font-medium">ペルソナを共有すると、次のことが起こります</p>
         <ul class="list-disc pl-5 mt-1 space-y-1">
-            <li>生成過程（分析の記録）も共有先に見えます</li>
+            <li>生成過程（分析の詳細）も共有先に見えます</li>
             <li>あなたとの会話から蓄積された記憶は、共有先の人との会話でも思い出されます</li>
             <li>共有先の人は記憶の一覧を見られず、共有先の人との会話は記憶に書き込まれません</li>
         </ul>

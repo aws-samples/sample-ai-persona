@@ -1,18 +1,17 @@
 """
-CSRF保護ミドルウェア
+CSRF protection middleware
 
-カスタムヘッダー検証方式（BR1.19、NFR4.2）:
-- 状態変更リクエスト（POST/PUT/DELETE/PATCH）に対して
-  HX-Request または X-Requested-With ヘッダーの存在を検証する
-- htmxは自動で HX-Request ヘッダーを付与するため、htmx経由は自動で通過
-- JS側の fetch() には X-Requested-With ヘッダーを明示的に付与する
-- v1.0.0 で ``/api/`` の除外をやめた。対象外は ``/health`` だけ
-- ログイン関連のフォーム送信（``POST /signout``）はカスタムヘッダーを付けられない
-  ため、``Origin`` がアプリ自身（設定 ``APP_BASE_URL`` のスキーム・ホスト・ポート）
-  と一致することで通す（Functional Design レビュー R-12）
-- AI を動かす入口（議論・レポートの SSE）は POST にしてこの検査を受けさせる
-  （NFR4.13）。GET の SSE を ``Sec-Fetch-Site: same-origin`` で守る方式は、同じ
-  オリジンに置かれた ``<img src>`` などからの要求を区別できないためやめた
+Custom-header verification:
+- For state-changing requests (POST/PUT/DELETE/PATCH),
+  check that an HX-Request or X-Requested-With header is present
+- htmx adds the HX-Request header automatically, so htmx requests pass
+- fetch() in JS must set the X-Requested-With header explicitly
+- ``/api/`` is not excluded. Only ``/health`` is exempt
+- Login-related form posts (``POST /signout``) cannot carry a custom header,
+  so they pass when ``Origin`` matches the app itself (scheme, host and port of the ``APP_BASE_URL`` setting)
+- Entry points that run the AI (discussion and report SSE) are POST so they go through this check.
+  A GET SSE guarded with ``Sec-Fetch-Site: same-origin`` was rejected because it cannot tell
+  requests from an ``<img src>`` placed on the same origin
 """
 
 from typing import Any, TextIO
@@ -30,8 +29,8 @@ from web.error_messages import user_message_for
 
 UNSAFE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
 EXEMPT_PATHS = {"/health"}
-#: カスタムヘッダーの代わりに Origin で確かめるフォーム送信。U8 で閉域構成の
-#: ログイン（M2）と初回パスワード変更（M3）のフォームを足した（BR4.6、約束 C11）
+#: Form posts verified by Origin instead of a custom header: the closed-network
+#: login and first-password-change forms.
 ORIGIN_CHECKED_PATHS = {"/signout", "/login", "/auth/new-password"}
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 

@@ -1,6 +1,4 @@
-"""
-AIService のアンケートAI生成機能のユニットテスト（Issue #23）
-"""
+"""Unit tests for the survey AI generation feature of AIService (Issue #23)."""
 
 import json
 from unittest.mock import Mock
@@ -11,7 +9,7 @@ from src.services.ai_service import AIService, AIServiceError
 
 
 def _mock_converse_response(text: str) -> dict:
-    """Bedrock Converse API のモックレスポンスを構築する。"""
+    """Build a mock Bedrock Converse API response."""
     return {"output": {"message": {"content": [{"text": text}]}}}
 
 
@@ -30,7 +28,7 @@ class TestChatForSurvey:
             [{"role": "user", "content": "新商品の購入意向を調べたいです"}]
         )
         assert reply == "どのような調査をしたいですか？"
-        # system プロンプトと messages が正しく渡されていること
+        # The system prompt and messages are passed correctly
         _, kwargs = ai_service.bedrock_client.converse.call_args
         assert "system" in kwargs
         assert kwargs["messages"][0]["role"] == "user"
@@ -47,7 +45,7 @@ class TestChatForSurvey:
 
     def test_filters_invalid_roles(self, ai_service: AIService) -> None:
         ai_service.bedrock_client.converse.return_value = _mock_converse_response("ok")
-        # system ロールは除外される想定。最後の user がある限り動く
+        # The system role is expected to be excluded; it works as long as a last user message exists
         ai_service.chat_for_survey(
             [
                 {"role": "system", "content": "無視される"},
@@ -103,7 +101,7 @@ class TestGenerateSurveyQuestionsDraft:
         assert result["questions"][0]["question_type"] == "multiple_choice"
 
     def test_parses_json_with_preamble(self, ai_service: AIService) -> None:
-        # モデルが前置きを含めても JSON 抽出できること
+        # JSON can be extracted even if the model adds a preamble
         text = "以下がドラフトです:\n" + self._draft_json() + "\n以上です"
         ai_service.bedrock_client.converse.return_value = _mock_converse_response(text)
         result = ai_service.generate_survey_questions_draft(

@@ -1,11 +1,11 @@
-"""Uploaded files and their attachment to a parent (U5, entities.md UploadedFile).
+"""Uploaded files and their attachment to a parent.
 
 An upload lives under ``uploads/{owner_sub}/{file_type}/{id}_{name}`` so two
-users' files never collide (BR5.1). Until it is attached to a parent
+users' files never collide. Until it is attached to a parent
 (a discussion or a survey template) only its owner may use it, and only for
 24 hours: the item carries ``expires_at`` (the DynamoDB TTL) and the S3 object
-carries the ``pending=true`` tag (the lifecycle filter) (BR5.2). Attaching
-removes both (BR5.3).
+carries the ``pending=true`` tag (the lifecycle filter). Attaching
+removes both.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, Mapping
 FILE_TYPES: tuple[str, ...] = ("discussion_document", "survey_image")
 #: Parents a file may be attached to.
 PARENT_TYPES: tuple[str, ...] = ("discussion", "survey_template")
-#: How long an unattached upload may be used (BR5.2).
+#: How long an unattached upload may be used.
 UPLOAD_TTL_SECONDS = 24 * 3600
 #: Key prefix of uploads.
 UPLOAD_KEY_PREFIX = "uploads"
@@ -38,7 +38,7 @@ def is_uuid(value: str) -> bool:
 
 
 def upload_key(owner_sub: str, file_type: str, file_id: str, filename: str) -> str:
-    """The S3 key of an upload (BR5.1)."""
+    """The S3 key of an upload."""
     return f"{UPLOAD_KEY_PREFIX}/{owner_sub}/{file_type}/{file_id}_{filename}"
 
 
@@ -46,7 +46,7 @@ def file_id_from_key(key: str) -> str | None:
     """The file ID inside an upload key, or ``None`` for any other shape.
 
     Used to accept only real upload keys where a path comes from the screen
-    (``image-preview``, template images; security-design.md §4).
+    (``image-preview``, template images).
     """
     parts = (key or "").split("/", 3)
     if len(parts) != 4:
@@ -125,7 +125,7 @@ class UploadedFile:
         now: datetime,
         file_id: str | None = None,
     ) -> "UploadedFile":
-        """A new, unattached upload expiring in 24 hours (BR5.1, BR5.2)."""
+        """A new, unattached upload expiring in 24 hours."""
         new_id = file_id or str(uuid.uuid4())
         return cls(
             id=new_id,
@@ -145,7 +145,7 @@ class UploadedFile:
         return self.parent_id is not None
 
     def usable_before_attach(self, owner_sub: str, now_epoch: int) -> bool:
-        """Unattached, owned by ``owner_sub`` and not expired (BR5.4, BR5.5).
+        """Unattached, owned by ``owner_sub`` and not expired.
 
         ``now_epoch`` at or past ``expires_at`` is expired.
         """
@@ -216,7 +216,7 @@ class UploadedFile:
 
 @dataclass(frozen=True)
 class AttachResult:
-    """What ``FileAttachments.attach_all`` attached (security-design.md §3).
+    """What ``FileAttachments.attach_all`` attached.
 
     Attributes:
         parent_type: The parent's type.

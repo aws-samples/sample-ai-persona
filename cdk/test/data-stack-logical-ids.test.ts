@@ -6,28 +6,32 @@ import { ACCOUNT, closedContext, newApp } from './helpers/stages';
 import { pathOf } from './template-paths';
 
 /**
- * データを持つリソースの construct のパスと論理 ID・RETAIN・削除保護（U9、NFR7.17、NFR7.18、約束 C10）。
+ * Construct paths, logical IDs, RETAIN and deletion protection of resources that hold data.
  *
- * 論理 ID が変わると CloudFormation は新しいリソースを作り、アプリは空のテーブルへ
- * 切り替わる。CDK は論理 ID を construct のパスから決めるため、(1) 種類ごとのリソースの
- * パスの集合が期待の一覧と過不足なく一致すること、(2) 各リソースの論理 ID が CDK がその
- * パスに既定で割り当てる値と同じこと（overrideLogicalId・renameLogicalId を使っていない）
- * の 2 つで論理 ID を固定する。テーブルや秘密を足す変更は、同じ変更でこの一覧
- * （expectedPaths）を直す。construct ID を変える・construct を別の親へ移す変更は
- * (1) で失敗する。
+ * When a logical ID changes, CloudFormation creates a new resource and the app switches
+ * to an empty table. CDK derives logical IDs from construct paths, so they are pinned by
+ * two checks: (1) the set of resource paths per kind matches the expected list exactly,
+ * and (2) each resource's logical ID equals the value CDK assigns to that path by default
+ * (overrideLogicalId and renameLogicalId are not used). A change that adds a table or secret
+ * must update this list (expectedPaths) in the same change. Changing a construct ID or moving
+ * a construct to another parent fails (1).
  *
- * U1 閉域: 公開の Stage AIPersonaDev と閉域の Stage AIPersonaDevClosed の両方にかける
- * （BR2.3。閉域も同じ定義・同じ保護で作る。閉域の User Pool はドメインを持たないが、
- * ドメインはデータを持たないためこの一覧に入れていない）。
+ * Applied to both the public Stage AIPersonaDev and the closed Stage AIPersonaDevClosed
+ * (the closed Stage uses the same definitions and protection. Its User Pool has no domain,
+ * but a domain holds no data, so it is not in this list).
  */
 
 jest.setTimeout(60_000);
 
-/** Data スタックの種類ごとの期待の construct のパス。テーブルを足す Unit はここに足す（C10）。 */
+/** Expected construct paths per kind in the Data stack. Add new tables here. */
 function expectedPaths(data: string): Record<string, string[]> {
   const table = (id: string) => `${data}/Database/${id}/Resource`;
   return {
     'AWS::DynamoDB::GlobalTable': [
+      // Advanced generation (beta)
+      'AdvancedGenerations',
+      'AppSettings',
+      'SourceFiles',
       'CustomPersonaData',
       'Datasets',
       'DiscussionMessages',
@@ -42,12 +46,12 @@ function expectedPaths(data: string): Record<string, string[]> {
       'Personas',
       'ResourceShares',
       'Sessions',
-      // 進行役の担当者の記録（Step Functions への移行、BR2.3）
+      // Records of the facilitator's assignee (moved to Step Functions)
       'SurveyRunLease',
       'SurveyTemplates',
       'Surveys',
       'UploadedFiles',
-      // PersonaDatasetBindings・PersonaKBBindings は U9 で CDK の管理から外した（NFR2.28。RETAIN で残る）
+      // PersonaDatasetBindings and PersonaKBBindings are no longer managed by CDK (kept by RETAIN)
     ].map(table),
     'AWS::KMS::Key': [`${data}/Database/SessionsKey/Resource`],
     'AWS::S3::Bucket': [`${data}/UploadBucket/Bucket/Resource`],
@@ -62,8 +66,8 @@ function expectedPaths(data: string): Record<string, string[]> {
 }
 
 /**
- * 削除保護を付けないテーブル（U5・U6 の決定）。TTL で消える一時データで、作り直しても
- * 失うものがないため。RETAIN は付いている。ここにないテーブルは削除保護が要る。
+ * Tables without deletion protection. They hold temporary data that expires via TTL and
+ * lose nothing when recreated. RETAIN is still set. Tables not listed here need deletion protection.
  */
 function tablesWithoutDeletionProtection(data: string): string[] {
   const table = (id: string) => `${data}/Database/${id}/Resource`;
@@ -71,6 +75,8 @@ function tablesWithoutDeletionProtection(data: string): string[] {
     table('InterviewMessages'), // 実行中のインタビューの発言（U6、最長 8 日）
     table('InterviewSessions'), // 実行中のインタビュー（U6、最長 7 日）
     table('PersonaCandidates'), // 生成候補（U5、8 時間）
+    // Admin settings (advanced generation): PITR and RETAIN. Holds no personal data
+    table('AppSettings'),
   ];
 }
 
@@ -129,7 +135,7 @@ describe.each(VARIANTS)('$name の Data スタック', ({ name, build }) => {
 
   /** The logical ID CDK allocates for an element by default (its path, no rename or override). */
   function defaultLogicalId(element: cdk.CfnElement): string {
-    // allocateLogicalId は Stack の protected の API（論理 ID の既定の割り当て方）
+    // allocateLogicalId is a protected Stack API (the default way logical IDs are assigned)
     const stack = cdk.Stack.of(element) as unknown as {
       allocateLogicalId(e: cdk.CfnElement): string;
     };
@@ -147,7 +153,7 @@ describe.each(VARIANTS)('$name の Data スタック', ({ name, build }) => {
       expect(resources.size).toBeGreaterThan(0);
       for (const [path, { logicalId }] of resources) {
         const element = elementAt(path);
-        // getLogicalId は renameLogicalId を反映し、overrideLogicalId は反映しない
+        // getLogicalId reflects renameLogicalId but not overrideLogicalId
         expect(logicalId).toBe(stage.data.getLogicalId(element));
         expect(logicalId).toBe(defaultLogicalId(element));
       }
@@ -163,7 +169,7 @@ describe.each(VARIANTS)('$name の Data スタック', ({ name, build }) => {
     }
   });
 
-  test('GlobalTable の Replicas の削除保護: 一時データの 3 テーブルを除く全件で true（NFR7.18）', () => {
+  test('GlobalTable の Replicas の削除保護: 一時データの 3 テーブルと AppSettings を除く全件で true（NFR7.18）', () => {
     const tables = byPath('AWS::DynamoDB::GlobalTable');
     const unprotected = [...tables]
       .filter(([, { resource }]) =>

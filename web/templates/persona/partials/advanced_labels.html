@@ -1,0 +1,81 @@
+{#
+  Display wording for advanced generation (beta). Shared by sections A and D, the analysis record, and the badge on the detail screen.
+  Values use screen wording (avoid maker-side phrasing).
+#}
+{% macro method_label(method) -%}
+{{ {"filter": "絞り込み", "compare": "群どうしの比較", "cluster": "クラスタ分析"}.get(method, method) }}
+{%- endmacro %}
+
+{# Kinds of plan steps and names of the playbooks that were read. #}
+{% macro step_label(kind) -%}
+{{ {"filter": "対象を絞って集計", "compare": "群どうしの比較", "cluster": "似た人をまとめる", "join": "CSV を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定", "person_profile": "履歴を人ごとに集計"}.get(kind, kind) }}
+{%- endmacro %}
+
+{% macro encoding_label(encoding) -%}
+{{ {"utf-8": "UTF-8", "utf-8-sig": "UTF-8", "cp932": "CP932", "euc-jp": "EUC-JP", "undetermined": "英数字だけ（前準備で確定）"}.get(encoding, encoding) }}
+{%- endmacro %}
+
+{% macro type_label(inferred_type) -%}
+{{ {"integer": "整数", "number": "数値", "date": "日付", "boolean": "真偽値", "string": "文字列"}.get(inferred_type, inferred_type) }}
+{%- endmacro %}
+
+{% macro format_label(fmt) -%}
+{{ {"csv": "CSV", "tsv": "TSV", "pdf": "PDF", "docx": "Word", "txt": "テキスト", "md": "Markdown"}.get(fmt, fmt) }}
+{%- endmacro %}
+
+{# N of "約 N 万字", rounded up to units of 10,000 characters. #}
+{% macro man_chars(chars) -%}
+{{ ((chars + 9999) // 10000) }}
+{%- endmacro %}
+
+{% macro share_text(share) -%}
+{{ "%.0f" | format(share * 100) }}%
+{%- endmacro %}
+
+{# ai_written appears in records for AI-written detailed analysis. Records so far use only predefined functions (fixed), so this branch is not reached yet. It is kept for that use. #}
+{% macro code_kind_label(kind) -%}
+{{ "AI による詳細分析" if kind == "ai_written" else "事前定義された関数" }}
+{%- endmacro %}
+
+{# Analysis record: names of the tools the analysis agent used (a fixed set of 5). #}
+{% macro tool_label(tool) -%}
+{{ {"profile_dataset": "データの全体像を確認", "analyze_dataset": "条件を指定して集計", "cluster_segments": "似た人のグループ分け", "profile_segments": "層の特徴を数える", "run_code": "AI による詳細分析", "load_playbook": "分析の定石を読み込み"}.get(tool, "分析") }}
+{%- endmacro %}
+
+{# Analysis record: kinds of columns of a table. #}
+{% macro column_kind_label(kind) -%}
+{{ {"number": "数値", "text": "文字", "date": "日時", "boolean": "真偽値", "other": "その他"}.get(kind, "その他") }}
+{%- endmacro %}
+
+{# Analysis record: why the check refused a result of the AI detailed analysis, with the counts it sent. A fixed mapping; no user data goes in. #}
+{% macro refusal_label(code, counts) -%}
+{%- set c = counts or {} -%}
+{%- if code == "DUPLICATE_IDS" and c.get("side") == "population" -%}人の一覧に使った表に、同じ人が何行もありました{% if c.get("rows") is not none %}（{{ "{:,}".format(c.get("rows")) }} 行に {{ "{:,}".format(c.get("distinct_ids", 0)) }} 人）{% endif %}
+{%- elif code == "DUPLICATE_IDS" -%}結果に同じ人が重複していました{% if c.get("rows") is not none %}（{{ "{:,}".format(c.get("rows")) }} 行に {{ "{:,}".format(c.get("distinct_ids", 0)) }} 人）{% endif %}
+{%- elif code == "ID_MISMATCH" -%}結果の人と、人の一覧の人が一致しませんでした{% if c.get("not_in_result") is not none %}（結果にいない人 {{ "{:,}".format(c.get("not_in_result")) }} 人、一覧にない人 {{ "{:,}".format(c.get("not_in_population", 0)) }} 人）{% endif %}
+{%- elif code == "UNASSIGNED" -%}どの層にも割り当てられていない人がいました{% if c.get("rows_unassigned") is not none %}（{{ "{:,}".format(c.get("rows_unassigned")) }} 人）{% endif %}
+{%- elif code == "POPULATION_ID_MISSING" -%}人の一覧に使った表に、人を特定する列が空の行がありました{% if c.get("rows_without_id") is not none %}（{{ "{:,}".format(c.get("rows_without_id")) }} 行）{% endif %}
+{%- elif code == "PEOPLE_SOURCE_INVALID" -%}人を特定する列が決まっていない表を、人の一覧に使おうとしました
+{%- elif code == "ID_COLUMN_MISMATCH" -%}人を特定する列とは別の列で、人を数えようとしました
+{%- elif code == "RUN_CODE_FAILED" -%}プログラムがエラーで止まりました
+{%- elif code == "RUN_CODE_TIMEOUT" -%}時間内に終わりませんでした
+{%- elif code == "CODE_TOO_LONG" -%}プログラムが長すぎました
+{%- elif code == "EMIT_TWICE" -%}結果を 2 回渡していました
+{%- elif code == "RESULT_INVALID" -%}結果の形が正しくありませんでした
+{%- else -%}うまくいきませんでした
+{%- endif -%}
+{%- endmacro %}
+
+{# Analysis record: what each executed code block did, in terms of the operation rather than the function name. A fixed mapping; no user data goes in. #}
+{% macro block_summary(block) -%}
+{%- set code = block.get("code", "") -%}
+{%- if block.get("kind") == "ai_written" -%}AI が書いたプログラムによる分析
+{%- elif code.startswith("prepare_document(") -%}文書の読み込み（文字の取り出し）
+{%- elif code.startswith("prepare(") -%}CSV の読み込み（文字コードと列の型を確認）
+{%- elif code.startswith("profile_dataset(") -%}データの全体像を確認（列の型・欠けた値・分布）
+{%- elif code.startswith("analyze_dataset(") -%}条件を指定した群ごとの集計
+{%- elif code.startswith("cluster_segments(") -%}似た特徴の人どうしのグループ分け
+{%- elif code.startswith("verify_quotes(") -%}根拠の引用を文書と照合
+{%- else -%}分析の処理
+{%- endif -%}
+{%- endmacro %}

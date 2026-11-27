@@ -1,3 +1,1 @@
-"""
-Web API ルーターのテストパッケージ
-"""
+"""Tests for the web API routers."""

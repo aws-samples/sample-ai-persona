@@ -1,9 +1,7 @@
-"""
-REST API エンドポイント（/api/...）のテスト
+"""Tests for the REST API endpoints (/api/...).
 
-U6: 議論・インタビューの API は利用者を Manager に渡し、判定は本物の Manager・
-Component（tests/api/u6_world.py）で確かめる。約束 C12（判定の順序）、BR2.1、
-BR2.4、BR2.5、BR2.8、BR3.1、BR8.3、NFR1.43、NFR1.46、NFR3.12。
+The discussion and interview APIs pass the user to the Manager, and the checks
+are decided by the real Manager and Component (tests/api/u6_world.py).
 """
 
 from contextlib import ExitStack
@@ -76,7 +74,7 @@ class TestGeneratePersonas:
 
 
 # ---------------------------------------------------------------------------
-# /api/discussions（一覧・詳細、BR2.1、BR2.4、NFR1.43）
+# /api/discussions (list and detail)
 # ---------------------------------------------------------------------------
 
 
@@ -114,7 +112,7 @@ class TestGetDiscussion:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/discussions（BR2.8、C12 の順）
+# POST /api/discussions (order of the checks)
 # ---------------------------------------------------------------------------
 
 
@@ -167,7 +165,7 @@ class TestRunDiscussion:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/discussions/{id}/insights（BR2.5）
+# POST /api/discussions/{id}/insights
 # ---------------------------------------------------------------------------
 
 
@@ -193,7 +191,7 @@ class TestGenerateInsights:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/interviews（BR3.1）
+# POST /api/interviews
 # ---------------------------------------------------------------------------
 
 

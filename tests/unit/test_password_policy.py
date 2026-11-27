@@ -1,8 +1,9 @@
-"""PasswordPolicy の単体テスト（U8 entities.md、BR2.5、BR4.1、BR4.3、NFR9.41）。
+"""Unit tests for PasswordPolicy.
 
-User Pool のパスワードの条件を環境変数 5 つで受け取り、Cognito に送る前に
-アプリだけで確かめる（Cognito を呼ばない）。条件は Cognito の決まりに合わせ、
-256 文字以下・先頭と末尾が空白でないことも確かめる。
+It takes the User Pool password requirements from five environment variables and checks
+them in the app alone before sending to Cognito (Cognito is not called). The rules
+follow Cognito's, and also check the 256-character limit and no leading or trailing
+whitespace.
 """
 
 import pytest

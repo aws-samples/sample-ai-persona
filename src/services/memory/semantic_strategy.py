@@ -1,8 +1,8 @@
 """
 Semantic Memory Strategy Implementation
-Semantic戦略の実装
+Semantic strategy implementation
 
-AgentCore MemoryのSemantic戦略を使用して、事実情報を長期記憶として保存・検索する。
+Uses the AgentCore Memory Semantic strategy to store and retrieve factual information as long-term memory.
 """
 
 import logging
@@ -27,15 +27,15 @@ logger = logging.getLogger(__name__)
 
 class SemanticStrategy(MemoryStrategy):
     """
-    Semantic記憶戦略の実装
+    Semantic memory strategy implementation
 
-    AgentCore MemoryのSemantic戦略を使用して、事実情報を長期記憶として保存する。
+    Uses the AgentCore Memory Semantic strategy to store factual information as long-term memory.
     namespace pattern: /strategies/{memoryStrategyId}/actors/{actorId}
 
     Attributes:
-        memory_id: AgentCore MemoryリソースID
-        region: AWSリージョン
-        memory_strategy_id: namespaceで使用するmemoryStrategyId
+        memory_id: AgentCore Memory resource ID
+        region: AWS region
+        memory_strategy_id: memoryStrategyId used in the namespace
     """
 
     # Namespace pattern for semantic strategy
@@ -48,19 +48,19 @@ class SemanticStrategy(MemoryStrategy):
         memory_strategy_id: Optional[str] = None,
     ):
         """
-        SemanticStrategyを初期化
+        Initialize SemanticStrategy
 
         Args:
-            memory_id: AgentCore MemoryリソースID
-            region: AWSリージョン（デフォルト: us-east-1）
-            memory_strategy_id: namespaceで使用するmemoryStrategyId（デフォルト: configから取得）
+            memory_id: AgentCore Memory resource ID
+            region: AWS region (default: us-east-1)
+            memory_strategy_id: memoryStrategyId used in the namespace (default: taken from config)
         """
         from src.config import config
 
         self.memory_id = memory_id
         self.region = region
 
-        # memory_strategy_idが指定されていない場合はconfigから取得
+        # If memory_strategy_id is not given, take it from config
         if memory_strategy_id is None:
             self.memory_strategy_id = config.SEMANTIC_MEMORY_STRATEGY_ID
         else:
@@ -71,7 +71,7 @@ class SemanticStrategy(MemoryStrategy):
             self._init_client()
 
     def _init_client(self) -> None:
-        """AgentCore Memory Clientを初期化"""
+        """Initialize the AgentCore Memory Client."""
         try:
             from bedrock_agentcore.memory import MemoryClient
 
@@ -94,32 +94,32 @@ class SemanticStrategy(MemoryStrategy):
 
     def _build_namespace(self, actor_id: str, session_id: str = "") -> str:
         """
-        namespaceを構築
+        Build the namespace
 
         Args:
-            actor_id: ペルソナID
-            session_id: 議論ID（Semantic戦略では使用しない）
+            actor_id: Persona ID
+            session_id: Discussion ID (unused by the Semantic strategy)
 
         Returns:
-            構築されたnamespace文字列
+            The built namespace string
         """
         return self.NAMESPACE_PATTERN.format(
             memoryStrategyId=self.memory_strategy_id, actorId=actor_id
         )
 
     def namespaces_for(self, actor_id: str) -> List[str]:
-        """Namespaces that hold every semantic record of ``actor_id`` (U5)."""
+        """Namespaces that hold every semantic record of ``actor_id``."""
         return [self._build_actor_namespace_prefix(actor_id)]
 
     def _build_actor_namespace_prefix(self, actor_id: str) -> str:
         """
-        actor_idに基づくnamespaceプレフィックスを構築
+        Build a namespace prefix from actor_id
 
         Args:
-            actor_id: ペルソナID
+            actor_id: Persona ID
 
         Returns:
-            namespaceプレフィックス
+            Namespace prefix
         """
         return f"/strategies/{self.memory_strategy_id}/actors/{actor_id}"
 
@@ -131,19 +131,19 @@ class SemanticStrategy(MemoryStrategy):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
-        事実情報を長期記憶として保存
+        Save factual information as long-term memory
 
-        Note: Semantic戦略は通常、会話から自動的に事実を抽出するため、
-        直接保存することは少ない。
+        Note: the Semantic strategy normally extracts facts from conversations
+        automatically, so direct saving is rare.
 
         Args:
-            actor_id: ペルソナID
-            session_id: 議論ID
-            content: 保存する記憶の内容
-            metadata: 追加のメタデータ
+            actor_id: Persona ID
+            session_id: Discussion ID
+            content: Content of the memory to save
+            metadata: Additional metadata
 
         Returns:
-            保存されたイベントのID
+            ID of the saved event
         """
         if not self._client:
             raise MemoryOperationError(
@@ -175,18 +175,18 @@ class SemanticStrategy(MemoryStrategy):
         self, actor_id: str, content: str, metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        直接長期記憶（LTM）に保存する（短期記憶を経由しない）
+        Save directly to long-term memory (LTM) without going through short-term memory
 
-        BatchCreateMemoryRecords APIを使用して、Semantic戦略のnamespaceに
-        直接記憶レコードを作成する。
+        Uses the BatchCreateMemoryRecords API to create memory records
+        directly in the Semantic strategy namespace.
 
         Args:
-            actor_id: ペルソナID
-            content: 保存する記憶の内容
-            metadata: 追加のメタデータ
+            actor_id: Persona ID
+            content: Content of the memory to save
+            metadata: Additional metadata
 
         Returns:
-            保存された記憶レコードのID
+            ID of the saved memory record
         """
         import boto3
 
@@ -196,19 +196,19 @@ class SemanticStrategy(MemoryStrategy):
             )
 
         try:
-            # boto3クライアントを直接使用（batch_create_memory_recordsはMemoryClientにない）
+            # Use the boto3 client directly (MemoryClient has no batch_create_memory_records)
             gmdp_client = boto3.client("bedrock-agentcore", region_name=self.region)
 
-            # Semantic戦略のnamespaceを構築
+            # Build the Semantic strategy namespace
             namespace = self._build_namespace(actor_id)
 
-            # 一意のリクエスト識別子を生成
+            # Generate a unique request identifier
             request_id = f"manual-{uuid.uuid4().hex[:16]}"
 
-            # タイムスタンプ
+            # Timestamp
             timestamp = datetime.now()
 
-            # BatchCreateMemoryRecords APIを呼び出し
+            # Call the BatchCreateMemoryRecords API
             response = gmdp_client.batch_create_memory_records(
                 memoryId=self.memory_id,
                 records=[
@@ -222,7 +222,7 @@ class SemanticStrategy(MemoryStrategy):
                 ],
             )
 
-            # 成功したレコードを確認
+            # Check the successful records
             successful_records = response.get("successfulRecords", [])
             failed_records = response.get("failedRecords", [])
 
@@ -245,7 +245,7 @@ class SemanticStrategy(MemoryStrategy):
                 )
                 return str(memory_record_id)
 
-            # 成功も失敗もない場合（通常は発生しない）
+            # Neither success nor failure (normally does not happen)
             logger.warning("No records returned from batch_create_memory_records")
             return request_id
 
@@ -262,15 +262,15 @@ class SemanticStrategy(MemoryStrategy):
 
     def retrieve(self, actor_id: str, query: str, top_k: int = 5) -> List[MemoryEntry]:
         """
-        関連する事実情報をセマンティック検索で取得
+        Retrieve related factual information by semantic search
 
         Args:
-            actor_id: ペルソナID
-            query: 検索クエリ
-            top_k: 取得する最大件数
+            actor_id: Persona ID
+            query: Search query
+            top_k: Maximum number of results
 
         Returns:
-            関連する記憶エントリのリスト
+            List of related memory entries
         """
         if not self._client:
             return []
@@ -311,20 +311,20 @@ class SemanticStrategy(MemoryStrategy):
 
     def delete(self, actor_id: str, memory_id: str) -> bool:
         """
-        特定の記憶を削除
+        Delete a specific memory
 
         Args:
-            actor_id: ペルソナID
-            memory_id: 削除する記憶のID
+            actor_id: Persona ID
+            memory_id: ID of the memory to delete
 
         Returns:
-            削除に成功した場合True
+            True if deletion succeeded
         """
         if not self._client:
             return False
 
         try:
-            # U5 R-01: only a record under this actor's namespace is deleted
+            # Only a record under this actor's namespace is deleted
             found = self._client.get_memory_record(
                 memoryId=self.memory_id, memoryRecordId=memory_id
             )
@@ -358,13 +358,13 @@ class SemanticStrategy(MemoryStrategy):
 
     def list_all(self, actor_id: str) -> List[MemoryEntry]:
         """
-        ペルソナの全Semantic記憶を取得
+        Get all Semantic memories of a persona
 
         Args:
-            actor_id: ペルソナID
+            actor_id: Persona ID
 
         Returns:
-            ペルソナに関連する全てのSemantic記憶エントリのリスト
+            List of all Semantic memory entries related to the persona
         """
         if not self._client:
             return []
@@ -402,7 +402,7 @@ class SemanticStrategy(MemoryStrategy):
         self, record: Dict[str, Any], actor_id: str
     ) -> Optional[MemoryEntry]:
         """
-        API応答をMemoryEntryに変換
+        Convert an API response to a MemoryEntry
         """
         try:
             memory_record_id = record.get("memoryRecordId", str(uuid.uuid4()))
@@ -431,13 +431,13 @@ class SemanticStrategy(MemoryStrategy):
             metadata = {
                 "namespace": namespace,
                 "strategy_id": self.memory_strategy_id,
-                "strategy_type": "semantic",  # 戦略タイプを識別
+                "strategy_type": "semantic",  # Identify the strategy type
             }
 
             return MemoryEntry(
                 id=memory_record_id,
                 actor_id=actor_id,
-                session_id="",  # Semantic戦略はsession_idを持たない
+                session_id="",  # The Semantic strategy has no session_id
                 content=content,
                 metadata=metadata,
                 created_at=created_at,

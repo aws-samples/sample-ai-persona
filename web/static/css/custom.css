@@ -1,6 +1,6 @@
-/* カスタムスタイル */
+/* Custom styles */
 
-/* htmx ローディングインジケーター */
+/* htmx loading indicator */
 .htmx-indicator {
     display: none;
 }
@@ -11,7 +11,7 @@
     display: inline-block;
 }
 
-/* htmx リクエスト中に非表示にする要素 */
+/* Elements hidden while an htmx request is in flight */
 .htmx-indicator-hide {
     display: inline-block;
 }
@@ -22,7 +22,7 @@
     display: none;
 }
 
-/* フェードインアニメーション */
+/* Fade-in animation */
 .fade-in {
     animation: fadeIn 0.3s ease-in;
 }
@@ -31,7 +31,7 @@
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* スピナー */
+/* Spinner */
 .spinner {
     border: 3px solid #f3f3f3;
     border-top: 3px solid #3498db;
@@ -45,7 +45,7 @@
     100% { transform: rotate(360deg); }
 }
 
-/* 行数制限 */
+/* Line clamping */
 .line-clamp-2 {
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -59,19 +59,19 @@
     overflow: hidden;
 }
 
-/* チェックボックスカード */
+/* Checkbox card */
 input[type="checkbox"]:checked + div {
     border-color: #3b82f6;
     background-color: #eff6ff;
 }
 
-/* ドラッグ＆ドロップエリア */
+/* Drag-and-drop area */
 .drop-zone-active {
     border-color: #3b82f6;
     background-color: #eff6ff;
 }
 
-/* スクロールバーカスタマイズ */
+/* Scrollbar customization */
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -88,19 +88,16 @@ input[type="checkbox"]:checked + div {
     background: #a1a1a1;
 }
 
-/* フォーカスの枠（U3 NFR6.7、A9）
-   全画面に効く共通の枠はここ 1 か所だけに置く。2px の実線（blue-600）と
-   2px の隙間で、枠は要素の外側の背景（白・gray-50）の上に出る
-   （白に 5.2:1、gray-50 に 4.9:1）。文字の入力欄はマウスで押しても、
-   ボタン・リンク・選択欄はキーボードで操作したときだけ出る（:focus-visible）。
-   プログラムで移したフォーカス（スキップリンクの先の <main>、ダイアログの
-   見出し）にも出し、キーボードで操作している人に移動先を示す。 */
+/*
+ * Focus ring
+ * The common ring that applies to every screen lives only here. It is a 2px solid line (blue-600) with a 2px gap, so it sits on the background outside the element (white or gray-50; contrast 5.2:1 on white, 4.9:1 on gray-50). Text inputs show it on mouse press too; buttons, links, and selects show it only on keyboard operation (:focus-visible). It also shows on programmatically moved focus (<main> after the skip link, dialog headings) so keyboard users can see where they landed.
+ */
 :focus-visible {
     outline: 2px solid #2563eb;
     outline-offset: 2px;
 }
 
-/* ボタンホバー効果 */
+/* Button hover effect */
 button:not(:disabled):hover {
     transform: translateY(-1px);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -109,13 +106,13 @@ button:not(:disabled):active {
     transform: translateY(0);
 }
 
-/* カードホバー効果 */
+/* Card hover effect */
 .card-hover:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-/* レスポンシブ調整 */
+/* Responsive adjustments */
 @media (max-width: 640px) {
     .mobile-full-width {
         width: 100%;
@@ -125,7 +122,7 @@ button:not(:disabled):active {
     }
 }
 
-/* インタビューチャット用アニメーション */
+/* Animations for interview chat */
 .animate-fade-in {
     animation: fadeInUp 0.4s ease-out;
 }
@@ -141,7 +138,7 @@ button:not(:disabled):active {
     }
 }
 
-/* メッセージホバー効果 */
+/* Message hover effect */
 .message-item:hover {
     transform: translateX(2px);
     transition: transform 0.2s ease;
@@ -151,7 +148,7 @@ button:not(:disabled):active {
     transform: translateX(-2px);
 }
 
-/* チャットスクロールバー */
+/* Chat scrollbar */
 #chat-messages::-webkit-scrollbar {
     width: 6px;
 }
@@ -170,13 +167,13 @@ button:not(:disabled):active {
     background: #94a3b8;
 }
 
-/* 入力フィールドフォーカス効果 */
+/* Input field focus effect */
 #message-input:focus {
     box-shadow: 0 0 0 3px rgba(147, 51, 234, 0.1);
     border-color: #9333ea;
 }
 
-/* ボタンアニメーション */
+/* Button animation */
 .button-hover {
     transition: all 0.2s ease;
 }
@@ -190,7 +187,7 @@ button:not(:disabled):active {
     transform: translateY(0);
 }
 
-/* ローディングアニメーション */
+/* Loading animation */
 @keyframes pulse-slow {
     0%, 100% {
         opacity: 1;
@@ -204,7 +201,7 @@ button:not(:disabled):active {
     animation: pulse-slow 2s ease-in-out infinite;
 }
 
-/* トースト通知 */
+/* Toast notification */
 .toast-notification {
     animation: slideInRight 0.3s ease-out;
 }
@@ -220,7 +217,7 @@ button:not(:disabled):active {
     }
 }
 
-/* 議論メッセージ - ペルソナ色分け（改善版） */
+/* Discussion messages: color coding per persona (improved) */
 .discussion-messages {
     font-size: 0.9rem;
     line-height: 1.5;
@@ -235,7 +232,7 @@ button:not(:disabled):active {
     transform: translateX(4px);
 }
 
-/* ペルソナ発言バブルの調整 */
+/* Persona message bubble adjustments */
 .discussion-messages .persona-bubble-blue,
 .discussion-messages .persona-bubble-emerald,
 .discussion-messages .persona-bubble-orange,
@@ -251,7 +248,7 @@ button:not(:disabled):active {
     overflow-wrap: break-word;
 }
 
-/* ペルソナ名のサイズ調整 */
+/* Persona name size adjustments */
 .discussion-messages .persona-name-blue,
 .discussion-messages .persona-name-emerald,
 .discussion-messages .persona-name-orange,
@@ -264,7 +261,7 @@ button:not(:disabled):active {
     font-weight: 600;
 }
 
-/* ペルソナアバター色 */
+/* Persona avatar colors */
 .persona-avatar-blue { background-color: #3b82f6 !important; }
 .persona-avatar-emerald { background-color: #10b981 !important; }
 .persona-avatar-orange { background-color: #f97316 !important; }
@@ -274,7 +271,7 @@ button:not(:disabled):active {
 .persona-avatar-indigo { background-color: #6366f1 !important; }
 .persona-avatar-rose { background-color: #f43f5e !important; }
 
-/* ペルソナ名色 */
+/* Persona name colors */
 .persona-name-blue { color: #1d4ed8 !important; }
 .persona-name-emerald { color: #047857 !important; }
 .persona-name-orange { color: #c2410c !important; }
@@ -284,7 +281,7 @@ button:not(:disabled):active {
 .persona-name-indigo { color: #4338ca !important; }
 .persona-name-rose { color: #be123c !important; }
 
-/* ペルソナ発言バブル */
+/* Persona message bubble */
 .persona-bubble-blue { background-color: #eff6ff !important; border-color: #bfdbfe !important; }
 .persona-bubble-emerald { background-color: #ecfdf5 !important; border-color: #a7f3d0 !important; }
 .persona-bubble-orange { background-color: #fff7ed !important; border-color: #fed7aa !important; }
@@ -294,7 +291,7 @@ button:not(:disabled):active {
 .persona-bubble-indigo { background-color: #eef2ff !important; border-color: #c7d2fe !important; }
 .persona-bubble-rose { background-color: #fff1f2 !important; border-color: #fecdd3 !important; }
 
-/* ファシリテーター発言バブル - 紫/バイオレット系（改善版） */
+/* Facilitator message bubble: purple/violet (improved) */
 .facilitator-bubble {
     background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%) !important;
     border: none !important;
@@ -345,16 +342,14 @@ button:not(:disabled):active {
     margin: 0;
 }
 
-/* ファシリテーターアバター */
+/* Facilitator avatar */
 .facilitator-avatar {
     background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%) !important;
 }
 
-/* =========================================================
-   議論ステージ（円卓ビュー） - リアルタイム会話の動的UI
-   ========================================================= */
+/* Discussion stage (round-table view): dynamic UI for real-time conversation */
 
-/* ステージ上段（タイトル + アバター列 + 進行中の発言）。下段ログと余白で分離 */
+/* Upper stage (title + avatar row + current message). Separated from the lower log by spacing */
 .stage-top {
     padding: 1.5rem 1.75rem;
     background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
@@ -365,7 +360,7 @@ button:not(:disabled):active {
     padding: 1.25rem 1.75rem 1.5rem;
 }
 
-/* 再生コントロール（一時停止・表示速度） */
+/* Playback controls (pause, display speed) */
 .stage-controls {
     display: flex;
     flex-wrap: wrap;
@@ -409,7 +404,7 @@ button:not(:disabled):active {
     font-size: 0.75rem;
 }
 
-/* アバター列（参加ペルソナを横一列に常時表示） */
+/* Avatar row (shows participating personas side by side at all times) */
 .stage-avatars {
     display: flex;
     flex-wrap: wrap;
@@ -454,7 +449,7 @@ button:not(:disabled):active {
     white-space: nowrap;
 }
 
-/* DiceBear SVGアバター（円形に収める。色背景の代わりに薄いグレー地） */
+/* DiceBear SVG avatar (fitted in a circle; light gray background instead of a color) */
 .persona-avatar-img {
     background-color: #f1f5f9;
     overflow: hidden;
@@ -465,7 +460,7 @@ button:not(:disabled):active {
     height: 100%;
     display: block;
 }
-/* アップロードされたアイコン画像（枠いっぱいに円形で表示） */
+/* Uploaded icon image (fills the frame as a circle) */
 .persona-avatar-photo {
     width: 100%;
     height: 100%;
@@ -474,7 +469,7 @@ button:not(:disabled):active {
     border-radius: 9999px;
 }
 
-/* ペルソナ詳細ヘッダーのアバター（大きめ） */
+/* Avatar in the persona detail header (larger) */
 .persona-detail-avatar {
     width: 4rem;
     height: 4rem;
@@ -491,7 +486,7 @@ button:not(:disabled):active {
 }
 .persona-detail-avatar svg { width: 100%; height: 100%; display: block; }
 
-/* ペルソナ選択一覧のアバター枠（フォールバック頭文字も中央寄せ） */
+/* Avatar frame in the persona selection list (fallback initial is centered too) */
 .persona-list-avatar {
     width: 2.5rem;
     height: 2.5rem;
@@ -508,7 +503,7 @@ button:not(:disabled):active {
 }
 .persona-list-avatar svg { width: 100%; height: 100%; display: block; }
 
-/* 待機中（発言していないペルソナ） */
+/* Idle (persona not speaking) */
 .stage-avatar.idle {
     opacity: 0.4;
     filter: grayscale(0.35);
@@ -517,7 +512,7 @@ button:not(:disabled):active {
     transform: scale(0.92);
 }
 
-/* 発言中（ハイライト + 発光） */
+/* Speaking (highlight + glow) */
 .stage-avatar.speaking {
     opacity: 1;
     filter: none;
@@ -536,7 +531,7 @@ button:not(:disabled):active {
     50% { box-shadow: 0 0 0 9px rgba(59, 130, 246, 0.12), 0 4px 14px rgba(0, 0, 0, 0.25); }
 }
 
-/* アクティブ発言エリア: 発言中アバター + 吹き出し（喋っている表現） */
+/* Active message area: speaking avatar + bubble (the look of talking) */
 .stage-active {
     min-height: 5rem;
     display: flex;
@@ -560,7 +555,7 @@ button:not(:disabled):active {
     animation: fadeInUp 0.35s ease-out;
 }
 
-/* 発言者の大きめアバター（吹き出しの左に立つ） */
+/* Larger avatar of the speaker (stands to the left of the bubble) */
 .stage-active-avatar {
     width: 3.5rem;
     height: 3.5rem;
@@ -591,7 +586,7 @@ button:not(:disabled):active {
     position: relative;
 }
 
-/* 吹き出しのしっぽ（左のアバターを指す） */
+/* Bubble tail (points to the avatar on the left) */
 .stage-active-bubble::before {
     content: '';
     position: absolute;
@@ -612,7 +607,7 @@ button:not(:disabled):active {
     margin-bottom: 0.25rem;
 }
 
-/* アクティブ吹き出し本文（地色に対し十分濃い文字色で可読性確保） */
+/* Active bubble body (text color dark enough against the background for readability) */
 .stage-active-bubble .active-content {
     color: #1f2937;
     font-size: 0.95rem;
@@ -620,10 +615,10 @@ button:not(:disabled):active {
 }
 .stage-active-bubble .active-content p { margin: 0 0 0.5rem; }
 .stage-active-bubble .active-content p:last-child { margin-bottom: 0; }
-/* ファシリテーターの吹き出しは濃紫地なので白文字（既存 .facilitator-bubble * が効くが明示） */
+/* The facilitator bubble has a dark purple background, so the text is white (the existing .facilitator-bubble * rule applies, but it is explicit here) */
 .facilitator-bubble .active-content { color: #ffffff; }
 
-/* タイピングインジケーター（発言到着待ち） */
+/* Typing indicator (waiting for a message to arrive) */
 .stage-typing {
     display: inline-flex;
     gap: 4px;
@@ -644,7 +639,7 @@ button:not(:disabled):active {
     30% { transform: translateY(-4px); opacity: 1; }
 }
 
-/* 設定サマリ（2カラム時の左固定パネル内） */
+/* Settings summary (inside the fixed left panel in two-column mode) */
 .setup-summary-chip {
     display: inline-flex;
     align-items: center;
@@ -657,7 +652,7 @@ button:not(:disabled):active {
     color: #1e40af;
 }
 
-/* サマリの参加ペルソナ（アバター + 名前 + 属性） */
+/* Participating personas in the summary (avatar + name + attributes) */
 .summary-persona {
     display: flex;
     align-items: center;
@@ -687,9 +682,7 @@ button:not(:disabled):active {
     display: block;
 }
 
-/* =========================================================
-   議論ページ 2カラムレイアウト（Tailwind lg: に依存しない自前実装）
-   ========================================================= */
+/* Discussion page two-column layout (own implementation, does not depend on Tailwind lg:) */
 .discussion-layout {
     width: 100%;
     max-width: 80rem;
@@ -701,7 +694,7 @@ button:not(:disabled):active {
     gap: 1.5rem;
     align-items: stretch;
 }
-/* 設定中は中央寄せの単カラム（幅を絞る） */
+/* While configuring: single centered column (narrow width) */
 .discussion-layout:not(.is-started) {
     max-width: 56rem;
 }
@@ -727,9 +720,8 @@ button:not(:disabled):active {
     }
 }
 
-/* トースト通知の重ね順（Issue #117）
-   モーダル（Tailwind の z-50）より上に出す。モーダル内のフォーム送信が失敗
-   した場合、同じ z-50 だとDOM後方のモーダルがトーストを覆ってしまう。
-   Tailwind の任意値クラス（z-[60]）はビルド設定に依存するため、
-   ここで明示的に定義する。 */
+/*
+ * Stacking order of toast notifications (Issue #117)
+ * Show above modals (Tailwind z-50). If a form submit inside a modal fails, the same z-50 would let the modal later in the DOM cover the toast. Tailwind's arbitrary-value class (z-[60]) depends on the build setup, so it is defined explicitly here.
+ */
 .z-toast { z-index: 60; }

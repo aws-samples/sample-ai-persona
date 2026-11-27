@@ -1,4 +1,4 @@
-"""アイコン画像の正規化（Pillow での再エンコード）のテスト"""
+"""Tests for icon image normalization (re-encoding with Pillow)."""
 
 from io import BytesIO
 
@@ -35,7 +35,7 @@ class TestNormalizeAvatarImage:
         exif[0x8825] = {2: (35.0, 41.0, 0.0)}  # GPSInfo: GPSLatitude
         source = _image_bytes("JPEG", exif=exif.tobytes())
         with Image.open(BytesIO(source)) as src:
-            assert src.getexif()  # 前提: 元画像には EXIF がある
+            assert src.getexif()  # precondition: the source image has EXIF
 
         result = normalize_avatar_image(source)
 
@@ -49,7 +49,7 @@ class TestNormalizeAvatarImage:
         [
             b"not an image at all",
             b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
-            b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,  # 壊れたPNG
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,  # broken PNG
         ],
         ids=["text", "svg", "truncated-png"],
     )
@@ -77,10 +77,10 @@ def _decode(webp: bytes) -> Image.Image:
 class TestOrientation:
     @pytest.mark.parametrize("orientation", range(1, 9))
     def test_matches_exif_transpose_then_fit(self, orientation):
-        """縮小後に回転補正しても、回転補正してから縮小した結果と一致すること"""
+        """Rotating after downscaling matches downscaling after rotating."""
         from PIL import ImageOps
 
-        # 4象限を塗り分けた横長画像（回転・反転の取り違えを色で検出する）
+        # A wide image with four differently colored quadrants (colors reveal rotation/flip mix-ups)
         src = Image.new("RGB", (400, 200))
         for box, color in [
             ((0, 0, 200, 100), (255, 0, 0)),
@@ -119,7 +119,7 @@ class TestColorModes:
 
 class TestMemoryBounds:
     def test_jpeg_is_decoded_at_reduced_scale(self, monkeypatch):
-        """大きな JPEG は draft で縮小デコードされ、原寸のビットマップを作らない"""
+        """A large JPEG is decoded at reduced size via draft and never builds a full-size bitmap."""
         from PIL import ImageOps
 
         fitted_sizes = []
@@ -166,7 +166,7 @@ class TestMemoryBounds:
 
 class TestPixelLimitsPerFormat:
     def test_jpeg_has_higher_limit_than_png(self, monkeypatch):
-        """JPEG は縮小デコードできるため、PNG/WebP より大きな画素数を許す"""
+        """A JPEG can be decoded at reduced size, so it allows more pixels than PNG/WebP."""
         monkeypatch.setattr(image_normalize, "MAX_AVATAR_SOURCE_PIXELS", 100)
 
         normalize_avatar_image(_image_bytes("JPEG", size=(20, 20)))
@@ -184,7 +184,7 @@ class TestPixelLimitsPerFormat:
         assert exc_info.value.max_pixels == 100
 
     def test_48mp_phone_photo_is_accepted(self):
-        """4,800万画素の JPEG（iPhone 48MP 撮影: 8064x6048）をアップロードできること"""
+        """A 48-megapixel JPEG (iPhone 48MP, 8064x6048) can be uploaded."""
         buf = BytesIO()
         Image.linear_gradient("L").resize((8064, 6048)).convert("RGB").save(
             buf, format="JPEG", quality=85

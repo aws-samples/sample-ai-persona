@@ -1,7 +1,6 @@
-"""Settings ルーターの API テスト（U3 のダイアログ、U7 の admin 限定と利用範囲）。
+"""API tests for the Settings router (dialogs, admin-only access and scope).
 
-本物の DatasetManager・SettingsManager を moto の上で動かす（tests/api/u7_world.py）。
-U7 の対応: BR3.1、BR3.2、BR6.3、NFR1.72、NFR3.13、NFR4.14、AC5.2.1〜AC5.2.3、AC5.3.1〜AC5.3.3。
+Run the real DatasetManager and SettingsManager on moto (tests/api/u7_world.py).
 """
 
 import re
@@ -29,7 +28,7 @@ def aw(client, survey_world):
 
 
 # =============================================================================
-# admin は今のまま使える
+# admin keeps working as before
 # =============================================================================
 
 
@@ -83,7 +82,7 @@ class TestAdminScreens:
 
 
 # =============================================================================
-# 利用範囲のダイアログ（BR3.2、AC5.3.1〜AC5.3.3）
+# the scope dialog
 # =============================================================================
 
 
@@ -154,7 +153,7 @@ class TestScopeDialog:
 
 
 # =============================================================================
-# member には /settings 以下の全経路が 404（BR3.1、AC5.2.1〜AC5.2.3）
+# members get a 404 on every route under /settings
 # =============================================================================
 
 _MEMBER_ROUTES = [
@@ -240,7 +239,7 @@ def test_scope_saves_need_the_csrf_header(test_app, method, path):
 
 
 # =============================================================================
-# U3 WF3: 設定画面のモーダルは components/dialog.html で描く（今のまま）
+# the settings modal is drawn with components/dialog.html
 # =============================================================================
 
 
@@ -252,7 +251,7 @@ class TestSettingsModalsUseSharedDialog:
             outer = dialog_markup(html, dialog_id)
             assert "data-dialog-backdrop-close" not in outer
             assert f'data-dialog-open="{dialog_id}"' in html
-        # 開閉は app.js の Dialog が持つ（hidden クラスの付け外しをやめた）
+        # open/close is owned by the Dialog in app.js (no more toggling the hidden class)
         assert "classList.remove('hidden')" not in html
         assert "classList.add('hidden')" not in html
 
@@ -343,7 +342,7 @@ class TestManagedKnowledgeBase:
 
 
 # =============================================================================
-# 閉域対応 U3: Data Agent を使ってよくない環境（BR3.2 の 1・2、BR3.8）
+# environments where the Data Agent must not be used
 # =============================================================================
 
 HTMX = {"HX-Request": "true"}
@@ -414,3 +413,200 @@ class TestDataAgentNotAllowedRoutes:
         assert response.status_code == 200
         assert agent_config.DATA_AGENT_RUNTIME_ARN == "arn:new"
         assert agent_config.ENABLE_DATA_AGENT is True
+
+
+# =============================================================================
+# the advanced generation (beta) section
+# =============================================================================
+
+_SECTION = "/settings/advanced-generation"
+
+
+@pytest.fixture
+def ag(aw):
+    """The settings section on a mocked AppSettings store (version 2 saved)."""
+    from unittest.mock import Mock
+
+    from src.services.stores.app_settings_store import AppSettingsStore
+
+    store = Mock(spec=AppSettingsStore)
+    store.get.return_value = {
+        "version": 2,
+        "audience_mode": "departments",
+        "department_groups": ["group:sales", "group:gone"],
+        "allow_detailed_analysis": False,
+        "updated_by": ADMIN_USER.sub,
+        "updated_at": "2026-11-20T09:00:00+00:00",
+    }
+    store.put_if_version.return_value = 3
+    aw.settings._settings_store = store
+    aw.settings._owners = Mock(label=Mock(return_value="管理 太郎"))
+    return store
+
+
+def _save(client, **form):
+    data = {
+        "audience_mode": "departments",
+        "departments": ["sales"],
+        "allow_detailed_analysis": "true",
+        "version": "2",
+    }
+    data.update(form)
+    return client.post(_SECTION, data=data, headers=HTMX)
+
+
+class TestAdvancedGenerationSection:
+    def test_the_settings_page_loads_the_section(self, aw, ag, client):
+        html = client.get("/settings/").text
+        assert f'hx-get="{_SECTION}"' in html
+
+    def test_admin_gets_the_section(self, aw, ag, client):
+        response = client.get(_SECTION)
+
+        html = response.text
+        assert response.status_code == 200
+        assert 'name="version" value="2"' in html
+        assert 'role="switch"' in html and 'aria-checked="false"' in html
+        assert "営業部" in html and "管理 太郎" in html
+        assert 'data-testid="advanced-setting-missing"' in html
+
+    def test_the_detailed_switch_carries_the_beta_caution(self, aw, ag, client):
+        """Security review: the sandbox can reach some AWS services."""
+        html = client.get(_SECTION).text
+
+        assert "advanced-setting-detailed-caution" not in html
+        assert "信頼できるデータ" not in html
+
+    def test_a_save_returns_the_new_version_with_a_toast(self, aw, ag, client):
+        response = _save(client)
+
+        assert response.status_code == 200
+        assert 'name="version" value="3"' in response.text
+        assert "showToast" in response.headers["HX-Trigger"]
+        _, item, expected = ag.put_if_version.call_args.args
+        assert expected == 2 and item["department_groups"] == ["group:sales"]
+        assert item["allow_detailed_analysis"] is True
+
+    def test_a_bad_input_is_a_400_section_keeping_the_input(self, aw, ag, client):
+        response = _save(
+            client, departments=["gone-forever"], audience_mode="departments"
+        )
+
+        assert response.status_code == 400
+        assert response.headers["X-Render-Response"] == "true"
+        assert 'data-testid="advanced-setting-error"' in response.text
+        assert 'value="everyone"' in response.text
+        ag.put_if_version.assert_not_called()
+
+    def test_a_vanished_department_tells_the_cause_in_the_section(self, aw, ag, client):
+        """A department gone since the screen opened is still checked."""
+        from src.models.errors import CodedError, ErrorCode
+        from web.error_messages import user_message_for
+
+        response = _save(client, departments=["sales", "gone"])
+
+        assert response.status_code == 400
+        assert response.headers["X-Render-Response"] == "true"
+        expected = user_message_for(
+            CodedError(
+                "diag",
+                code=ErrorCode.REQUEST_INVALID,
+                context={"reason": "vanished_departments", "count": 1},
+            )
+        )
+        generic = user_message_for(CodedError("diag", code=ErrorCode.REQUEST_INVALID))
+        error_area = re.search(
+            r'data-testid="advanced-setting-error"[^>]*>(.*?)</div>',
+            response.text,
+            re.S,
+        )
+        assert error_area is not None
+        assert error_area.group(1).strip() == expected != generic
+        assert "gone" not in error_area.group(1)
+        ag.put_if_version.assert_not_called()
+
+    def test_a_lost_version_is_a_409_with_the_latest_values(self, aw, ag, client):
+        from src.services.stores.app_settings_store import SettingsVersionConflict
+
+        ag.put_if_version.side_effect = SettingsVersionConflict("lost")
+        ag.get.return_value = {**ag.get.return_value, "version": 7}
+
+        response = _save(client)
+
+        assert response.status_code == 409
+        assert response.headers["X-Render-Response"] == "true"
+        assert 'name="version" value="7"' in response.text
+        assert 'data-testid="advanced-setting-conflict"' in response.text
+        assert "lost" not in response.text
+
+    def test_member_gets_404_and_403_and_nothing_is_written(self, aw, ag, client):
+        ME.login(client)
+
+        assert client.get(_SECTION).status_code == 404
+        assert _save(client).status_code == 403
+        ag.put_if_version.assert_not_called()
+        ag.get.assert_not_called()
+
+
+class TestAdvancedGenerationSectionWhenTheFeatureIsOff:
+    """The closed network Stage passes ENABLE_ADVANCED_GENERATION=false."""
+
+    @pytest.fixture
+    def off(self, monkeypatch):
+        from src.config import config
+
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
+
+    def test_the_page_labels_which_features_each_block_serves(
+        self, aw, ag, off, client
+    ):
+        html = client.get("/settings/").text
+
+        # dataset and knowledge base: interview and discussion (not the survey)
+        assert html.count('data-testid="feature-badges"') == 3
+        assert html.count(">インタビュー</li>") == 2
+        assert html.count(">議論</li>") == 2
+        assert (
+            "アンケート"
+            not in html.split("</h1>")[1].split("<!-- ナレッジベース登録")[0]
+        )
+        # the advanced generation block is first, the data analysis agent last
+        if "advanced-generation-settings-title" in html:
+            assert html.index("高度な生成（ベータ）") < html.index("データ連携機能")
+        assert html.index("データ分析エージェント 連携") > html.index(
+            "ナレッジベース管理"
+        )
+        assert ">レポート</li>" in html
+
+    def test_the_settings_page_has_no_section(self, aw, ag, off, client):
+        response = client.get("/settings/")
+
+        assert response.status_code == 200
+        assert f'hx-get="{_SECTION}"' not in response.text
+        assert 'data-testid="advanced-generation-settings"' not in response.text
+        assert "advanced-generation-settings-title" not in response.text
+
+    def test_the_section_is_404_and_nothing_is_read_or_written(
+        self, aw, ag, off, client
+    ):
+        assert client.get(_SECTION).status_code == 404
+        assert _save(client).status_code == 404
+        ag.get.assert_not_called()
+        ag.put_if_version.assert_not_called()
+
+    def test_member_still_gets_404_and_403(self, aw, ag, off, client):
+        ME.login(client)
+
+        assert client.get(_SECTION).status_code == 404
+        assert _save(client).status_code == 403
+        ag.put_if_version.assert_not_called()
+
+
+def test_the_section_save_needs_the_csrf_header(test_app):
+    from fastapi.testclient import TestClient
+
+    with TestClient(test_app) as no_header:
+        ADMIN_USER.login(no_header)
+        response = no_header.post(_SECTION, data={"version": "0"})
+
+    assert response.status_code == 403

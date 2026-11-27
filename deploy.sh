@@ -1,47 +1,47 @@
 #!/bin/bash
 ###############################################################################
-# AI Persona System v1.0.0 - デプロイスクリプト（CloudShell 版）
+# AI Persona System v1.0.0 - deploy script (CloudShell)
 #
-# AWS CloudShell（ap-northeast-1）で実行する。1 回の実行で空の環境から
-# Stage AIPersonaDev（Data・Edge・App の 3 スタック）を作る。
+# Run in AWS CloudShell (ap-northeast-1). A single run builds the Stage AIPersonaDev
+# (Data, Edge and App stacks) from an empty environment.
 #
-#   ① cdk deploy AIPersonaDev/Data AIPersonaDev/Edge（ECR を含む Data を先に作る）
-#   ② コンテナイメージをビルドし、Data の ECR へ送る（タグは Git のコミットの短いハッシュ。
-#      同じタグがあれば送らない）
-#   ③ cdk deploy AIPersonaDev/App -c imageTag=<タグ>
+#   1. cdk deploy AIPersonaDev/Data AIPersonaDev/Edge (Data, which holds the ECR, comes first)
+#   2. Build the container image and push it to the Data ECR (tag = short Git commit hash;
+#      skipped if the tag already exists)
+#   3. cdk deploy AIPersonaDev/App -c imageTag=<tag>
 #
-# 使い方:
+# Usage:
 #   git clone https://github.com/aws-samples/sample-ai-persona.git
 #   cd sample-ai-persona
 #   ./deploy.sh
 #
-# オプション:
-#   --restart-app      ①〜③をせず、ECS のタスクを入れ替えて完了を待つ
-#                      （Secrets Manager の秘密の値を書き換えたあとに使う。鍵の入れ替え）
-#   --image-tag TAG    ②をせず、ECR にある TAG のイメージで③を行う（前の版に戻すときに使う）
-#   --region REGION    Data・App のリージョン（既定: ap-northeast-1。Edge は常に us-east-1）
+# Options:
+#   --restart-app      Skip steps 1-3; replace the ECS tasks and wait for completion
+#                      (use after rewriting a Secrets Manager secret value, i.e. key rotation)
+#   --image-tag TAG    Skip step 2 and run step 3 with the image TAG already in ECR (for rollback)
+#   --region REGION    Region for Data and App (default: ap-northeast-1; Edge is always us-east-1)
 #   --inference-scope global|jp
-#                      推論の範囲。デプロイする Stage だけに効く（公開は -c inferenceScope=<値>、
-#                      --closed は -c closedInferenceScope=<値>）。省略時は parameters.ts の
-#                      inferenceScope か global。jp を続けて使うなら parameters.ts に書く（cdk/README.md）
+#                      Inference scope; affects only the Stage being deployed (public: -c inferenceScope=<value>,
+#                      --closed: -c closedInferenceScope=<value>). Defaults to inferenceScope in
+#                      parameters.ts, else global. To keep using jp, set it in parameters.ts (cdk/README.md)
 #
-# 閉域構成（Stage AIPersonaDevClosed。Data・App の 2 スタック。公開の Stage には触れない）:
-#   ./deploy.sh --closed --certificate-arn <ACM の証明書の ARN> --domain-name <FQDN> \
+# Closed network (Stage AIPersonaDevClosed; Data and App stacks; does not touch the public Stage):
+#   ./deploy.sh --closed --certificate-arn <ACM certificate ARN> --domain-name <FQDN> \
 #     [--allowed-cidrs <CIDR,CIDR>] [--create-test-environment] [--endpoint-az-count <1|2>] \
-#     [--create-resolver-endpoint --resolver-allowed-cidrs <社内 DNS の CIDR,CIDR>] \
+#     [--create-resolver-endpoint --resolver-allowed-cidrs <internal DNS CIDR,CIDR>] \
 #     [--remove-resolver-endpoint]
-#   デプロイ済みの App に Resolver があるのに --create-resolver-endpoint がないとき、
-#   エンドポイントが 2 AZ なのに --endpoint-az-count がないときは、AWS を変える前に止まる。
-#   ① cdk deploy AIPersonaDevClosed/Data（us-east-1 の bootstrap と Edge はしない）
-#   ② イメージを閉域の Data の ECR へ送る ③ cdk deploy AIPersonaDevClosed/App -c imageTag=<タグ>
-#   --image-tag・--restart-app・--region も --closed と一緒に使える（対象は閉域の Stage）。
-#   --certificate-arn と --domain-name がなければ、AWS に触れる前に使い方を出して終わる。
+#   The script stops before changing AWS if the deployed App has a Resolver but
+#   --create-resolver-endpoint is missing, or the endpoints span 2 AZs but --endpoint-az-count is missing.
+#   1. cdk deploy AIPersonaDevClosed/Data (no us-east-1 bootstrap and no Edge)
+#   2. Push the image to the closed Data ECR  3. cdk deploy AIPersonaDevClosed/App -c imageTag=<tag>
+#   --image-tag, --restart-app and --region also work with --closed (they target the closed Stage).
+#   Without --certificate-arn and --domain-name, usage is printed and the script exits before touching AWS.
 #
-# 事前に: ローカルの検査（pytest・ruff・mypy・CDK の検査）を通し、
-#   cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=<タグ>
-# でステートフルなリソースの置き換え（replace）がないことを確かめる。
+# Before running: pass the local checks (pytest, ruff, mypy, CDK checks) and run
+#   cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=<tag>
+# to confirm no stateful resource is replaced.
 #
-# v0 のスタック（AIPersona-dev など）には触れない。v0 を使い続ける場合の手順は README を参照。
+# Does not touch v0 stacks (AIPersona-dev etc.). See the README for keeping v0 running.
 ###############################################################################
 set -euo pipefail
 
@@ -121,7 +121,7 @@ usage() {
 USAGE
 }
 
-# ===== 引数 =====
+# ===== Arguments =====
 while [[ $# -gt 0 ]]; do
   case $1 in
     --restart-app) RESTART_APP=true; shift ;;
@@ -166,13 +166,13 @@ if [[ "${IMAGE_TAG_OVERRIDE}" == "${UNSET_IMAGE_TAG}" ]]; then
   exit 1
 fi
 
-# 推論の範囲の検査も AWS・CDK に触れる前に行う（閉域対応 U5 BR1.9）
+# Validate the inference scope before touching AWS or CDK.
 if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" && "${INFERENCE_SCOPE}" != "global" && "${INFERENCE_SCOPE}" != "jp" ]]; then
   log_error "--inference-scope には global か jp を指定してください（受け取った値: '${INFERENCE_SCOPE}'）"
   exit 1
 fi
-# エンドポイントの AZ の数の検査も同じく AWS・CDK に触れる前に行う（閉域対応 U2 BR5.1）。
-# Resolver の CIDR の形と組み合わせ（作る指定と CIDR）は CDK の synth が検査する（BR3.2、BR3.3）
+# Validate the endpoint AZ count before touching AWS or CDK as well.
+# CDK synth validates the Resolver CIDR format and the create/CIDR combination.
 if [[ "${ENDPOINT_AZ_COUNT_GIVEN}" == "true" && "${ENDPOINT_AZ_COUNT}" != "1" && "${ENDPOINT_AZ_COUNT}" != "2" ]]; then
   log_error "--endpoint-az-count には 1 か 2 を指定してください（受け取った値: '${ENDPOINT_AZ_COUNT}'）"
   exit 1
@@ -183,7 +183,7 @@ if [[ "${CREATE_RESOLVER_ENDPOINT}" == "true" && "${REMOVE_RESOLVER_ENDPOINT}" =
   exit 1
 fi
 
-# 閉域の値の検査は AWS に触れる前に行う（BR7.2）。公開の使い方は変えない（BR7.3）
+# Validate closed-network values before touching AWS; public usage is unchanged.
 if [[ "${CLOSED}" == "false" && -n "${CLOSED_OPTION_GIVEN}" ]]; then
   log_error "${CLOSED_OPTION_GIVEN} は --closed と一緒に使ってください"
   usage
@@ -211,14 +211,14 @@ if [[ ! -f "${PROJECT_ROOT}/cdk/bin/app.ts" ]]; then
 fi
 cd "${PROJECT_ROOT}"
 
-# ===== Step 0: 作業ツリーとイメージのタグ =====
+# ===== Step 0: working tree and image tag =====
 log_step "Step 0: 作業ツリーとイメージのタグ"
 
 image_affecting_changes() {
-  # イメージに入るファイルの未コミットの変更を出す（git status --porcelain の形）。
-  # .dockerignore で外したパス（cdk/parameters.ts・docs/ など）はイメージの中身を変えないため見ない。
-  # Dockerfile と .dockerignore はイメージに入らないがビルドを変えるため、常に見る。
-  # .dockerignore がない、または ! で戻すパターンがあるときは、解釈せずに作業ツリー全体を見る
+  # List uncommitted changes to files that go into the image (git status --porcelain format).
+  # Paths excluded by .dockerignore (cdk/parameters.ts, docs/ etc.) do not change the image, so skip them.
+  # Dockerfile and .dockerignore are not in the image but alter the build, so always check them.
+  # If .dockerignore is missing or has "!" re-include patterns, do not interpret it; check the whole tree.
   local pathspecs=(.) line
   if [[ ! -f .dockerignore ]] || grep -qE '^[[:space:]]*!' .dockerignore; then
     git status --porcelain --untracked-files=all
@@ -236,7 +236,7 @@ image_affecting_changes() {
   git status --porcelain --untracked-files=all -- "${pathspecs[@]}"
 }
 
-# イメージに入るファイルが未コミットのままビルドすると、同じタグに別の中身のイメージができる（R-10）
+# Building with uncommitted image files would put different contents under the same tag.
 if [[ "${RESTART_APP}" == "false" ]]; then
   IMAGE_CHANGES=$(image_affecting_changes)
   if [[ -n "${IMAGE_CHANGES}" ]]; then
@@ -252,7 +252,7 @@ IMAGE_TAG="${IMAGE_TAG_OVERRIDE:-$(git rev-parse --short HEAD)}"
 log_info "イメージのタグ: ${IMAGE_TAG}"
 
 stack_output() {
-  # stack_output <スタック名> <出力名>
+  # stack_output <stack name> <output name>
   aws cloudformation describe-stacks \
     --stack-name "$1" --region "${REGION}" \
     --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" \
@@ -273,7 +273,7 @@ else
   log_info "リージョン: ${REGION}（Edge: ${EDGE_REGION}）"
 fi
 
-# ===== --restart-app: タスクの入れ替えだけ =====
+# ===== --restart-app: only replace the tasks =====
 if [[ "${RESTART_APP}" == "true" ]]; then
   log_step "タスクの入れ替え（--restart-app）"
   CLUSTER=$(stack_output "${STAGE}-App" ClusterName)
@@ -291,12 +291,12 @@ if [[ -z "${IMAGE_TAG_OVERRIDE}" ]] && ! docker info > /dev/null 2>&1; then
   exit 1
 fi
 
-# ===== 閉域: デプロイ済みの構成を引数の付け忘れで減らさない =====
-# Resolver とエンドポイントの AZ の数は引数（コンテキスト）でしか渡らず、どこにも残らない。
-# 付け忘れた再デプロイで Resolver が消える（社内 DNS の転送先の IP が失われる）ことや、
-# エンドポイントとタスクが 1 AZ に寄ることを、デプロイ済みの App と比べて AWS を変える前に止める
+# ===== Closed network: do not shrink a deployed configuration by forgetting arguments =====
+# The Resolver and endpoint AZ count are passed only as arguments (context) and are stored nowhere.
+# A redeploy that omits them would delete the Resolver (losing the internal DNS forwarding IPs) or
+# squeeze endpoints and tasks into one AZ, so compare with the deployed App and stop before changing AWS.
 closed_app_resource_ids() {
-  # closed_app_resource_ids <リソースの型>
+  # closed_app_resource_ids <resource type>
   aws cloudformation describe-stack-resources --stack-name "${STAGE}-App" --region "${REGION}" \
     --query "StackResources[?ResourceType=='$1'].PhysicalResourceId" --output text
 }
@@ -321,7 +321,7 @@ if [[ "${CLOSED}" == "true" ]]; then
     deployed_az_count="None"
     endpoint_ids=$(closed_app_resource_ids "AWS::EC2::VPCEndpoint")
     if [[ -n "${endpoint_ids}" && "${endpoint_ids}" != "None" ]]; then
-      # shellcheck disable=SC2086  # タブ区切りの ID を 1 つずつの引数にする
+      # shellcheck disable=SC2086  # split tab-separated IDs into separate arguments
       deployed_az_count=$(aws ec2 describe-vpc-endpoints --region "${REGION}" \
         --vpc-endpoint-ids ${endpoint_ids} \
         --query "max(VpcEndpoints[?VpcEndpointType=='Interface'].length(SubnetIds))" --output text)
@@ -336,7 +336,7 @@ if [[ "${CLOSED}" == "true" ]]; then
   fi
 fi
 
-# ===== Step 1: CDK の準備 =====
+# ===== Step 1: CDK setup =====
 log_step "Step 1: CDK の依存のインストールと bootstrap"
 cd "${PROJECT_ROOT}/cdk"
 npm ci
@@ -349,8 +349,8 @@ for target_region in "${BOOTSTRAP_REGIONS[@]}"; do
 done
 
 CDK_CONTEXT=(-c "imageTag=${IMAGE_TAG}" -c "region=${REGION}")
-# 推論の範囲（U5 BR1.9）。渡したときだけ（省略時は parameters.ts の値か global）。
-# 閉域の synth は公開の Stage も組み立てるため、閉域は別の名前で渡し、対象の Stage だけに効かせる
+# Inference scope: passed only when given (otherwise the parameters.ts value, else global).
+# The closed synth also builds the public Stage, so the closed value uses a separate name and affects only the target Stage.
 if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" ]]; then
   if [[ "${CLOSED}" == "true" ]]; then
     CDK_CONTEXT+=(-c "closedInferenceScope=${INFERENCE_SCOPE}")
@@ -359,25 +359,25 @@ if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" ]]; then
   fi
 fi
 if [[ "${CLOSED}" == "true" ]]; then
-  # 閉域の Stage は、このコンテキストがあるときだけ作られる（cdk/lib/dev-stage.ts）
+  # The closed Stage is created only when this context is present (cdk/lib/dev-stage.ts)
   CDK_CONTEXT+=(
     -c "closedCertificateArn=${CERTIFICATE_ARN}"
     -c "closedDomainName=${DOMAIN_NAME}"
     -c "closedAllowedCidrs=${ALLOWED_CIDRS}"
     -c "closedCreateTestEnvironment=${CREATE_TEST_ENVIRONMENT}"
   )
-  # 事前に配置する Nemotron の Parquet のキー（U3 閉域）。渡したときだけ（省略時は既定のキー）
+  # Key of the Nemotron Parquet placed in advance (closed network); passed only when given (otherwise the default key)
   if [[ -n "${NEMOTRON_DATASET_KEY}" ]]; then
     CDK_CONTEXT+=(-c "closedNemotronDatasetKey=${NEMOTRON_DATASET_KEY}")
   fi
-  # 閉域対応 U2（BR5.1）。渡したときだけ（省略時は parameters.ts の値: AZ の数 1、Resolver なし）
+  # Passed only when given (otherwise the parameters.ts values: AZ count 1, no Resolver)
   if [[ "${ENDPOINT_AZ_COUNT_GIVEN}" == "true" ]]; then
     CDK_CONTEXT+=(-c "closedEndpointAzCount=${ENDPOINT_AZ_COUNT}")
   fi
   if [[ "${CREATE_RESOLVER_ENDPOINT}" == "true" ]]; then
     CDK_CONTEXT+=(-c "closedCreateResolverEndpoint=true")
   elif [[ "${REMOVE_RESOLVER_ENDPOINT}" == "true" ]]; then
-    # parameters.ts で作る設定にしていても消す
+    # Remove it even if parameters.ts is set to create it
     CDK_CONTEXT+=(-c "closedCreateResolverEndpoint=false")
   fi
   if [[ -n "${RESOLVER_ALLOWED_CIDRS}" ]]; then
@@ -385,7 +385,7 @@ if [[ "${CLOSED}" == "true" ]]; then
   fi
 fi
 
-# ===== Step 2: ① Data（公開は Edge も） =====
+# ===== Step 2: 1. Data (and Edge for public) =====
 if [[ "${CLOSED}" == "true" ]]; then
   log_step "Step 2: Data スタック（① テーブル・ECR・Cognito）"
   npx cdk deploy "${STAGE}/Data" --require-approval never "${CDK_CONTEXT[@]}"
@@ -403,7 +403,7 @@ image_exists() {
     --image-ids "imageTag=${IMAGE_TAG}" --region "${REGION}" > /dev/null 2>&1
 }
 
-# ===== Step 3: ② イメージ =====
+# ===== Step 3: 2. Image =====
 log_step "Step 3: コンテナイメージ（②）"
 if [[ -n "${IMAGE_TAG_OVERRIDE}" ]]; then
   if ! image_exists; then
@@ -435,7 +435,7 @@ fi
 cd "${PROJECT_ROOT}/cdk"
 npx cdk deploy "${STAGE}/App" --require-approval never "${CDK_CONTEXT[@]}"
 
-# ===== 完了 =====
+# ===== Done =====
 APP_URL=$(stack_output "${STAGE}-App" AppUrl)
 USER_POOL_ID=$(stack_output "${STAGE}-Data" UserPoolId)
 
@@ -449,7 +449,7 @@ echo ""
 echo "初めてのときは、動作確認用の admin を 1 人作ってください:"
 echo ""
 if [[ "${CLOSED}" == "true" ]]; then
-  # 閉域構成はアプリのログイン画面（admin_api）を使う。一時パスワードで作り、初回ログインで変える
+  # The closed configuration uses the app login screen (admin_api); create with a temporary password and change it at first login
   echo "  aws cognito-idp admin-create-user --region ${REGION} \\"
   echo "    --user-pool-id ${USER_POOL_ID} --username <メールアドレス> \\"
   echo "    --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \\"

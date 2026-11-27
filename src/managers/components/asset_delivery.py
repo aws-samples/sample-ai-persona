@@ -1,23 +1,23 @@
-"""How a file reaches the browser (closed network U4, FR5.3, ADR-003).
+"""How a file reaches the browser.
 
 Five entry points in four Managers (``PersonaManager``, ``SurveyExecutionManager``,
 ``FileManager``, ``DiscussionManager``) hand files to the browser, and Managers
 cannot import each other, so the delivery lives in this component
 (``.claude/rules/architecture.md``, Component layer).
 
-Rules (``construction/u4-asset-delivery/functional-design/rules.md``):
+Rules:
 
-- BR2.1: ``presigned`` signs a URL (after an existence check when the handle
+- ``presigned`` signs a URL (after an existence check when the handle
   asks for one) and never opens the object.
-- BR2.2: ``proxy`` opens the object before anything is sent and returns a
+- ``proxy`` opens the object before anything is sent and returns a
   stream of 256 KiB chunks.
-- BR2.3: a streamed file above its limit is closed and refused with
+- A streamed file above its limit is closed and refused with
   ``ASSET_TOO_LARGE``; not one byte is sent.
-- BR2.4: no authorization here. A handle exists only after the Manager's own
+- No authorization here. A handle exists only after the Manager's own
   checks passed.
-- BR2.5 / BR2.6: a missing object becomes the handle's ``not_found_code``;
+- A missing object becomes the handle's ``not_found_code``;
   other S3 failures stay ``S3_OPERATION_FAILED``.
-- BR2.7: the content type and disposition come from the stored metadata.
+- The content type and disposition come from the stored metadata.
 
 The ``S3Service`` and the mode are given to the constructor; this component
 never reads ``service_factory``.

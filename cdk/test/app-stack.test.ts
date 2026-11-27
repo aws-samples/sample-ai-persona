@@ -1,29 +1,30 @@
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { AppStack } from '../lib/app-stack';
+import { AnalysisCodeInterpreter } from '../lib/constructs/code-interpreter';
 import { DataStack } from '../lib/data-stack';
+import { CODE_INTERPRETER_EXECUTION_ROLE } from '../lib/deployment-profile';
 import { EdgeStack } from '../lib/edge-stack';
 import { AppParameter, devParameter } from '../parameters';
 
 /**
- * App スタック（Fargate・内部 ALB・CloudFront・アプリクライアント・ログ）の検査。
- * FR1.8、FR9.3、NFR3.1、NFR3.3、NFR4.5、NFR4.7、NFR4.8、NFR5.1、NFR5.3、NFR8.1、
- * NFR8.3〜NFR8.5、NFR9.1、NFR9.3、NFR9.9、BR1.20。
- * express-service.test.ts の ENABLE_DATASET_ANALYSIS の検査もここへ移した。
+ * Checks of the App stack (Fargate, internal ALB, CloudFront, app client, logs),
+ * including the ENABLE_DATASET_ANALYSIS checks.
  */
 
 const TOKYO = { account: '123456789012', region: 'ap-northeast-1' };
 const VIRGINIA = { account: '123456789012', region: 'us-east-1' };
 
-// AWS 管理のキャッシュ・オリジンリクエストポリシーの ID
+// IDs of the AWS-managed cache and origin request policies
 const CACHING_DISABLED = '4135ea2d-6df8-44a3-9df3-4b5a84be39ad';
 const CACHING_OPTIMIZED = '658327ea-f89d-4fab-a63d-7e88639e58f6';
 const ALL_VIEWER_EXCEPT_HOST = 'b689b0a8-53d0-40ab-baf2-68738e2966ac';
 
 /**
- * cdk.json の機能フラグ（cdk deploy が使う設定）。U6: タスクロールの方針の大きさは
- * `@aws-cdk/aws-iam:minimizePolicies` で文がまとまった形で決まるため、テストも同じ設定で組む
- * （フラグなしでは文がまとまらず、上限を超えた分が別の管理ポリシーへ溢れる）。
+ * Feature flags from cdk.json (the settings `cdk deploy` uses). The size of the task role's
+ * policy depends on `@aws-cdk/aws-iam:minimizePolicies` merging statements, so the test
+ * builds with the same flags (without them statements stay separate and the excess
+ * overflows into another managed policy).
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const FEATURE_FLAGS: Record<string, unknown> = require('../cdk.json').context;
@@ -119,7 +120,7 @@ describe('AppStack: ネットワーク', () => {
     const [albGroupId, albGroup] = Object.entries(groups).find(([, g]) =>
       (g.Properties.GroupDescription as string).includes('Load balancer'),
     )!;
-    // インラインの受け入れと、別リソースの受け入れの両方を集める
+    // Collect both inline and separate-resource grants
     const separate = Object.values(template.findResources('AWS::EC2::SecurityGroupIngress'))
       .map((r) => r.Properties)
       .filter((p) => JSON.stringify(p.GroupId).includes(albGroupId));
@@ -182,7 +183,7 @@ describe('AppStack: Fargate', () => {
     ]) {
       expect(env[name]).toBeDefined();
     }
-    // 秘密を環境変数に平文で置かない
+    // Never put secrets in plain-text environment variables
     for (const secret of ['COGNITO_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEYS', 'LOGIN_COOKIE_SIGNING_KEY']) {
       expect(env[secret]).toBeUndefined();
     }
@@ -211,14 +212,14 @@ describe('AppStack: Fargate', () => {
     const dynamoWrites = statements.filter((s) =>
       [s.Action].flat().some((a: string) => a === 'dynamodb:PutItem'),
     );
-    // minimizePolicies で同じ操作の文はまとまるため、文の数ではなく、書き込むテーブルが
-    // どれも文の対象に入っていることを確かめる
+    // minimizePolicies merges statements for the same action, so check that every table
+    // that is written to is covered by some statement rather than counting statements
     const resources = JSON.stringify(dynamoWrites.map((s) => s.Resource));
     for (const table of [
       'Personas', 'Discussions', 'UploadedFiles', 'Datasets', 'SurveyTemplates', 'Surveys',
       'KnowledgeBases', 'Jobs', 'Sessions', 'ResourceShares', 'PersonaCandidates',
       'PersonaBindings', 'DiscussionMessages', 'DiscussionReports', 'InterviewSessions',
-      'InterviewMessages',
+      'InterviewMessages', 'SourceFiles', 'AdvancedGenerations', 'AppSettings',
     ]) {
       expect(resources).toMatch(new RegExp(`Database${table}[0-9A-F]{8}Arn`));
     }
@@ -296,8 +297,8 @@ describe('AppStack: CloudFront', () => {
     const behaviors = distribution().CacheBehaviors as any[];
     expect(behaviors).toHaveLength(1);
     expect(behaviors[0].PathPattern).toBe('/static/*');
-    // 管理ポリシー CachingOptimized はクエリを鍵に含めず、デプロイ後も古い JS・CSS を
-    // 最大 1 日返していた。v（中身のハッシュ）を鍵に含める自前のポリシーにする
+    // The managed CachingOptimized policy leaves the query out of the cache key, so stale
+    // JS/CSS was served for up to a day after deploys. Use our own policy keyed on v (content hash)
     expect(behaviors[0].CachePolicyId).not.toBe(CACHING_OPTIMIZED);
     template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
       CachePolicyConfig: Match.objectLike({
@@ -332,8 +333,13 @@ describe('AppStack: ログとメトリクス', () => {
     });
   });
 
-  test('メトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
-    const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'));
+  test('認証のメトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
+    // The seven advanced-generation entries (AIPersona/AdvancedGeneration) are checked in a later section
+    const all = Object.values(template.findResources('AWS::Logs::MetricFilter'));
+    expect(all).toHaveLength(14);
+    const filters = all.filter(
+      (f) => f.Properties.MetricTransformations[0].MetricNamespace === 'AIPersona/Auth',
+    );
     expect(filters).toHaveLength(7);
     const byName = Object.fromEntries(
       filters.map((f) => [f.Properties.MetricTransformations[0].MetricName, f.Properties]),
@@ -390,7 +396,7 @@ describe('AppStack: 公開構成に閉域構成のログインの権限を付け
     for (const action of ADMIN_ACTIONS) {
       expect(actions).not.toContain(action);
     }
-    // ワイルドカードでも付けない
+    // Not attached even with a wildcard
     for (const action of actions) {
       expect(action).not.toMatch(/^cognito-idp:(\*|Admin\*)$/);
       expect(action).not.toBe('*');
@@ -533,22 +539,55 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     expect(JSON.stringify(statements)).not.toContain('/index/*');
   });
 
-  test('S3 の方針に古いバージョンの操作がない', () => {
-    const actions = actionsOf(taskStatements(template));
+  // Deleting a user's file removes every version of the sources/ keys, so only two version
+  // operations are allowed: s3:DeleteObjectVersion (sources/* only) and s3:ListBucketVersions
+  // (conditional on the prefix being sources/). Other version operations, other prefixes and
+  // unconditioned grants stay forbidden
+  test('S3 の版の操作は sources/ の削除の 2 つだけ', () => {
+    const statements = taskStatements(template);
+    const actions = actionsOf(statements);
     for (const forbidden of [
       's3:GetObjectVersion',
       's3:GetObjectVersionTagging',
-      's3:ListBucketVersions',
-      's3:DeleteObjectVersion',
       's3:PutObjectVersionTagging',
+      's3:DeleteObjectVersionTagging',
     ]) {
       expect(actions.has(forbidden)).toBe(false);
     }
+    const versioned = [...actions].filter((a) => /^s3:.*Version/.test(a)).sort();
+    expect(versioned).toEqual(['s3:DeleteObjectVersion', 's3:ListBucketVersions']);
     for (const action of actions) {
-      expect(action).not.toMatch(/^s3:.*Version/);
       expect(action).not.toBe('s3:*');
       expect(action).not.toMatch(/^s3:(GetObject|DeleteObject)\*$/);
     }
+
+    const deleteVersion = statements.filter((s) =>
+      [s.Action].flat().includes('s3:DeleteObjectVersion'),
+    );
+    expect(deleteVersion).toHaveLength(1);
+    expect([deleteVersion[0].Action].flat()).toEqual(['s3:DeleteObjectVersion']);
+    expect(deleteVersion[0].Condition).toBeUndefined();
+    const deleteResources = [deleteVersion[0].Resource].flat();
+    expect(deleteResources).toHaveLength(1);
+    expect(JSON.stringify(deleteResources[0])).toMatch(/UploadBucket.*"\/sources\/\*"/);
+
+    const listVersions = statements.filter((s) =>
+      [s.Action].flat().includes('s3:ListBucketVersions'),
+    );
+    expect(listVersions).toHaveLength(1);
+    expect([listVersions[0].Action].flat()).toEqual(['s3:ListBucketVersions']);
+    expect(listVersions[0].Condition).toEqual({ StringLike: { 's3:prefix': 'sources/*' } });
+    expect(JSON.stringify(listVersions[0].Resource)).toMatch(/UploadBucket/);
+    expect(JSON.stringify(listVersions[0].Resource)).not.toContain('/*');
+  });
+
+  test('版の操作はタスクロール以外のロールに付かない', () => {
+    const others = Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter((p) => !JSON.stringify(p.Properties.Roles).includes('TaskRole'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
+    const actions = actionsOf(others);
+    expect(actions.has('s3:DeleteObjectVersion')).toBe(false);
+    expect(actions.has('s3:ListBucketVersions')).toBe(false);
   });
 
   test('今のコードが使う S3 の操作はある（足りないことを見落とさない）', () => {
@@ -564,7 +603,7 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     }
   });
 
-  test('タグの 3 操作は uploads/* と candidates/* だけが対象', () => {
+  test('タグの 3 操作は uploads/*・candidates/*・analysis-records/*（高度な生成の保存前の記録、BR9.1）だけが対象', () => {
     const tagging = taskStatements(template).filter((s) =>
       [s.Action].flat().some((a: string) => a.endsWith('ObjectTagging')),
     );
@@ -577,7 +616,9 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     const resources = JSON.stringify(tagging[0].Resource);
     expect(resources).toContain('/uploads/*');
     expect(resources).toContain('/candidates/*');
-    expect([tagging[0].Resource].flat()).toHaveLength(2);
+    expect(resources).toContain('/analysis-records/*');
+    expect(resources).not.toContain('/sources/*');
+    expect([tagging[0].Resource].flat()).toHaveLength(3);
   });
 });
 
@@ -698,11 +739,22 @@ test('出力に CloudFront の URL とサービスの名前がある（deploy.sh
   expect(stack.region).toBe('ap-northeast-1');
 });
 
-/** Statements of the IAM policies whose roles' logical IDs start with `rolePrefix`. */
+/**
+ * Statements of the IAM policies whose roles' logical IDs start with `rolePrefix`.
+ *
+ * The task role's statements no longer fit in its default policy, so CDK moves
+ * the last ones to an overflow managed policy attached to the same role
+ * (`minimizePolicies`); both are read here.
+ */
 function statementsOfRole(t: Template, rolePrefix: string): any[] {
-  return Object.values(t.findResources('AWS::IAM::Policy'))
+  return [
+    ...Object.values(t.findResources('AWS::IAM::Policy')),
+    ...Object.values(t.findResources('AWS::IAM::ManagedPolicy')),
+  ]
     .filter((p) =>
-      (p.Properties.Roles as { Ref: string }[]).some((r) => String(r.Ref).startsWith(rolePrefix)),
+      ((p.Properties.Roles ?? []) as { Ref: string }[]).some((r) =>
+        String(r.Ref).startsWith(rolePrefix),
+      ),
     )
     .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
 }
@@ -710,7 +762,7 @@ const actionsIn = (statements: any[]) => statements.flatMap((s) => [s.Action].fl
 const resourcesText = (s: any) => JSON.stringify(s.Resource);
 
 describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1.10、BR2.3、BR2.4）', () => {
-  /** `bedrock:InvokeModel` を持つ文の Resource（タスクロール）。 */
+  /** Resource of the statements that have `bedrock:InvokeModel` (task role). */
   function invokeModelResources(t: Template): string[] {
     const statement = statementsOfRole(t, 'AppTaskDefinitionTaskRole').find((s) =>
       ([] as string[]).concat(s.Action).includes('bedrock:InvokeModel'),
@@ -777,7 +829,7 @@ describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1
 });
 
 // =============================================================================
-// アンケートのステートマシン（基盤設計 2.2・3.1・3.2・4 章、BR2.6、BR3.3、BR3.5、BR3.6）
+// Survey state machine
 // =============================================================================
 
 function stateMachineOf(t: Template): { logicalId: string; resource: any } {
@@ -1045,5 +1097,254 @@ describe('AppStack: アンケートのステートマシン', () => {
         'arn:aws:bedrock:ap-northeast-3::foundation-model/anthropic.claude-haiku-5-5',
       ].sort(),
     );
+  });
+});
+
+/**
+ * A CloudFormation value as text: `Fn::Join` is joined and a reference becomes a marker without
+ * quotes (so a JSON string built with tokens stays parseable).
+ */
+function joinedText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  const node = value as Record<string, any>;
+  if (Array.isArray(node['Fn::Join'])) {
+    const [delimiter, items] = node['Fn::Join'] as [string, unknown[]];
+    return items.map(joinedText).join(delimiter);
+  }
+  if (node['Fn::ImportValue'] !== undefined) {
+    return `IMPORT(${joinedText(node['Fn::ImportValue'])})`;
+  }
+  if (Array.isArray(node['Fn::GetAtt'])) {
+    return `GETATT(${(node['Fn::GetAtt'] as string[]).join('.')})`;
+  }
+  if (typeof node.Ref === 'string') {
+    return `REF(${node.Ref})`;
+  }
+  return JSON.stringify(node);
+}
+
+describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、NFR3.4、NFR3.10、NFR6.6〜NFR6.8）', () => {
+  const taskStatements = (t: Template) => statementsOfRole(t, 'AppTaskDefinitionTaskRole');
+  const codeInterpreters = (t: Template) =>
+    Object.entries(t.findResources('AWS::BedrockAgentCore::CodeInterpreterCustom'));
+
+  test('Code Interpreter は 1 つで、SANDBOX、実行ロールを付けない（既定、NFR3.4）', () => {
+    expect(CODE_INTERPRETER_EXECUTION_ROLE).toBe('none');
+    const found = codeInterpreters(template);
+    expect(found).toHaveLength(1);
+    const [, resource] = found[0];
+    expect(resource.Properties.NetworkConfiguration).toEqual({ NetworkMode: 'SANDBOX' });
+    expect(resource.Properties.ExecutionRoleArn).toBeUndefined();
+    // Only alphanumerics and _ are allowed (AgentCore naming rule). Includes the Stage environment name
+    expect(resource.Properties.Name).toMatch(/^[a-zA-Z][a-zA-Z0-9_]{0,47}$/);
+    expect(resource.Properties.Name).toContain('dev');
+  });
+
+  test('アプリに CODE_INTERPRETER_ID（この Code Interpreter の ID の属性）と ENABLE_ADVANCED_GENERATION=true を渡す', () => {
+    const [logicalId] = codeInterpreters(template)[0];
+    const env = envOf(template);
+    expect(env.CODE_INTERPRETER_ID).toEqual({ 'Fn::GetAtt': [logicalId, 'CodeInterpreterId'] });
+    expect(env.ENABLE_ADVANCED_GENERATION).toBe('true');
+  });
+
+  test.each([
+    [true, 'true'],
+    [false, 'false'],
+  ])('enableAdvancedGeneration=%s → ENABLE_ADVANCED_GENERATION=%s（資源はそのまま）', (value, expected) => {
+    const { template: t } = build({
+      context: { imageTag: 'abc1234' },
+      parameter: { enableAdvancedGeneration: value },
+    });
+    expect(envOf(t).ENABLE_ADVANCED_GENERATION).toBe(expected);
+    expect(codeInterpreters(t)).toHaveLength(1);
+  });
+
+  test('3 つのテーブルの名前をテーブルの参照で渡す（src/config.py の *_TABLE_NAME）', () => {
+    const env = envOf(template);
+    const expected: Record<string, string> = {
+      SOURCE_FILES_TABLE_NAME: 'DatabaseSourceFiles',
+      ADVANCED_GENERATIONS_TABLE_NAME: 'DatabaseAdvancedGenerations',
+      APP_SETTINGS_TABLE_NAME: 'DatabaseAppSettings',
+    };
+    for (const [name, logicalId] of Object.entries(expected)) {
+      expect(JSON.stringify(env[name])).toContain(logicalId);
+    }
+  });
+
+  test('タスクロールは 3 つのテーブルと、2 つの GSI を名前で読み書きできる（index/* なし）', () => {
+    const statements = taskStatements(template).filter((s) =>
+      /DatabaseSourceFiles|DatabaseAdvancedGenerations|DatabaseAppSettings/.test(resourcesText(s)),
+    );
+    expect(statements.length).toBeGreaterThan(0);
+    const actions = new Set(actionsIn(statements));
+    for (const action of ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query']) {
+      expect(actions.has(action)).toBe(true);
+    }
+    const text = JSON.stringify(statements);
+    // `<table ARN>/index/<name>` is Fn::Join of [{Fn::ImportValue: <table ARN>}, "/index/<name>"]
+    expect(text).toMatch(/DatabaseSourceFiles[0-9A-F]{8}Arn[^"]*"\},"\/index\/owner_sub-created_at"/);
+    expect(text).toMatch(/DatabaseAdvancedGenerations[0-9A-F]{8}Arn[^"]*"\},"\/index\/owner_sub-created_at"/);
+    expect(text).not.toContain('/index/*');
+  });
+
+  test('Code Interpreter の 3 つの操作は、この Code Interpreter の ARN だけ', () => {
+    const [logicalId] = codeInterpreters(template)[0];
+    const statements = taskStatements(template).filter((s) =>
+      actionsIn([s]).some((a) => /CodeInterpreter/.test(a)),
+    );
+    expect(statements).toHaveLength(1);
+    expect([statements[0].Action].flat().sort()).toEqual([
+      'bedrock-agentcore:InvokeCodeInterpreter',
+      'bedrock-agentcore:StartCodeInterpreterSession',
+      'bedrock-agentcore:StopCodeInterpreterSession',
+    ]);
+    expect([statements[0].Resource].flat()).toEqual([
+      { 'Fn::GetAtt': [logicalId, 'CodeInterpreterArn'] },
+    ]);
+  });
+
+  test('バケットの CORS はカスタムリソースで PUT だけ、オリジンは appBaseUrl と localhost:8000（dev）、ETag を読める', () => {
+    const resources = Object.values(template.findResources('Custom::UploadBucketCors'));
+    expect(resources).toHaveLength(1);
+    const props = resources[0].Properties;
+    const create = JSON.parse(joinedText(props.Create));
+    const update = JSON.parse(joinedText(props.Update));
+    const remove = JSON.parse(joinedText(props.Delete));
+    expect(create.service).toBe('S3');
+    expect(create.action).toBe('putBucketCors');
+    expect(update).toEqual(create);
+    expect(create.parameters.Bucket).toMatch(/^IMPORT\(.*UploadBucket/);
+    expect(create.parameters.CORSConfiguration).toEqual({
+      CORSRules: [
+        {
+          AllowedMethods: ['PUT'],
+          AllowedOrigins: [expect.stringMatching(/^https:\/\/GETATT\(CloudFront.*DomainName\)$/), 'http://localhost:8000'],
+          AllowedHeaders: ['content-type'],
+          ExposeHeaders: ['ETag'],
+          MaxAgeSeconds: 3000,
+        },
+      ],
+    });
+    // On removal only the CORS configuration is dropped (the bucket is kept)
+    expect(remove).toMatchObject({ service: 'S3', action: 'deleteBucketCors' });
+    expect(remove.parameters).toEqual({ Bucket: create.parameters.Bucket });
+    // The origin is the same value as APP_BASE_URL
+    expect(JSON.stringify(envOf(template).APP_BASE_URL)).toContain('CloudFront');
+  });
+
+  test('CORS のカスタムリソースのポリシーは s3:PutBucketCORS をこのバケットだけ', () => {
+    const policies = Object.entries(template.findResources('AWS::IAM::Policy')).filter(([id]) =>
+      id.startsWith('UploadBucketCorsCustomResourcePolicy'),
+    );
+    expect(policies).toHaveLength(1);
+    const statements = policies[0][1].Properties.PolicyDocument.Statement as any[];
+    expect(statements).toHaveLength(1);
+    expect(statements[0].Action).toBe('s3:PutBucketCORS');
+    expect(joinedText(statements[0].Resource)).toMatch(/^IMPORT\(.*UploadBucket/);
+  });
+
+  test('メトリクスフィルタ 7 つ（AIPersona/AdvancedGeneration。値は 1、既定値なし、アラームなし）', () => {
+    const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'))
+      .map((f) => f.Properties)
+      .filter((p) => p.MetricTransformations[0].MetricNamespace === 'AIPersona/AdvancedGeneration');
+    const byName = Object.fromEntries(filters.map((p) => [p.MetricTransformations[0].MetricName, p]));
+    expect(Object.keys(byName).sort()).toEqual([
+      'GenerationCompleted',
+      'GenerationFailed',
+      'RunCodeDisabled',
+      'SourceDeleteFailed',
+      'SourceRefreshFailed',
+      'TamperDetected',
+      'UploadFailed',
+    ]);
+    // Count of detailed-analysis removals (reason dimension) and of tampering detections
+    expect(byName.RunCodeDisabled.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.run_code_disabled") && ($.status = "disabled") }',
+    );
+    expect(byName.RunCodeDisabled.MetricTransformations[0].Dimensions).toEqual([
+      { Key: 'reason', Value: '$.reason' },
+    ]);
+    expect(byName.TamperDetected.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.tamper_detected") && ($.status = "detected") }',
+    );
+    expect(byName.TamperDetected.MetricTransformations[0].Dimensions).toBeUndefined();
+    // Delete and copy failures: the event and status values of the app log
+    expect(byName.SourceDeleteFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.source_deleted") && ($.status = "failed") }',
+    );
+    expect(byName.SourceRefreshFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.source_refreshed") && ($.status = "failed") }',
+    );
+    for (const name of ['SourceDeleteFailed', 'SourceRefreshFailed']) {
+      expect(byName[name].MetricTransformations[0].Dimensions).toEqual([
+        { Key: 'error_code', Value: '$.error_code' },
+      ]);
+    }
+    for (const props of filters) {
+      expect(props.MetricTransformations[0].MetricValue).toBe('1');
+      expect(props.MetricTransformations[0].DefaultValue).toBeUndefined();
+    }
+    // The event and status values of the app log (src/managers/shared/advanced_generation_log.py)
+    expect(byName.GenerationCompleted.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.finished") && ($.status = "done") }',
+    );
+    expect(byName.GenerationCompleted.MetricTransformations[0].Dimensions).toBeUndefined();
+    expect(byName.GenerationFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.finished") && ($.status = "failed") }',
+    );
+    expect(byName.GenerationFailed.MetricTransformations[0].Dimensions).toEqual([
+      { Key: 'stage', Value: '$.stage' },
+      { Key: 'error_code', Value: '$.error_code' },
+    ]);
+    expect(byName.UploadFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.upload_completed") && ($.status = "error") }',
+    );
+    expect(byName.UploadFailed.MetricTransformations[0].Dimensions).toEqual([
+      { Key: 'error_code', Value: '$.error_code' },
+    ]);
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 0);
+  });
+
+  test('既存の資源の暗号化に触れない: KMS の鍵を App スタックに作らない', () => {
+    template.resourceCountIs('AWS::KMS::Key', 0);
+  });
+});
+
+describe('AnalysisCodeInterpreter（実行ロールの切り替え先、NFR3.4）', () => {
+  function synth(executionRole: 'none' | 'empty'): Template {
+    const app = new cdk.App({ context: { ...FEATURE_FLAGS } });
+    const s = new cdk.Stack(app, 'Test', { env: TOKYO });
+    new AnalysisCodeInterpreter(s, 'AnalysisCodeInterpreter', { envName: 'dev', executionRole });
+    return Template.fromStack(s);
+  }
+
+  test('none: ロールを作らず、ExecutionRoleArn を省く', () => {
+    const t = synth('none');
+    t.resourceCountIs('AWS::IAM::Role', 0);
+    const [resource] = Object.values(t.findResources('AWS::BedrockAgentCore::CodeInterpreterCustom'));
+    expect(resource.Properties.ExecutionRoleArn).toBeUndefined();
+  });
+
+  test('empty: 許可のポリシーのないロール（信頼は bedrock-agentcore.amazonaws.com、aws:SourceAccount の条件）', () => {
+    const t = synth('empty');
+    const roles = Object.entries(t.findResources('AWS::IAM::Role'));
+    expect(roles).toHaveLength(1);
+    const [roleId, role] = roles[0];
+    expect(role.Properties.AssumeRolePolicyDocument.Statement).toEqual([
+      {
+        Action: 'sts:AssumeRole',
+        Effect: 'Allow',
+        Principal: { Service: 'bedrock-agentcore.amazonaws.com' },
+        Condition: { StringEquals: { 'aws:SourceAccount': '123456789012' } },
+      },
+    ]);
+    expect(role.Properties.Policies).toBeUndefined();
+    expect(role.Properties.ManagedPolicyArns).toBeUndefined();
+    t.resourceCountIs('AWS::IAM::Policy', 0);
+    const [resource] = Object.values(t.findResources('AWS::BedrockAgentCore::CodeInterpreterCustom'));
+    expect(resource.Properties.ExecutionRoleArn).toEqual({ 'Fn::GetAtt': [roleId, 'Arn'] });
+    expect(resource.Properties.NetworkConfiguration).toEqual({ NetworkMode: 'SANDBOX' });
   });
 });

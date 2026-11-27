@@ -1,8 +1,8 @@
 """Service-level tests for SurveyBatchService against real DuckDB on local files.
 
-`_get_duckdb_conn` は S3 上の Parquet を VIEW にするため、クエリ系のテストでは
-ローカル Parquet を VIEW 登録した接続をキャッシュに差し込む（S3・ネットワーク不要）。
-ネットワークに出る境界（Hugging Face の load_dataset）だけを差し替える。
+`_get_duckdb_conn` makes a VIEW over Parquet on S3, so query tests put a connection
+with a local Parquet VIEW into the cache (no S3 or network needed). Only the boundary
+that goes to the network (Hugging Face load_dataset) is replaced.
 """
 
 import io
@@ -129,7 +129,7 @@ class TestFilterAndSample:
     def test_keyword_underscore_is_literal(self, svc):
         """'_' in a keyword should match a literal underscore, not any character."""
         df = svc.filter_and_sample_personas({"職業": "e_g"}, count=100)
-        # "e_g" が "software engineer" の "eng" に一致してしまう
+        # "e_g" would match the "eng" in "software engineer"
         assert df.is_empty()
 
 
@@ -170,7 +170,7 @@ class TestAvailableFilterValues:
 
     def test_result_is_cached_until_invalidated(self, svc):
         first = svc.get_available_filter_values()
-        # データを差し替えても、TTL 内はキャッシュが返る
+        # Even if the data is replaced, the cache is returned within the TTL
         svc._duckdb_conns["nemotron"].execute(
             "CREATE OR REPLACE VIEW personas AS SELECT 'X' AS sex, 1 AS age"
         )
@@ -195,7 +195,7 @@ class TestAvailableFilterValues:
     def test_empty_dataset_drops_range_but_keeps_others(self, tmp_path):
         svc = _service_over(_PERSONAS.clear(), tmp_path)
         values = svc.get_available_filter_values()
-        assert "年齢" not in values  # MIN/MAX が NULL
+        assert "年齢" not in values  # MIN/MAX are NULL
         assert values["性別"] == {"type": "select", "options": []}
 
 
@@ -207,7 +207,7 @@ class TestAvailableFilterValues:
 class TestPreviewStats:
     def test_distributions_and_age_summary(self, svc):
         stats = svc.get_preview_stats()
-        assert stats["性別"] == {"女": 3, "男": 2}  # NULL は数えない
+        assert stats["性別"] == {"女": 3, "男": 2}  # NULL is not counted
         assert stats["居住地域"]["関東"] == 3
         assert stats["年齢"] == {"平均": 41.5, "最小": 25, "最大": 61}
 
@@ -250,7 +250,7 @@ class TestQueryDuckdb:
         broken.execute(
             f"CREATE VIEW personas AS SELECT * FROM read_parquet('{missing}')"
         )
-        missing.unlink()  # 以後の読み出しは IOException
+        missing.unlink()  # later reads raise IOException
         svc._duckdb_conns["nemotron"] = broken
 
         good = tmp_path / "good.parquet"
@@ -300,7 +300,7 @@ class TestQueryDuckdb:
         svc.get_available_filter_values()
         svc.invalidate_datasource("nemotron")
         assert "nemotron" not in svc._filter_values_cache
-        # キャッシュ接続が消え、URI 未設定なので再接続できない
+        # The cached connection is gone and the URI is unset, so it cannot reconnect
         with raises_code(
             SurveyBatchServiceError, ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED
         ):
@@ -431,7 +431,7 @@ class TestConvertCsvToParquet:
 
 
 # =============================================================================
-# download_nemotron_dataset（Hugging Face 境界だけ差し替える）
+# download_nemotron_dataset (only the Hugging Face boundary is replaced)
 # =============================================================================
 
 

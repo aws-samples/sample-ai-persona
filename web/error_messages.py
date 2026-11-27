@@ -17,9 +17,10 @@ of a body swap, so that the user's input survives a retryable failure
 
 import json
 import logging
-from typing import TypeVar
+from typing import Any, Callable, TypeVar
 
 from fastapi import Response
+from fastapi.responses import JSONResponse
 
 from src.models.errors import CodedError, ErrorCode, ErrorKind
 from src.models.password_policy import (
@@ -30,8 +31,8 @@ from src.models.password_policy import (
 
 logger = logging.getLogger(__name__)
 
-#: ``mark_renderable`` は受け取った応答型をそのまま返す（TemplateResponse を
-#: 渡した呼び出し元が Response に狭められないようにするため）。
+#: ``mark_renderable`` returns the response type it was given as is (so a caller that
+#: passed a TemplateResponse is not narrowed to Response).
 _ResponseT = TypeVar("_ResponseT", bound=Response)
 
 # Field key -> display label. Managers put the stable key in
@@ -56,7 +57,7 @@ _CATALOG: dict[ErrorCode, str] = {
         "ネットワーク接続エラーが発生しました。接続を確認してください。"
     ),
     ErrorCode.JOB_NOT_FOUND: "ジョブが見つかりません",
-    # --- ログイン（v1.0.0 U1） ---
+    # --- Login ---
     ErrorCode.AUTH_REQUIRED: "ログインしてください",
     ErrorCode.SESSION_EXPIRED: (
         "ログインの有効期限が切れました。再度ログインしてください"
@@ -71,7 +72,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.AUTH_CONFIG_INVALID: (
         "ログインの設定が正しくありません。管理者に連絡してください"
     ),
-    # --- 閉域構成のログイン（v1.0.0 U8、M2・M3） ---
+    # --- Closed-network login ---
     ErrorCode.LOGIN_FAILED: "メールアドレスまたはパスワードが違います",
     ErrorCode.LOGIN_RATE_LIMITED: (
         "試行回数が上限に達しました。しばらくしてから再度お試しください"
@@ -84,16 +85,16 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.LOGIN_CHALLENGE_EXPIRED: (
         "時間が経過したため、もう一度ログインしてください"
     ),
-    # --- 認可（v1.0.0 U2） ---
+    # --- Authorization ---
     ErrorCode.ROLE_REQUIRED: "利用権限がまだありません。管理者に連絡してください",
     ErrorCode.ACCESS_DENIED: "この操作の権限がありません",
     ErrorCode.REQUEST_INVALID: "入力内容を確認してください",
     ErrorCode.HTTP_ERROR: "お探しのページまたは操作が見つかりません",
-    # 同じインタビューで応答の途中（v1.0.0 U6、約束 C5。送信と保存の両方）
+    # During a reply in the same interview (both sending and saving)
     ErrorCode.CONCURRENT_UPDATE: (
         "応答の途中です。応答が終わってからもう一度操作してください"
     ),
-    # --- 部署への共有（v1.0.0 U4） ---
+    # --- Sharing with departments ---
     ErrorCode.SHARE_SCOPE_INVALID: "選べないグループが含まれています",
     ErrorCode.SHARE_NO_DEPARTMENT: "所属グループがないため共有できません",
     ErrorCode.SHARE_OWNER_MISSING: "所有者が分からないため共有できません",
@@ -130,6 +131,104 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.GENERATION_OPERATION_FAILED: (
         "ペルソナ生成の処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
+    # --- Advanced generation (beta) ---
+    ErrorCode.ADVANCED_GENERATION_UNAVAILABLE: "高度な生成（ベータ）は今は使えません",
+    ErrorCode.ADVANCED_GENERATION_BUSY: (
+        "高度な生成が混み合っています。しばらく待ってから再度お試しください"
+    ),
+    # The router shows the running generation's progress with it
+    ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING: (
+        "実行中の生成があります。進み具合を表示しました"
+    ),
+    ErrorCode.UPLOAD_SOURCE_INVALID: (
+        "このファイルは使えません。CSV・TSV か、PDF・Word（.docx）・テキスト"
+        "（.txt・.md）の文書を上げてください"
+    ),
+    ErrorCode.UPLOAD_TOO_LARGE: (
+        "上げられません: 1 ファイル {max_size_mb}MB までです。分けて上げてください"
+    ),
+    ErrorCode.UPLOAD_TOO_MANY_FILES: (
+        "上げられません: 上げたまま持てるのは {max_files} ファイルまでです"
+    ),
+    ErrorCode.UPLOAD_NOT_FOUND: (
+        "アップロードが見つかりません。もう一度ファイルを上げてください"
+    ),
+    ErrorCode.GENERATION_SOURCE_NOT_FOUND: (
+        "選んだファイルが見つからないか、まだ準備OK になっていません"
+    ),
+    # --- Advanced generation (beta): deletion and refresh ---
+    ErrorCode.SOURCE_FILE_IN_USE: (
+        "このファイルは生成に使われています。生成が終わってから消してください"
+    ),
+    ErrorCode.SOURCE_EMPTY_COLUMN_NAME: (
+        "1 行目に空の列名があります。列名を入れて保存し直してください"
+    ),
+    ErrorCode.SOURCE_DUPLICATE_COLUMN_NAME: (
+        "1 行目に同じ列名が 2 つ以上あります。列名を別々にして保存し直してください"
+    ),
+    ErrorCode.SOURCE_ENCODING_UNKNOWN: (
+        "文字コードを判定できませんでした。UTF-8 で保存し直してください"
+    ),
+    ErrorCode.SOURCE_NOT_A_TABLE: (
+        "CSV として読めませんでした。CSV か TSV（1 行目が列名）を上げてください"
+    ),
+    # --- Advanced generation (beta): analysis ---
+    ErrorCode.SOURCE_NOT_A_DOCUMENT: (
+        "ファイルの中身が拡張子と合いません。PDF・Word（.docx）・テキストとして"
+        "保存し直して上げてください"
+    ),
+    ErrorCode.DOCUMENT_ENCRYPTED: (
+        "パスワード付きのファイルか、古い Word の形式のため読めません。"
+        "パスワードを外すか、.docx で保存し直して上げてください"
+    ),
+    ErrorCode.DOCUMENT_NO_TEXT: (
+        "文字を取り出せない文書がありました。そのファイルを外して生成し直してください"
+    ),
+    ErrorCode.GENERATION_SOURCE_TOO_LARGE: (
+        "文書の文字数が上限を超えたため止めました。文書を減らして生成し直してください"
+    ),
+    ErrorCode.GENERATION_NOT_FOUND: "生成が見つかりません",
+    ErrorCode.GENERATION_EXPIRED: (
+        "生成の結果は完了から 24 時間で見られなくなりました。もう一度生成してください"
+    ),
+    ErrorCode.GENERATION_SOURCE_UNREADABLE: (
+        "ファイルを読み込めませんでした。中身と文字コードを確かめて上げ直してください"
+    ),
+    ErrorCode.GENERATION_CAPACITY: (
+        "ファイルが大きすぎて準備しきれませんでした。ファイルを小さくして再度お試しください"
+    ),
+    ErrorCode.GENERATION_INSUFFICIENT_DATA: (
+        "データの行数が少なく、ペルソナを分けられません。"
+        "指示で対象を絞る、人数を減らす、行数の多いファイルを使う、"
+        "のどれかを試してください"
+    ),
+    ErrorCode.GENERATION_ANALYSIS_FAILED: (
+        "データから層を見つけられませんでした。指示を変えるか、ペルソナの数を減らしてください"
+    ),
+    ErrorCode.GENERATION_VERIFICATION_FAILED: (
+        "分析の結果を確かめられませんでした。指示を変えてもう一度生成してください"
+    ),
+    ErrorCode.GENERATION_TIMEOUT: (
+        "生成に時間がかかりすぎたため止めました。時間をおいて再度お試しください"
+    ),
+    ErrorCode.GENERATION_SANDBOX_UNAVAILABLE: (
+        "分析の処理に一時的に失敗しました。時間をおいて再度お試しください"
+    ),
+    ErrorCode.GENERATION_PURPOSE_TOO_LONG: (
+        "指示は {max_chars} 文字までです。短くしてください"
+    ),
+    # --- Advanced generation (beta): control requests ---
+    ErrorCode.GENERATION_STALLED: (
+        "生成の処理が途中で止まりました。もう一度始めてください"
+    ),
+    ErrorCode.GENERATION_NOT_AWAITING_PLAN: (
+        "計画の確認を待っていないか、中止の手続き中です。進み具合を確かめてください"
+    ),
+    ErrorCode.GENERATION_ALREADY_FINISHED: "生成はもう終わっています",
+    ErrorCode.GENERATION_SOURCE_NOT_READY: (
+        "検査が終わっていないファイルがあります。"
+        "準備OK になるまで待ってから始めてください"
+    ),
     ErrorCode.FILE_TOO_LARGE: (
         "ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
     ),
@@ -160,8 +259,8 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.ASSET_TOO_LARGE: (
         "ファイルが大きすぎるため表示できません。管理者に連絡してください"
     ),
-    # --- アンケート ---
-    # ID は画面に出さずログにのみ残す（診断情報とユーザー向け案内の分離）。
+    # --- Surveys ---
+    # IDs are kept in the log only, not shown on screen (keeps diagnostics apart from user-facing guidance).
     ErrorCode.SURVEY_NOT_FOUND: "アンケートが見つかりません",
     ErrorCode.SURVEY_RESULT_NOT_READY: "アンケート結果がまだ生成されていません",
     ErrorCode.SURVEY_TEMPLATE_NOT_FOUND: "テンプレートが見つかりません",
@@ -192,6 +291,9 @@ _CATALOG: dict[ErrorCode, str] = {
         "同じ名前のペルソナ元データがあります。別の名前を入力してください"
     ),
     ErrorCode.SETTINGS_NOT_FOUND: "お探しのページが見つかりません",
+    ErrorCode.SETTINGS_VERSION_CONFLICT: (
+        "ほかの人が先に変えました。内容を確かめて、もう一度保存してください"
+    ),
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING: "画像には名前を設定してください",
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_INVALID: (
         "画像の名前に改行などの制御文字は使えません"
@@ -288,7 +390,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.SURVEY_EXECUTION_FAILED: (
         "アンケートの実行中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
-    # --- 議論 ---
+    # --- Discussions ---
     ErrorCode.DISCUSSION_INTERVIEW_MODE_UNSUPPORTED: (
         "インタビューモードは別のエンドポイントで処理されます"
     ),
@@ -349,7 +451,7 @@ _CATALOG: dict[ErrorCode, str] = {
         "選択したモデルの入力サイズ上限（最大{max_size_mb:.1f}MB）を超えています。"
         "モデルを変更するか、添付ドキュメントを減らしてください"
     ),
-    # --- 議論レポート ---
+    # --- Discussion reports ---
     ErrorCode.REPORT_NOT_FOUND: "レポートが見つかりません",
     ErrorCode.REPORT_LIMIT_REACHED: (
         "レポートは最大{max_reports}件まで保存できます。"
@@ -358,7 +460,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.REPORT_OPERATION_FAILED: (
         "レポートの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
-    # --- ペルソナデータのセグメント抽出（DWH） ---
+    # --- Segment extraction from persona data (DWH) ---
     ErrorCode.SEGMENT_CONDITION_REQUIRED: "抽出条件を入力してください",
     ErrorCode.SEGMENT_ROW_COUNT_TOO_LOW: (
         "抽出件数が少なすぎます（{row_count}件）。最低{min_rows}件のデータが必要です。"
@@ -381,7 +483,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.DATA_AGENT_DOWNLOAD_URL_REJECTED: (
         "データのダウンロードに失敗しました。時間をおいて再度お試しください。"
     ),
-    # --- インタビュー ---
+    # --- Interviews ---
     ErrorCode.INTERVIEW_PERSONAS_REQUIRED: (
         "インタビューには最低1つのペルソナが必要です"
     ),
@@ -437,8 +539,8 @@ _CATALOG: dict[ErrorCode, str] = {
         "選択したモデルのインタビューでの入力サイズ上限（最大{max_size_mb:.1f}MB）を"
         "超えています。モデルを変更するか、添付ドキュメントを減らしてください"
     ),
-    # --- ペルソナ ---
-    # {field} は _FIELD_LABELS で表示名に解決される。
+    # --- Personas ---
+    # {field} is resolved to a display name via _FIELD_LABELS.
     ErrorCode.PERSONA_FIELD_REQUIRED: "{field}が設定されていません",
     ErrorCode.PERSONA_FIELD_TOO_LONG: "{field}は{max_length}文字以内で設定してください",
     ErrorCode.PERSONA_LIST_EMPTY: "{field}が1つも設定されていません",
@@ -487,7 +589,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.DATASET_OPERATION_FAILED: (
         "データセットの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
-    # --- 長期記憶 ---
+    # --- Long-term memory ---
     ErrorCode.MEMORY_TOPIC_NAME_REQUIRED: "トピック名を入力してください",
     ErrorCode.MEMORY_CONTENT_REQUIRED: "内容を入力してください",
     ErrorCode.MEMORY_TOPIC_NAME_TOO_LONG: (
@@ -511,7 +613,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.MEMORY_OPERATION_FAILED: (
         "記憶の処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
-    # --- Service層（Manager層が必ず自ドメイン例外に変換するため到達しない） ---
+    # --- Service layer (never reached because the Manager layer always converts to its own domain exception) ---
     ErrorCode.AGENT_SDK_UNAVAILABLE: "エージェントSDKが利用できません",
     ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED: "選択されたモデルは現在無効化されています",
     ErrorCode.AGENT_INITIALIZATION_FAILED: "エージェントの初期化に失敗しました",
@@ -532,9 +634,9 @@ _CATALOG: dict[ErrorCode, str] = {
 FALLBACK_MESSAGE = "エラーが発生しました。時間をおいて再度お試しください。"
 
 #: Toast wording shared by every "resource not found" error on htmx requests
-#: (U3 WF8, M11). The kind of resource is not named, so the toast does not
-#: tell whether something exists but is unreadable or does not exist (NFR1.9,
-#: contract C5). Only the toast changes: ``user_message_for()`` keeps the
+#: The kind of resource is not named, so the toast does not
+#: tell whether something exists but is unreadable or does not exist.
+#: Only the toast changes: ``user_message_for()`` keeps the
 #: resource-specific catalog wording for JSON API bodies and error banners.
 NOT_FOUND_TOAST_MESSAGE = "ページが見つかりません"
 
@@ -551,12 +653,16 @@ UNIFIED_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
         ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
         ErrorCode.DATASET_NOT_FOUND,
         ErrorCode.JOB_NOT_FOUND,
-        # U5: 他人・期限切れ・紐付け済みのファイルと、KB の紐付け（NFR1.14）
+        # Files of others, expired or already bound, and KB bindings
         ErrorCode.FILE_NOT_FOUND,
         ErrorCode.KB_BINDING_NOT_FOUND,
-        # U7: 利用範囲の外のカスタムペルソナデータと、admin だけの設定（NFR1.79）
+        # Custom persona data outside the usage scope, and admin-only settings
         ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
         ErrorCode.SETTINGS_NOT_FOUND,
+        # Advanced generation: do not distinguish someone else's from nonexistent
+        ErrorCode.UPLOAD_NOT_FOUND,
+        ErrorCode.GENERATION_SOURCE_NOT_FOUND,
+        ErrorCode.GENERATION_NOT_FOUND,
     }
 )
 
@@ -575,8 +681,172 @@ DISTINCT_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
         ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING,
         ErrorCode.S3_OBJECT_NOT_FOUND,
         ErrorCode.HTTP_ERROR,
+        # Advanced generation: an expired one can only be regenerated
+        ErrorCode.GENERATION_EXPIRED,
     }
 )
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def _unreadable_detail(base: str, context: dict[str, Any]) -> str:
+    """Line numbers of the bad rows; the plain wording without them."""
+    examples = context.get("row_examples")
+    if (
+        not isinstance(examples, list)
+        or not 1 <= len(examples) <= 5
+        or any(_positive_int(n) is None for n in examples)
+    ):
+        return base
+    lines = "、".join(str(n) for n in examples)
+    message = f"{lines} 行目などに問題があります。ファイルを直して上げ直してください"
+    read, excluded = (
+        _positive_int(context.get("rows_read")),
+        _positive_int(context.get("rows_excluded")),
+    )
+    if read is not None and excluded is not None:
+        message += f"（読み込めた行 {read:,}、除外した行 {excluded:,}）"
+    return message
+
+
+def _capacity_detail(base: str, context: dict[str, Any]) -> str:
+    """The size reached when memory ran out; only what is known."""
+    rows = _positive_int(context.get("rows_read"))
+    columns = _positive_int(context.get("columns_count"))
+    if rows is None and columns is None:
+        return base
+    if rows is not None and columns is not None:
+        size = f"おおよそ {rows:,} 行・{columns:,} 列"
+    elif rows is not None:
+        size = f"おおよそ {rows:,} 行"
+    else:
+        size = f"{columns:,} 列"
+    return f"ファイルが大きすぎて準備しきれませんでした（{size}）。ファイルを小さくして再度お試しください"
+
+
+def _insufficient_detail(base: str, context: dict[str, Any]) -> str:
+    """How many personas cannot be split from the rows read."""
+    count = _positive_int(context.get("persona_count"))
+    if count is None:
+        return base
+    message = (
+        f"データの行数が少なく、{count} 人には分けられません。"
+        "指示で対象を絞る、人数を減らす、行数の多いファイルを使う、"
+        "のどれかを試してください"
+    )
+    read, required = (
+        _positive_int(context.get("rows_read")),
+        _positive_int(context.get("required_rows")),
+    )
+    if read is not None and required is not None:
+        message += f"（読めた行 {read:,}、必要な行 {required:,}）"
+    return message
+
+
+def _non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _filename(context: dict[str, Any]) -> str | None:
+    """The user's own file name the router looked up, if any."""
+    name = context.get("filename")
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def _source_invalid_detail(base: str, context: dict[str, Any]) -> str:
+    """An old Word file is told to be saved as .docx."""
+    if context.get("reason") == "legacy_word":
+        return (
+            "古い Word の形式（.doc）は使えません。.docx で保存し直して上げてください"
+        )
+    if context.get("reason") == "tables":
+        # Up to three tables (the limit comes from the context)
+        limit = _positive_int(context.get("max")) or 3
+        return f"CSV は {limit} つまで選べます。文書はいくつでも一緒に選べます"
+    return base
+
+
+def _request_invalid_detail(base: str, context: dict[str, Any]) -> str:
+    """A department gone since the settings screen opened."""
+    if context.get("reason") == "vanished_departments":
+        count = _positive_int(context.get("count"))
+        counted = f"（{count:,} 件）" if count is not None else ""
+        return (
+            f"見つからないグループが選ばれています{counted}。外してから保存してください"
+        )
+    return base
+
+
+def _no_text_detail(base: str, context: dict[str, Any]) -> str:
+    """Names the file without text; the plain wording without it."""
+    name = _filename(context)
+    if name is None:
+        return base
+    return (
+        f"{name} から文字を取り出せませんでした。"
+        "このファイルを外して生成し直してください"
+    )
+
+
+def _encrypted_detail(base: str, context: dict[str, Any]) -> str:
+    """Names the protected file when the router knows it."""
+    name = _filename(context)
+    if name is None:
+        return base
+    return (
+        f"{name} はパスワード付きのため読めません。パスワードを外して上げ直してください"
+    )
+
+
+def _too_large_detail(base: str, context: dict[str, Any]) -> str:
+    """The settled characters and the limit, integers only."""
+    if context.get("limit") == "tables_total":
+        # The chosen tables add up to more than 1GB
+        return (
+            "選んだ CSV の合計が 1GB を超えています。CSV を減らして生成し直してください"
+        )
+    total = _non_negative_int(context.get("total_chars"))
+    limit = _positive_int(context.get("max_chars"))
+    if total is None or limit is None:
+        return base
+    return (
+        f"文書の文字数が上限を超えたため止めました（文書の合計 {total:,} 字、"
+        f"上限 {limit:,} 字）。文書を減らして生成し直してください"
+    )
+
+
+def _timeout_detail(base: str, context: dict[str, Any]) -> str:
+    """Which limit ran out: one plan card, all the waits, or the 60 minutes."""
+    minutes = _positive_int(context.get("value"))
+    limit = context.get("limit")
+    if minutes is None:
+        return base
+    if limit == "plan_wait_minutes":
+        return f"計画の確認を {minutes} 分待ちましたが、承認がなかったため止めました"
+    if limit == "plan_wait_total_minutes":
+        return f"計画の確認を待てる時間（合計 {minutes} 分）を超えたため止めました"
+    return base
+
+
+#: Codes whose wording takes numbers from the stored context (values are shown
+#: only when they are usable integers; otherwise the plain catalog wording).
+_DETAIL_WORDING: dict[ErrorCode, Callable[[str, dict[str, Any]], str]] = {
+    ErrorCode.GENERATION_SOURCE_UNREADABLE: _unreadable_detail,
+    ErrorCode.GENERATION_CAPACITY: _capacity_detail,
+    ErrorCode.GENERATION_INSUFFICIENT_DATA: _insufficient_detail,
+    ErrorCode.REQUEST_INVALID: _request_invalid_detail,
+    ErrorCode.UPLOAD_SOURCE_INVALID: _source_invalid_detail,
+    ErrorCode.DOCUMENT_NO_TEXT: _no_text_detail,
+    ErrorCode.DOCUMENT_ENCRYPTED: _encrypted_detail,
+    ErrorCode.GENERATION_SOURCE_TOO_LARGE: _too_large_detail,
+    ErrorCode.GENERATION_TIMEOUT: _timeout_detail,
+}
 
 
 def user_message_for(exc: BaseException | None, *, default: str | None = None) -> str:
@@ -611,6 +881,9 @@ def user_message_for(exc: BaseException | None, *, default: str | None = None) -
     if "field" in context:
         # Managers pass a stable field key; the display label lives here.
         context = {**context, "field": _FIELD_LABELS.get(context["field"], "入力値")}
+    detail = _DETAIL_WORDING.get(code) if isinstance(code, ErrorCode) else None
+    if detail is not None:
+        return detail(template, context)
     try:
         return template.format(**context)
     except (KeyError, IndexError, ValueError, TypeError):
@@ -646,7 +919,7 @@ def user_message_for_code(
     return user_message_for(CodedError(code=parsed, context=context), default=default)
 
 
-#: HTTP status per kind for the global exception handler (contract C13).
+#: HTTP status per kind for the global exception handler.
 _STATUS_BY_KIND: dict[ErrorKind, int] = {
     ErrorKind.UNAUTHORIZED: 401,
     ErrorKind.FORBIDDEN: 403,
@@ -659,7 +932,7 @@ _STATUS_BY_KIND: dict[ErrorKind, int] = {
 
 
 def http_status_for(code: ErrorCode) -> int:
-    """HTTP status for a coded error (contract C13).
+    """HTTP status for a coded error.
 
     ``UNKNOWN`` is looked at before its kind: its kind is TRANSIENT (so it is
     never shown as fixable), but an unclassified failure answers 500.
@@ -706,7 +979,7 @@ def toast_response(
     A missing resource (:data:`UNIFIED_NOT_FOUND_TOAST_CODES`) is announced
     with :data:`NOT_FOUND_TOAST_MESSAGE` instead of the resource-specific
     wording, so the toast reads the same whether the resource is unreadable
-    or does not exist (NFR1.9).
+    or does not exist.
 
     Args:
         exc: The caught exception. Only its code/context are used.
@@ -718,9 +991,9 @@ def toast_response(
         message = NOT_FOUND_TOAST_MESSAGE
     else:
         message = user_message_for(exc, default=default)
-    # HTTPヘッダーは latin-1 でしかエンコードできないため、日本語文言は
-    # ensure_ascii=True（既定）で \uXXXX にエスケープする。JSON.parse する
-    # クライアント側で元の文字列に戻る。
+    # HTTP headers can only be encoded as latin-1, so Japanese wording is escaped to \uXXXX
+    # with ensure_ascii=True (the default). JSON.parse on the client turns it back
+    # into the original string.
     return Response(
         status_code=status_code,
         headers={
@@ -731,33 +1004,77 @@ def toast_response(
     )
 
 
-def is_transient(exc: BaseException | None) -> bool:
-    """再試行で解決しうるエラー（画面を書き換えずトーストで通知すべきもの）か。
+def json_error_response(
+    exc: BaseException | None, *, status_code: int | None = None
+) -> JSONResponse:
+    """A JSON error body for page scripts that read JSON.
 
-    Manager層の例外型は VALIDATION と TRANSIENT の両方を投げるため、Router の
-    ``except`` 節は型では区別できない。表示方法の判断はこの関数に集約する
-    （Router側に kind の分岐ロジックを散らさないため）。
+    The body is ``{detail, error_code, kind}``: the catalog wording, the code
+    value and the presentation kind. The exception's own message and context
+    never go in. Uncoded exceptions answer ``UNKNOWN`` (TRANSIENT, 500).
+
+    Args:
+        exc: The caught exception. Only its code/context are used.
+        status_code: HTTP status; by default the one of the code's kind.
+    """
+    payload = error_payload(exc)
+    code = ErrorCode.parse(payload["error_code"]) or ErrorCode.UNKNOWN
+    response = JSONResponse(
+        status_code=status_code or http_status_for(code),
+        content={
+            "detail": payload["message"],
+            "error_code": payload["error_code"],
+            "kind": payload["kind"],
+        },
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def error_payload(exc: BaseException | None) -> dict[str, str]:
+    """``{error_code, kind, message}`` of an exception (the SSE ``error`` payload).
+
+    Only the code value, the presentation kind and the catalog wording; the
+    exception's message and context values never go in. Uncoded exceptions
+    read as ``UNKNOWN``.
+    """
+    code = getattr(exc, "code", None)
+    if not isinstance(code, ErrorCode):
+        code = ErrorCode.UNKNOWN
+    return {
+        "error_code": code.value,
+        "kind": error_kind_of(exc).value,
+        "message": user_message_for(exc),
+    }
+
+
+def is_transient(exc: BaseException | None) -> bool:
+    """Whether the error can be resolved by retrying (should be shown as a toast without rewriting the screen).
+
+    Manager-layer exception types raise both VALIDATION and TRANSIENT, so the Router's
+    ``except`` clause cannot tell them apart by type. The display decision is centralized in this function
+    (so kind-branching logic is not scattered across Routers).
     """
     return error_kind_of(exc) is ErrorKind.TRANSIENT
 
 
 def is_correctable(exc: BaseException | None) -> bool:
-    """利用者が入力を直せば解決するエラー（フォームを再描画すべきもの）か。
+    """Whether the error can be resolved if the user fixes the input (the form should be re-rendered).
 
-    ``VALIDATION``（入力の誤り）と ``CAPACITY``（入力量の超過）はどちらも
-    「送信値を保持したままフォームを出し直す」のが正しい表示になる。逆に
-    ``NOT_FOUND`` / ``CONFIG`` はフォームを出し直しても解決しないため含めない。
+    Both ``VALIDATION`` (bad input) and ``CAPACITY`` (input too large)
+    are correctly shown by re-rendering the form with the submitted values kept. Conversely,
+    ``NOT_FOUND`` / ``CONFIG`` are not included because re-rendering the form does not resolve them.
     """
     return error_kind_of(exc) in (ErrorKind.VALIDATION, ErrorKind.CAPACITY)
 
 
 def field_of(exc: BaseException | None) -> str | None:
-    """バリデーション対象のフィールドキーを返す（無い場合は ``None``）。
+    """Return the field key under validation (``None`` if absent).
 
-    Manager が ``context["field"]`` に安定キーを載せている場合のみ取得できる。
-    テンプレートはこれを使ってエラーを該当フィールドの横に表示する。キーから
-    表示名への変換はカタログ側（:data:`_FIELD_LABELS`）が持つので、Router や
-    テンプレートが日本語のフィールド名を知る必要はない。
+    Available only when the Manager puts a stable key in ``context["field"]``.
+    Templates use it to show the error next to the matching field. The mapping from key to
+    display name lives in the catalog (:data:`_FIELD_LABELS`), so Routers and
+    templates do not need to know Japanese field names.
     """
     context = getattr(exc, "context", None)
     if not isinstance(context, dict):
@@ -766,24 +1083,24 @@ def field_of(exc: BaseException | None) -> str | None:
     return field if isinstance(field, str) else None
 
 
-#: 非2xx応答の本文をスワップさせるためのヘッダー。
+#: Header that lets a non-2xx response body be swapped in.
 #:
-#: htmx 1.9.10 は ``status>=200 && status<400 && status!==204`` 以外の本文を
-#: スワップしないため、4xx/5xx でエラーパーシャルを返しても画面に反映されない。
-#: このヘッダーが付いた応答だけをクライアント側で許可する
-#: （``web/static/js/app.js`` の ``htmx:beforeSwap`` を参照）。
+#: htmx 1.9.10 does not swap bodies other than ``status>=200 && status<400 && status!==204``,
+#: so an error partial returned with 4xx/5xx would not reach the screen.
+#: Only responses carrying this header are allowed on the client
+#: (see ``htmx:beforeSwap`` in ``web/static/js/app.js``).
 #:
-#: ステータスコードで一律に許可しないのは、汎用エラーパーシャルが ``hx-target``
-#: （本体コンテンツや一覧）に流れ込んでフォームごと消える経路があるため。
-#: 「表示してよい」判断はサーバー側が持つ（Issue #117）。
+#: Statuses are not allowed wholesale because a generic error partial can flow into ``hx-target``
+#: (main content or a list) and wipe the whole form.
+#: The decision "may be shown" belongs to the server (Issue #117).
 RENDER_RESPONSE_HEADER = {"X-Render-Response": "true"}
 
 
 def mark_renderable(response: _ResponseT) -> _ResponseT:
-    """非2xx応答をクライアントがDOMに反映してよいものとして印を付ける。
+    """Mark a non-2xx response as one the client may reflect into the DOM.
 
-    Router は各画面固有のテンプレート・コンテキストを持つため、応答の組み立て
-    自体はRouterに残し、この関数は「表示してよい」印だけを付ける。
+    Routers hold screen-specific templates and contexts, so assembling the response
+    stays in the Router; this function only adds the "may be shown" mark.
 
     Examples:
         >>> return mark_renderable(
@@ -798,9 +1115,9 @@ def mark_renderable(response: _ResponseT) -> _ResponseT:
     return response
 
 
-# --- M3 のパスワードの条件（v1.0.0 U8、BR2.5、BR4.3） ---
-# 条件のキー（PasswordRule）→ 表示の文言。PASSWORD_POLICY_NOT_MET の context と
-# M3 の条件の一覧は同じキーを使い、文言はここだけが持つ。
+# --- Password rules (first password change screen) ---
+# Rule key (PasswordRule) -> display wording. The context of PASSWORD_POLICY_NOT_MET and
+# the rule list on that screen use the same keys, and only this module holds the wording.
 _PASSWORD_RULE_LABELS: dict[PasswordRule, str] = {
     PasswordRule.MIN_LENGTH: "{min_length} 文字以上",
     PasswordRule.UPPERCASE: "英大文字（A〜Z）を含む",
@@ -813,7 +1130,7 @@ _PASSWORD_RULE_LABELS: dict[PasswordRule, str] = {
 
 
 def password_rule_label(rule: PasswordRule, policy: PasswordPolicy) -> str:
-    """The M3 wording of one password rule under ``policy``."""
+    """The wording of one password rule under ``policy``."""
     return _PASSWORD_RULE_LABELS[rule].format(
         min_length=policy.min_length, max_length=MAX_PASSWORD_LENGTH
     )

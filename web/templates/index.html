@@ -10,7 +10,7 @@
         AIペルソナを生成し、議論・対話・アンケートを通じてマーケティング戦略のためのインサイトを発見
     </p>
     
-    <!-- 2大機能選択 -->
+    <!-- Two main features -->
     <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-10 mt-8">
         <button @click="selected = selected === 'interview' ? null : 'interview'"
                 :class="selected === 'interview' ? 'ring-2 ring-indigo-500 bg-indigo-50' : 'bg-white hover:shadow-lg'"
@@ -37,7 +37,7 @@
         </button>
     </div>
 
-    <!-- インタビュー サブメニュー -->
+    <!-- Interview submenu -->
     <div x-show="selected === 'interview'" x-collapse class="mb-10">
         <div class="grid md:grid-cols-4 gap-6">
             <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
@@ -93,7 +93,7 @@
         </div>
     </div>
 
-    <!-- アンケート調査 サブメニュー -->
+    <!-- Survey submenu -->
     <div x-show="selected === 'survey'" x-collapse class="mb-10">
         <div class="grid md:grid-cols-4 gap-6">
             <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
@@ -147,7 +147,7 @@
     </div>
 
 
-    <!-- 機能説明 -->
+    <!-- Feature description -->
     <div class="mt-16 bg-white rounded-lg shadow-md p-8">
         <h2 class="text-2xl font-bold text-gray-900 mb-6">主な機能</h2>
         <div class="grid md:grid-cols-3 gap-8 text-left">

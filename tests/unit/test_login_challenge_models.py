@@ -1,8 +1,9 @@
-"""LoginChallenge モデルの単体テスト（U8 entities.md、BR2.2〜BR2.4、BR2.7）。
+"""Unit tests for the LoginChallenge model.
 
-初回パスワード変更の途中の状態。Sessions テーブルに ``challenge#`` + SHA-256 の
-キーで置き、``item_type="challenge"`` でログインセッションと区別する。期限は
-``created_at`` から 3 分で、``ttl`` は DynamoDB の自動削除の目安にすぎない。
+State in the middle of the first password change. It is stored in the Sessions table
+under a ``challenge#`` + SHA-256 key and told apart from login sessions by
+``item_type="challenge"``. It expires 3 minutes after ``created_at``; ``ttl`` is only a
+hint for DynamoDB auto-deletion.
 """
 
 import hashlib
@@ -45,7 +46,7 @@ class TestKey:
         assert _CHALLENGE_ID not in challenge_key(_CHALLENGE_ID)
 
     def test_key_never_collides_with_a_login_session_hash(self):
-        # ログインセッションのキーは接頭辞のない 64 桁の 16 進（U1 BR1.5）
+        # a login session key is 64 hex digits with no prefix
         session_hash = hashlib.sha256(_CHALLENGE_ID.encode("utf-8")).hexdigest()
         assert challenge_key(_CHALLENGE_ID) != session_hash
 
@@ -119,7 +120,7 @@ class TestExpiry:
         assert _challenge().is_expired(_NOW + timedelta(minutes=3, seconds=1))
 
     def test_ttl_is_not_used_for_the_decision(self):
-        # ttl が先でも後でも、判定は created_at から（BR2.4）
+        # whether ttl comes first or later, expiry is judged from created_at
         challenge = _challenge()
         stale_ttl = LoginChallenge(
             session_id_hash=challenge.session_id_hash,

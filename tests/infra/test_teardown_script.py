@@ -1,7 +1,7 @@
-"""destroy.sh（v1.0.0）と scripts/destroy-v0.sh の検査。
+"""Checks for the v1.0.0 teardown script and scripts/destroy-v0.sh.
 
-AWS には触れない。PATH の先頭に偽の aws を置き、呼ばれた引数を記録して、
-削除するスタック・順序・リージョンと、v0 やデータに触れないことを確かめる。
+Does not touch AWS. A fake aws is put at the head of PATH and records its arguments,
+to verify which stacks are deleted, in what order and region, and that v0 and data are untouched.
 """
 
 import shutil
@@ -24,10 +24,10 @@ SECRET_ARN = (
     "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:ClientSecret-xyz"
 )
 
-# describe-stack-resources の --output text の形（種類<TAB>物理 ID）
+# Shape of describe-stack-resources --output text (type<TAB>physical ID)
 DATA_RESOURCES = "\n".join(
     [
-        # KMS キーを先に並べ、テーブルより後に削除を予約することを確かめる
+        # KMS keys come first; verify their deletion is scheduled after the tables
         f"AWS::KMS::Key\t{KMS_KEY_ID}",
         "AWS::DynamoDB::GlobalTable\tpersona-table",
         "AWS::S3::Bucket\tupload-bucket",
@@ -125,7 +125,7 @@ def _deletes(calls: Path) -> list[str]:
     return [line for line in calls.read_text().splitlines() if "delete-stack " in line]
 
 
-# RETAIN のリソースを変える・消す呼び出し（destroy.sh では出てはならない）
+# Calls that change or delete RETAIN resources (must not appear in the teardown script)
 DATA_MUTATIONS = (
     "update-table",
     "delete-table",
@@ -214,7 +214,7 @@ def test_never_touches_v0_stacks_or_retained_data(repo, tmp_path):
         assert v0_stack not in log
     for data_call in DATA_MUTATIONS:
         assert data_call not in log
-    # 残るリソースを利用者に示す
+    # Show the user the resources that remain
     assert "persona-table" in result.stdout
 
 

@@ -1,12 +1,12 @@
 {% from "components/icons.html" import icon_photo %}
 {#
-  ペルソナ詳細ヘッダーのアイコン表示と差し替えUI。
-  .persona-avatar-editor-slot の中身として描画し、アップロード・削除の応答で丸ごと差し替える。
+  Icon display and replacement UI in the persona detail header.
+  Rendered as the content of .persona-avatar-editor-slot and swapped as a whole by the upload and delete responses.
 
-  引数:
-    persona ... 対象ペルソナ
-    avatar_upload_enabled ... 画像の保存先（S3）が設定されているか
-    manageable ... 画像を変えられるか（管理できる人だけ、BR4.3）
+  Arguments:
+    persona ... target persona
+    avatar_upload_enabled ... whether the image storage (S3) is configured
+    manageable ... whether the image can be changed (users who can manage only)
 #}
 <div class="flex flex-col items-center gap-1">
     <div class="persona-detail-avatar shadow-md"

@@ -1,4 +1,4 @@
-"""Full screens under axe-core: M11 and the four list screens (NFR6.2, NFR6.11, NFR6.12, WF8, WF9)."""
+"""Full screens under axe-core: the home screen and the four list screens."""
 
 from datetime import datetime
 from typing import Any, Generator
@@ -87,7 +87,7 @@ DISCUSSION_NEXT = "discussion-next"
 
 
 def _discussion_listing(discussions: list[Discussion], tab: str | None) -> TabbedList:
-    """What DiscussionManager.list_discussions returns for the admin (U6, M6)."""
+    """What DiscussionManager.list_discussions returns for the admin."""
     active = ListTab.parse(tab) or ListTab.MINE
     return TabbedList(
         tab=active,
@@ -149,7 +149,7 @@ def _templates() -> list[SurveyTemplate]:
 
 
 def _survey_listing(items: list, tab: str | None) -> TabbedList:
-    """What the U7 survey / template lists return for the admin (M6)."""
+    """What the survey / template lists return for the admin."""
     active = ListTab.parse(tab) or ListTab.MINE
     return TabbedList(
         tab=active,
@@ -173,11 +173,11 @@ def screens() -> Generator[dict[str, Mock]]:
     )
     discussions = _discussions(personas)
     discussion_manager = Mock()
-    # U6: 議論の一覧もタブ別。参加者は保存したときの名前（participant_names）で出す
+    # The discussion list is also tabbed; participants show the names saved at the time (participant_names)
     discussion_manager.list_discussions.side_effect = (
         lambda _p, tab, _c, *_a: _discussion_listing(discussions, tab)
     )
-    # U7: アンケートの結果・テンプレートの一覧もタブ別
+    # The survey result and template lists are also tabbed
     surveys, survey_templates = _surveys(), _templates()
     execution_manager = Mock()
     execution_manager.list_surveys.side_effect = (
@@ -205,7 +205,7 @@ def screens() -> Generator[dict[str, Mock]]:
 
 
 def _open(ui: UiHarness, client: Any, path: str) -> None:
-    # ペルソナ管理は最初のページをタブと一緒にサーバーで描く（U4）
+    # Persona management renders the first page with the tabs on the server
     ui.load_screen(client, path)
     if path.startswith("/persona/management"):
         ui.page.wait_for_selector("#persona-grid")
@@ -244,7 +244,7 @@ def test_list_screen_has_no_axe_violations(
 def test_discussion_tabs_have_no_axe_violations(
     ui: UiHarness, screen_client: Any, screens: dict[str, Mock], tab: str
 ) -> None:
-    """議論・インタビュー結果の 3 つのタブ（U6、M6、BR2.1）。"""
+    """The three tabs of the discussion / interview results."""
     _open(ui, screen_client, f"/discussion/results?tab={tab}")
 
     selected = ui.page.locator("[role=tab][aria-selected=true]")
@@ -262,7 +262,7 @@ def test_discussion_tabs_have_no_axe_violations(
 def test_persona_tabs_have_no_axe_violations(
     ui: UiHarness, screen_client: Any, screens: dict[str, Mock], tab: str
 ) -> None:
-    """ペルソナ管理の 3 つのタブ（U4、M6、NFR6.13）。"""
+    """The three tabs of persona management."""
     _open(ui, screen_client, f"/persona/management?tab={tab}")
 
     selected = ui.page.locator("[role=tab][aria-selected=true]")
@@ -368,7 +368,7 @@ def test_list_part_is_wrapped_in_an_id(
 def test_persona_detail_has_no_axe_violations(
     ui: UiHarness, screen_client: Any, screens: dict[str, Mock], manageable: bool
 ) -> None:
-    """ペルソナの詳細（U5、M8）: 所有者と共有された人の見え方で違反 0 件。"""
+    """Persona detail: zero violations for both the owner and shared-reader views."""
     from dataclasses import replace
 
     from src.managers.persona_manager import (

@@ -2,12 +2,12 @@
 {% from "components/icons.html" import icon_chat, icon_plus %}
 {% from "components/list_tabs.html" import list_tabs, list_tabpanel %}
 {#
-  議論・インタビュー結果の一覧（M6、U6 BR2.1）。
-  引数:
-    listing        ... TabbedList（items は Discussion の本体）。取れなければ None
-    error          ... 一覧を取れなかったときの文言
-    current_mode   ... mode の絞り込み（classic / agent / interview / None）
-    current_search ... 検索語（今のタブの中を検索する）
+  List of discussion and interview results.
+  Arguments:
+    listing        ... TabbedList (items are Discussion bodies); None when unavailable
+    error          ... message when the list could not be fetched
+    current_mode   ... mode filter (classic / agent / interview / None)
+    current_search ... search term (searches within the current tab)
 #}
 
 {% block content %}
@@ -23,7 +23,7 @@
         </a>
     </div>
 
-    <!-- 絞り込み・検索（今のタブの中、BR2.2） -->
+    <!-- Filter and search (within the current tab) -->
     <div class="bg-white rounded-lg shadow-md p-4 mb-6">
         <form id="filter-form" hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML"
               hx-include="#discussion-list [data-discussion-tab]">
@@ -63,7 +63,7 @@
         </form>
     </div>
 
-    <!-- 議論の一覧（タブ別、M6）。タブと読み直しは /discussion/results?tab=... -->
+    <!-- Discussion list (per tab). Tabs and reloads use /discussion/results?tab=... -->
     {%- set active = listing.tab.value if listing else (tab or "mine") %}
     {{ list_tabs(active, listing.counts if listing else {}, listing.show_all if listing else False, "/discussion/results", "discussion-list") }}
     {% call list_tabpanel("discussion-list", active, "/discussion/results") %}

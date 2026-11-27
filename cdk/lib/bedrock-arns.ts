@@ -2,7 +2,7 @@ import { IConstruct } from 'constructs';
 import { Stack } from 'aws-cdk-lib';
 import { JP_REGIONS, ModelIds, PUBLIC_PROFILE, ResolvedProfile } from './deployment-profile';
 
-/** The parts of a ResolvedProfile that decide the inference ARNs (U5). */
+/** The parts of a ResolvedProfile that decide the inference ARNs. */
 export type InferenceArnInput = Pick<ResolvedProfile, 'inferenceScope' | 'explicitModelIds'>;
 
 /** The Stack values the ARNs are built from. */
@@ -12,25 +12,26 @@ export interface InferenceArnEnvironment {
   region: string;
 }
 
-/** 推論プロファイルの ID の接頭辞（それ以外は接頭辞のない基盤モデルの ID、BR2.3）。 */
+/** Inference profile ID prefixes; anything else is a bare foundation model ID. */
 const INFERENCE_PROFILE_ID = /^(global|us|us-gov|eu|apac|au|ca)\.(.+)$/;
 
 /**
- * 推論で呼べるモデルの ARN（U9、NFR7.16、security-design.md「文の分け方」。閉域対応 U5 で範囲を足した）。
+ * ARNs of the models that inference may call.
  *
- * global（BR2.1、今のまま）:
- * - 基盤モデル: リージョンを `*`（グローバルな推論プロファイルはどのリージョンの基盤モデルにも
- *   振り分ける。IAM の `*` は空の文字列にも一致し、リージョンのない ARN にも効く）
- * - 推論プロファイルとアプリケーション推論プロファイル: このアカウントのもの。リージョンは `*`
- *   （リージョン間の推論プロファイルの ARN は呼んだリージョンを持つ）
+ * global:
+ * - Foundation models: region `*` (a global inference profile routes to a foundation model in
+ *   any region; IAM `*` also matches an empty string, so ARNs without a region are covered).
+ * - Inference profiles and application inference profiles: this account's, region `*`
+ *   (a cross-region profile ARN carries the calling region).
  *
- * jp（BR2.2）: 国内の 2 つのリージョンの基盤モデル、Stack のリージョンの `jp.*` の推論プロファイル、
- * このアカウントのアプリケーション推論プロファイル（中身の範囲は運用で守る）。明示した `jp.*` 以外の
- * モデル ID は、形で見分けて呼ぶ ARN を足す（BR2.3）。同じ ARN は 1 つにまとめる。
+ * jp: foundation models in the two domestic regions, `jp.*` inference profiles in the Stack's
+ * region, and this account's application inference profiles (what they point to is controlled
+ * operationally). Explicit model IDs other than `jp.*` are recognized by shape and their ARNs
+ * are added. Duplicate ARNs are merged.
  *
- * タスクロール（推論）と cdk-nag の抑止で同じ一覧を使う（BR2.4）。閉域の Bedrock 系の
- * エンドポイントのポリシーもこの一覧から作る（閉域対応 U2 BR1.6、endpoint-policies.ts）。
- * アンケートのモデルはステートマシンが呼ぶため、ここには入れない（surveyModelArns）。
+ * The task role (inference) and the cdk-nag suppression share this list, and the closed-network
+ * Bedrock endpoint policies are built from it too (endpoint-policies.ts). The survey model is
+ * invoked by the state machine, so it is not included here (see surveyModelArns).
  *
  * Throws when an explicit model ID is given as an ARN under jp (the foundation model behind it
  * cannot be derived from the ARN).
@@ -51,7 +52,7 @@ export function inferenceArnList(env: InferenceArnEnvironment, input: InferenceA
     applicationProfiles,
   ];
   for (const [name, modelId] of Object.entries(input.explicitModelIds) as [keyof ModelIds, string][]) {
-    // アンケートのモデルを呼ぶのはステートマシン（surveyModelArns）で、タスクではない
+    // The survey model is invoked by the state machine (surveyModelArns), not by the task
     if (modelId.startsWith('jp.') || name === 'surveyModelId') {
       continue;
     }
@@ -64,14 +65,15 @@ export function inferenceArnList(env: InferenceArnEnvironment, input: InferenceA
 const SURVEY_MODEL_ID = /^(global|jp)\.(.+)$/;
 
 /**
- * アンケートのステートマシンが InvokeModel で呼んでよい ARN（基盤設計 3.1、NFR5.3）。
+ * ARNs the survey state machine may call with InvokeModel.
  *
- * - `global.<model>`: このアカウントの推論プロファイル（リージョン `*`）と、それが振り分ける
- *   基盤モデル（リージョン `*`）
- * - `jp.<model>`: Stack のリージョンの推論プロファイルと、国内 2 リージョンの基盤モデル
+ * - `global.<model>`: this account's inference profile (region `*`) and the foundation model
+ *   it routes to (region `*`)
+ * - `jp.<model>`: the inference profile in the Stack's region and the foundation model in the
+ *   two domestic regions
  *
- * タスクロールの一覧（inferenceArnList）より狭い。それ以外の接頭辞や ARN の形はエラーにする
- * （呼べる範囲を黙って広げない）。
+ * Narrower than the task role's list (inferenceArnList). Any other prefix or an ARN is an
+ * error, so the callable scope is never widened silently.
  */
 export function surveyModelArns(env: InferenceArnEnvironment, surveyModelId: string): string[] {
   const { partition, account, region } = env;

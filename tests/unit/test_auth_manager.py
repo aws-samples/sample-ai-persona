@@ -1,9 +1,10 @@
-"""AuthManager の単体テスト（BR1.3〜BR1.18、BR1.21）。
+"""Unit tests for AuthManager.
 
-外部（SessionStore・OidcService）はコンストラクタで注入する。状態の振る舞いは
-本物の MemorySessionStore（呼び出しの記録のため Mock(wraps=...)）で、失敗は
-Mock(spec=...) で確かめる。時刻は clock を注入して進め、time.sleep は使わない。
-トークン・セッション ID の値はテストの出力に出さない。
+External dependencies (SessionStore, OidcService) are injected via the
+constructor. State behavior uses a real MemorySessionStore (wrapped in
+Mock(wraps=...) to record calls); failures use Mock(spec=...). Time advances
+through an injected clock and time.sleep is not used. Token and session ID
+values are not printed in test output.
 """
 
 import hashlib
@@ -168,7 +169,7 @@ def _login(manager: AuthManager, previous: str | None = None) -> str:
 
 
 # =============================================================================
-# Step 13: ログイン
+# Login
 # =============================================================================
 
 
@@ -228,7 +229,7 @@ class TestCompleteLogin:
             previous_session_id=None,
         )
 
-        assert len(result.session_id) >= 43  # 256 bit の token_urlsafe
+        assert len(result.session_id) >= 43  # 256-bit token_urlsafe
         assert result.next == "/persona"
         assert store.get(result.session_id) is None
         stored = store.get(_hash(result.session_id))
@@ -345,7 +346,7 @@ class TestGroups:
 
 
 # =============================================================================
-# Step 14: 要求ごとの照合
+# Per-request verification
 # =============================================================================
 
 
@@ -402,7 +403,7 @@ class TestCheckRequest:
     ):
         session_id = _login(manager)
         oidc.refresh.return_value = _tokens()
-        for _ in range(7 * 4):  # 6 時間ごとに操作し続ける
+        for _ in range(7 * 4):  # keep acting every 6 hours
             clock.advance(hours=6)
             manager.check_request(session_id, passive=False)
         clock.advance(seconds=1)
@@ -559,7 +560,9 @@ class TestTokenRefresh:
         first_failure = clock.now
 
         clock.advance(minutes=15)
-        manager.check_request(session_id, passive=False)  # ちょうど 15 分は続ける
+        manager.check_request(
+            session_id, passive=False
+        )  # exactly 15 minutes still continues
         clock.advance(seconds=1)
         with raises_code(LookupUnavailableError, ErrorCode.LOOKUP_UNAVAILABLE):
             manager.check_request(session_id, passive=False)
@@ -630,7 +633,9 @@ class TestTokenRefresh:
         assert entered.wait(5)
         second = threading.Thread(target=run)
         second.start()
-        time.sleep(0.1)  # 2 本目が同じセッションの更新を待つところまで進める
+        time.sleep(
+            0.1
+        )  # let the second call advance to waiting on the same session's refresh
         release.set()
         first.join(5)
         second.join(5)
@@ -674,7 +679,7 @@ class TestTokenRefresh:
 
 
 # =============================================================================
-# Step 15: ログアウト・起動時の検査
+# Logout and startup checks
 # =============================================================================
 
 

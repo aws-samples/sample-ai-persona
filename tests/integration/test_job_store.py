@@ -1,8 +1,8 @@
-"""JobStore（ジョブの記録の書き込み）の結合テスト。moto を使う。
+"""Integration tests for JobStore (writing job records). Uses moto.
 
-約束 C14（投入者と種類を記録する）、U6 BR8.3（失敗は例外文ではなくエラーコードで
-保存する）。読み出しは ``AuthzLookupService.get_job`` が担うため、書いたものがそのまま
-読めることも確かめる。
+The submitter and kind are recorded, and a failure is saved as an error code, not an
+exception message. Reads are done by ``AuthzLookupService.get_job``, so the test also
+checks that what was written reads back as is.
 """
 
 from typing import Any
@@ -90,7 +90,7 @@ class TestLifecycle:
         assert job.owner_sub == "user-a"
 
     def test_failed_job_keeps_only_the_code(self, store, client, lookup):
-        """U6 BR8.3: 失敗はエラーコードの列だけを書く（例外文の列 error は書かない）。"""
+        """A failure writes only the error-code column (not the exception-text column error)."""
         store.create("job-1", status="pending", expires_at=1, owner_sub="user-a")
 
         store.update_failed("job-1", ErrorCode.UNKNOWN.value)

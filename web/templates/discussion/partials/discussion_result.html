@@ -1,5 +1,5 @@
 {% from "components/icons.html" import icon_check_circle, icon_chat, icon_lightbulb, icon_document, icon_refresh, icon_persona, icon_cpu_chip %}
-<!-- 議論結果パーシャル -->
+<!-- Discussion result partial -->
 <div class="bg-white rounded-lg shadow-md p-6 fade-in">
     <div class="flex items-center justify-between mb-6">
         <div>
@@ -11,7 +11,7 @@
         </span>
     </div>
     
-    <!-- 議論サマリー -->
+    <!-- Discussion summary -->
     <div class="grid md:grid-cols-3 gap-4 mb-6">
         <div class="bg-gray-50 rounded-md p-4 text-center">
             <p class="text-2xl font-bold text-blue-600">{{ discussion.messages|length if discussion.messages else 0 }}</p>
@@ -27,7 +27,7 @@
         </div>
     </div>
     
-    <!-- 添付ドキュメント -->
+    <!-- Attached documents -->
     {% if discussion.documents and discussion.documents|length > 0 %}
     <div class="mb-6">
         <h3 class="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -76,11 +76,11 @@
     </div>
     {% endif %}
     
-    <!-- 議論内容プレビュー -->
+    <!-- Discussion preview -->
     {% if discussion.messages %}
     <div class="mb-6">
         <h3 class="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">{{ icon_chat("w-5 h-5 text-green-600") }} 議論内容（最新5件）</h3>
-        {# ペルソナごとの色を定義 #}
+        {# Define a color per persona #}
         {% set persona_colors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'] %}
         
         <div class="space-y-2.5 max-h-80 overflow-y-auto discussion-messages">
@@ -95,13 +95,12 @@
                 </div>
             </div>
             {% else %}
-            {# persona_idからインデックスを取得して色を決定 #}
+            {# Pick the color from the index of persona_id #}
             {% set color_index = discussion.participant_ids.index(message.persona_id) if message.persona_id in discussion.participant_ids else 0 %}
             {% set color = persona_colors[color_index % persona_colors|length] %}
             <div class="flex gap-2 message-item">
                 <div class="flex-shrink-0">
-                    {# アイコン画像 / 自動アバター / 頭文字の出し分けは app.js の renderPersonaAvatars。
-                       画像URLは同じ画面の参加者一覧（data-avatar-url）で登録済みのものを引く #}
+                    {# The choice between icon image, auto avatar, and initial is made by renderPersonaAvatars in app.js. Image URLs are looked up from those already registered in the participant list on the same screen (data-avatar-url). #}
                     <div class="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center shadow-sm text-white font-bold text-xs"
                          data-avatar-seed="{{ message.persona_id }}"
                          data-avatar-name="{{ message.persona_name or 'P' }}"
@@ -122,7 +121,7 @@
     </div>
     {% endif %}
     
-    <!-- インサイトプレビュー -->
+    <!-- Insight preview -->
     {% if discussion.insights %}
     <div class="mb-6">
         <h3 class="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">{{ icon_lightbulb("w-5 h-5 text-yellow-500") }} 主要インサイト</h3>
@@ -139,7 +138,7 @@
     </div>
     {% endif %}
     
-    <!-- アクションボタン -->
+    <!-- Action buttons -->
     <div class="flex gap-4 border-t pt-6">
         <a href="/discussion/{{ discussion.id }}"
            class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">

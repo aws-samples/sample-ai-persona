@@ -1,8 +1,9 @@
-"""scripts/purge-retained.sh（v1.0.0）の検査。
+"""Tests for scripts/purge-retained.sh.
 
-スタックを消したあとに、別のセッションで RETAIN のリソースを削除するスクリプト。
-AWS には触れない。PATH の先頭に偽の aws を置き、呼ばれた引数を記録して、
-削除済みスタックから取り直したリソースを、確認のうえ正しい順で消すことを確かめる。
+The script deletes RETAIN resources in a separate session after the stack is deleted.
+It does not touch AWS. A fake aws is placed at the front of PATH and records the
+arguments it is called with, to check that resources recovered from the deleted
+stack are removed, after confirmation, in the right order.
 """
 
 import shutil
@@ -28,10 +29,10 @@ def _stack_id(name: str, suffix: str, region: str = "ap-northeast-1") -> str:
     return f"arn:aws:cloudformation:{region}:123456789012:stack/{name}/{suffix}"
 
 
-# list-stack-resources の --output text の形（種類<TAB>物理 ID）
+# Shape of list-stack-resources --output text (type<TAB>physical ID)
 DATA_RESOURCES = "\n".join(
     [
-        # KMS キーを先に並べ、テーブルより後に削除を予約することを確かめる
+        # KMS keys come first; check that their deletion is scheduled after the tables
         f"AWS::KMS::Key\t{KMS_KEY_ID}",
         "AWS::DynamoDB::GlobalTable\tpersona-table",
         "AWS::S3::Bucket\tupload-bucket",
@@ -48,7 +49,7 @@ APP_RESOURCES = "\n".join(
     ]
 )
 
-# RETAIN のリソースを変える・消す呼び出し
+# Calls that change or delete RETAIN resources
 DATA_MUTATIONS = (
     "update-table",
     "delete-table",
@@ -64,7 +65,7 @@ DATA_MUTATIONS = (
     "schedule-key-deletion",
 )
 
-# 存在確認の呼び出し（gone に挙げた物理 ID は「見つからない」を返す）
+# Existence checks (physical IDs listed in gone return 'not found')
 PROBES = (
     "describe-table",
     "head-bucket",
@@ -221,12 +222,12 @@ def test_retained_resources_are_found_from_the_deleted_stacks(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     log = calls.read_text()
-    # 削除済みのスタックだけを、Edge は us-east-1 で探す
+    # Search only deleted stacks; Edge is searched in us-east-1
     assert "--stack-status-filter DELETE_COMPLETE" in log
     assert "AIPersonaDev-Edge'" in log
     edge = _index(log.splitlines(), "AIPersonaDev-Edge'")
     assert "--region us-east-1" in log.splitlines()[edge]
-    # 名前ではなく削除済みスタックの ID で、RETAIN で残ったものだけを引く
+    # Look up by deleted-stack ID, not name, and pick only what remained via RETAIN
     resources = [line for line in log.splitlines() if "list-stack-resources" in line]
     assert any(_stack_id("AIPersonaDev-Data", "new") in line for line in resources)
     assert all("DELETE_SKIPPED" in line for line in resources)
@@ -238,14 +239,14 @@ def test_purge_deletes_in_a_safe_order(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     lines = calls.read_text().splitlines()
-    # 削除保護を外してから消す
+    # Remove deletion protection, then delete
     assert _index(lines, "update-table --table-name persona-table") < _index(
         lines, "delete-table --table-name persona-table"
     )
     assert "--no-deletion-protection-enabled" in lines[_index(lines, "update-table")]
     assert "--deletion-protection INACTIVE" in lines[_index(lines, "update-user-pool")]
     assert _index(lines, "update-user-pool") < _index(lines, "delete-user-pool ")
-    # バージョニング有効のバケットは全バージョンを消してからバケットを消す
+    # A versioned bucket has all versions deleted before the bucket
     assert _index(lines, "delete-objects --bucket upload-bucket") < _index(
         lines, "delete-bucket --bucket upload-bucket"
     )
@@ -265,7 +266,7 @@ def test_purge_deletes_in_a_safe_order(tmp_path):
         in lines[_index(lines, "delete-log-group")]
     )
     assert STATE_MACHINE_ARN in lines[_index(lines, "delete-state-machine")]
-    # KMS キーは最後に削除を予約する（即時には消さない）
+    # KMS keys are scheduled for deletion last (not deleted immediately)
     mutations = _mutations("\n".join(lines))
     assert f"--key-id {KMS_KEY_ID} " in mutations[-1]
     assert "schedule-key-deletion" in mutations[-1]
@@ -334,12 +335,12 @@ def test_a_failure_continues_and_asks_to_run_again(tmp_path):
 
     assert result.returncode != 0
     log = calls.read_text()
-    # 1 件の失敗で止めず、残りは消す
+    # Do not stop on one failure; delete the rest
     assert "delete-bucket --bucket upload-bucket" in log
     assert "delete-state-machine" in log
     output = result.stdout + result.stderr
     assert "persona-table" in output
-    assert "purge-retained.sh" in output  # 再実行で続きから消せる
+    assert "purge-retained.sh" in output  # A rerun can continue from where it stopped
 
 
 def test_closed_stage_uses_its_names_and_region_only(tmp_path):

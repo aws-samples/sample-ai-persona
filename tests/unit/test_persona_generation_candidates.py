@@ -1,7 +1,6 @@
-"""PersonaGenerationManager の生成候補（U5、ADR-008）の単体テスト。
+"""Unit tests for PersonaGenerationManager generation candidates.
 
-BR1.1〜BR1.3、BR1.6〜BR1.9、NFR1.22、NFR1.36、NFR2.12、NFR2.13、NFR8.16、NFR8.17、
-NFR9.27、NFR9.28、AC2.3.1、AC2.3.2。Store と S3 はモック（候補の Store は辞書の偽物）。
+The Store and S3 are mocked (the candidate Store is a dict-backed fake).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -183,7 +182,7 @@ def logs(capsys) -> LogCapture:
 
 
 # =============================================================================
-# 生成（BR1.1、BR1.2、BR1.6）
+# Generation
 # =============================================================================
 
 
@@ -290,7 +289,7 @@ class TestGenerate:
 
 
 # =============================================================================
-# 押さえ（BR1.3）
+# Holds
 # =============================================================================
 
 
@@ -376,7 +375,7 @@ class TestClaim:
 
 
 # =============================================================================
-# 片付け（BR1.7、BR1.9、NFR8.16）
+# Cleanup
 # =============================================================================
 
 
@@ -458,7 +457,7 @@ class TestFinish:
 
 
 # =============================================================================
-# R-04: 押さえを奪われた候補は、元の要求が保存しない（BR1.3、BR1.7、NFR2.13）
+# A candidate whose hold was taken over is not saved by the original request
 # =============================================================================
 
 

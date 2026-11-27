@@ -1,8 +1,8 @@
-"""UserDirectoryService（所有者の名前の写しの ListUsers）の結合テスト。
+"""Integration tests for UserDirectoryService (ListUsers for the owner-name copy).
 
-BR5.1（全ページを読む）、NFR2.7（sub・name・利用中かだけ、メールを持たない）、
-performance-design.md §3（全ページの締め切り 5 秒、接続 0.5 秒・読み取り 1.5 秒、再試行なし）。
-``botocore.stub.Stubber`` で本物の client の要求の形を確かめる。
+All pages are read. Only sub, name and an in-use flag are kept, never the email.
+All pages share a 5-second deadline (0.5 s connect, 1.5 s read, no retry).
+``botocore.stub.Stubber`` checks the shape of the real client's request.
 """
 
 from typing import Any

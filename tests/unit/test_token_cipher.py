@@ -1,6 +1,6 @@
-"""token_cipher の単体テスト（BR1.14、NFR3.2、security-design.md「暗号化と鍵」）。
+"""Unit tests for token_cipher.
 
-鍵はテストの中で作る固定の文字列で、本物の秘密は使わない。
+Keys are fixed strings made inside the tests; no real secret is used.
 """
 
 import base64
@@ -60,11 +60,11 @@ class TestDecryptFailures:
     @pytest.mark.parametrize(
         "mutate",
         [
-            # 暗号文の 1 バイトを書き換える（改ざん）
+            # Flip one byte of the ciphertext (tampering)
             lambda t: t[:-2] + ("A" if t[-2] != "A" else "B") + t[-1],
-            # 版を別の版に付け替える（関連データの不一致）
+            # Swap the version for another (associated-data mismatch)
             lambda t: "v9" + t[2:],
-            # 形が壊れた値
+            # Malformed value
             lambda t: "not-a-token",
             lambda t: "v1.%%%",
             lambda t: "v1." + base64.urlsafe_b64encode(b"short").decode(),

@@ -13,11 +13,11 @@ import {
 import { ACCOUNT, REGION, synthPublic } from './helpers/stages';
 
 /**
- * エンドポイントのポリシーの組み立て（閉域対応 U2、functional-spec.md §3、BR1.1〜BR1.3、BR1.5〜BR1.7、BR1.9）。
+ * Assembly of endpoint policies.
  *
- * endpointPolicyStatements() は CDK の構成部品を作らない純粋な関数で、形だけの ARN の
- * EndpointAccessScope から、サービスごとの文を確かめる。テンプレートでの結線と BR1.4 の包含は
- * test/closed-stage.test.ts で確かめる。
+ * endpointPolicyStatements() is a pure function that creates no CDK constructs. From an
+ * EndpointAccessScope with dummy-shaped ARNs it checks the per-service statements. Wiring in
+ * the template and the coverage check are tested in test/closed-stage.test.ts.
  */
 
 const ENV = { partition: 'aws', account: ACCOUNT, region: REGION };
@@ -82,7 +82,7 @@ describe('endpointPolicyStatements: 12 種のサービスごとの文（function
         'logs',
         's3',
         'secretsmanager',
-        // アンケートの実行の開始・確認・停止（FR9.1）。bedrock のコントロールプレーンは外した（FR8.4）
+        // Start, check and stop of survey executions. The bedrock control plane was dropped
         'states',
       ],
     );
@@ -187,7 +187,7 @@ describe('一覧の API の定数（BR1.3）', () => {
       .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
     const wildcard = statements.filter((st) => st.Resource === '*' && asArray(st.Action).includes('dynamodb:ListTables'));
     expect(wildcard).toHaveLength(1);
-    // テンプレートの Action は CDK が並べ替えて出す（minimizePolicies）。並びの固定はスナップショットが担う
+    // CDK reorders the template's Action (minimizePolicies). The snapshot pins the order
     expect(asArray(wildcard[0].Action)).toEqual([...TASK_LIST_ACTIONS].sort());
   });
 

@@ -6,19 +6,19 @@ import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 export interface CognitoProps {
   envName: string;
   /**
-   * Managed Login のドメインを作るか（既定 true）。閉域構成（ResolvedProfile.createCognitoDomain）
-   * では false にし、ドメインを作らずメールでの回復も無効にする（U1 閉域、BR3.1）。
+   * Whether to create the Managed Login domain (default true). The closed configuration
+   * (ResolvedProfile.createCognitoDomain) sets false: no domain, and email recovery is disabled too.
    */
   createDomain?: boolean;
 }
 
 /**
- * User Pool のパスワードの条件（U9、Infrastructure Design Q2 A、AwsSolutions-COG1）。
+ * User Pool password requirements (AwsSolutions-COG1).
  *
- * 記号も求める。閉域構成のアプリに渡す 5 つの環境変数（PASSWORD_MIN_LENGTH・
- * PASSWORD_REQUIRE_UPPERCASE・PASSWORD_REQUIRE_LOWERCASE・PASSWORD_REQUIRE_DIGITS・
- * PASSWORD_REQUIRE_SYMBOLS）も、閉域スタックのリリースでこの定数から作る（値を二重に持たない）。
- * 今のパスワードはそのまま使え、次に決めるときから効く。
+ * Symbols are required too. The five environment variables passed to the closed app
+ * (PASSWORD_MIN_LENGTH, PASSWORD_REQUIRE_UPPERCASE, PASSWORD_REQUIRE_LOWERCASE, PASSWORD_REQUIRE_DIGITS,
+ * PASSWORD_REQUIRE_SYMBOLS) are derived from this constant, so the values are not duplicated.
+ * Existing passwords keep working; the rules apply from the next password change.
  */
 export const PASSWORD_POLICY = {
   minLength: 8,
@@ -29,20 +29,20 @@ export const PASSWORD_POLICY = {
 } as const satisfies cognito.PasswordPolicy;
 
 /**
- * v1.0.0 の Cognito User Pool（Data スタック）。
+ * The v1.0.0 Cognito User Pool (Data stack).
  *
- * - 機能プランは Essentials、セルフサインアップなし（管理者が利用者を作る）
- * - ロールのグループ role:admin・role:member を作る（部署の group:* は運用で足す。U2）
- * - Managed Login（新しい版）のドメイン接頭辞 ai-persona-v1-dev-{アカウント ID}
- *   （閉域構成では作らない。ログインはアプリが管理 API で行う。U1 閉域）
- * - RETAIN と削除保護
+ * - Essentials feature plan, no self sign-up (admins create users)
+ * - Creates the role groups role:admin and role:member (department group:* are added operationally)
+ * - Managed Login (new version) domain prefix ai-persona-v1-dev-{account ID}
+ *   (not created in the closed configuration, where the app logs in via the admin API)
+ * - RETAIN and deletion protection
  *
- * アプリクライアントと Managed Login のブランディングは、コールバック URL に
- * CloudFront のドメインが要るため App スタックに置く（logical-components.md）。
+ * The app client and Managed Login branding live in the App stack because the callback URL
+ * needs the CloudFront domain.
  */
 export class Cognito extends Construct {
   public readonly userPool: cognito.UserPool;
-  /** Managed Login のドメイン（createDomain: false のときはない）。 */
+  /** Managed Login domain (absent when createDomain is false). */
   public readonly domain?: cognito.UserPoolDomain;
 
   constructor(scope: Construct, id: string, props: CognitoProps) {
@@ -58,7 +58,7 @@ export class Cognito extends Construct {
       autoVerify: { email: true },
       standardAttributes: { email: { required: true, mutable: true } },
       passwordPolicy: { ...PASSWORD_POLICY },
-      // 閉域構成ではメールが届かない前提のため、回復は管理者の再設定だけにする（BR3.1）
+      // Email does not arrive in the closed configuration, so recovery is by admin reset only
       accountRecovery: createDomain ? cognito.AccountRecovery.EMAIL_ONLY : cognito.AccountRecovery.NONE,
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
@@ -83,10 +83,10 @@ export class Cognito extends Construct {
   }
 
   /**
-   * ``<prefix>.auth.<region>.amazoncognito.com``（スキームなし）。
+   * ``<prefix>.auth.<region>.amazoncognito.com`` (no scheme).
    *
-   * ドメインのない User Pool（閉域構成）で読むとエラーにする（BR3.2）。公開の分岐の誤りで
-   * 空の COGNITO_DOMAIN がアプリに渡るのを synth で止めるため。
+   * Throws for a User Pool without a domain (closed configuration), so synth stops a wrong
+   * public branch from passing an empty COGNITO_DOMAIN to the app.
    */
   public get domainHost(): string {
     if (!this.domain) {

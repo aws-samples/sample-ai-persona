@@ -1,11 +1,10 @@
-"""
-Nemotron dataset source, key rules and status (closed network U3).
+"""Nemotron dataset source, key rules and status (closed network).
 
 ``NEMOTRON_SOURCE`` decides where the Nemotron Parquet comes from: downloaded
 from Hugging Face by an admin (``huggingface``, the public default) or placed
 in the app bucket beforehand (``s3``, the closed network). The key rules below
-are the same as the CDK ``DeploymentProfile`` check (BR5.3) so that a value
-given by hand also stops the app at start-up (BR1.4).
+are the same as the CDK ``DeploymentProfile`` check so that a value
+given by hand also stops the app at start-up.
 
 Standard library only (Models layer).
 """
@@ -17,13 +16,13 @@ from typing import Any, Optional
 
 
 class NemotronSource(StrEnum):
-    """Where the Nemotron Parquet comes from (``NEMOTRON_SOURCE``, BR1.1)."""
+    """Where the Nemotron Parquet comes from (``NEMOTRON_SOURCE``)."""
 
     HUGGINGFACE = "huggingface"
     S3 = "s3"
 
 
-#: The key the app has always used (BR1.2).
+#: The key the app has always used.
 DEFAULT_NEMOTRON_DATASET_KEY = (
     "persona-dataset/nemotron-personas-japan.parquet"  # gitleaks:allow
 )
@@ -63,10 +62,10 @@ def nemotron_dataset_key_problem(key: str) -> Optional[str]:
 
 @dataclass(frozen=True)
 class NemotronDatasetStatus:
-    """What the persona data screen shows about the Nemotron file (BR2.2).
+    """What the persona data screen shows about the Nemotron file.
 
     Holds no user data. ``download_allowed`` follows from ``source``: only the
-    Hugging Face source offers the download button (BR4.1).
+    Hugging Face source offers the download button.
     """
 
     source: NemotronSource

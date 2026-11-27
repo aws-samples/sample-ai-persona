@@ -1,15 +1,15 @@
-"""古い読み手が残っていないこと（U5・U6）。
+"""No old readers remain.
 
-U5（infrastructure-specification.md「古いテーブルの読み手の付け替え」）: 古い
-PersonaDatasetBindings・PersonaKBBindings の権限と環境変数を外すため、それらを読む
-コードが 1 つでも残ると、新しいタスクで紐付けの読み出しが失敗する。
+The permissions and environment variables for the old PersonaDatasetBindings and
+PersonaKBBindings tables are being removed, so any code left that reads them would make
+binding reads fail in new tasks.
 
-U6（BR8.2、NFR2.15）: Discussions の型固定の GSI（CreatedAtIndex・TopicIndex・
-ModeIndex）を読むコードを残さない（CDK から外すのは U9）。判定を通らずにペルソナを
-読む ``get_persona_unchecked`` もなくす（BR2.8、NFR1.46）。
+No code may read the Discussions type-fixed GSIs (CreatedAtIndex, TopicIndex,
+ModeIndex), and ``get_persona_unchecked``, which reads a persona without going through
+the authorization decision, is gone.
 
-U5（BR8.2）: Personas・UploadedFiles の型固定の GSI（NameIndex・OccupationIndex・
-UploadedAtIndex）を読むコードを残さない。
+No code may read the Personas and UploadedFiles type-fixed GSIs (NameIndex,
+OccupationIndex, UploadedAtIndex) either.
 """
 
 from pathlib import Path
@@ -24,11 +24,11 @@ _LEGACY_NAMES = (
     "PERSONA_KB_BINDINGS_TABLE_NAME",
     "get_bindings_by_persona",
     "get_kb_binding_by_persona",
-    # U5 BR8.2: Personas・UploadedFiles の type 固定の GSI
+    # Personas and UploadedFiles type-fixed GSIs
     "NameIndex",
     "OccupationIndex",
     "UploadedAtIndex",
-    # U6
+    # Discussions type-fixed GSIs
     "CreatedAtIndex",
     "TopicIndex",
     "ModeIndex",
@@ -58,6 +58,6 @@ def test_no_source_names_the_legacy_readers(name):
 
 
 def test_the_check_sees_the_sources():
-    """空振りしないこと（src と web の両方を読んでいる）。"""
+    """Does not pass vacuously (reads both src and web)."""
     names = {p.relative_to(_ROOT).parts[0] for p in _sources()}
     assert names == {"src", "web"}

@@ -1,9 +1,9 @@
-"""Retrying a cleanup step after the main write succeeded (U7 NFR1.84, NFR1.85).
+"""Retrying a cleanup step after the main write succeeded.
 
 A pure helper with no decision in it: the caller decides what to clean up and
 that a failure must not fail its operation. The step is tried three times
 (0.2 / 0.4 seconds apart); what is still left is logged once as
-``survey.cleanup_failed`` with IDs and the exception type only (NFR3.13).
+``survey.cleanup_failed`` with IDs and the exception type only.
 """
 
 from typing import Callable

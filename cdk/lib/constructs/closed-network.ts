@@ -7,44 +7,44 @@ import { DEFAULT_ENDPOINT_AZ_COUNT, EndpointAzCount, ResolverSettings } from '..
 import { EndpointAccessScope, endpointPolicyStatements, RestrictedEndpointService } from '../endpoint-policies';
 import { acknowledgeAll, acknowledgeCfnValidate, NAG_REASONS } from '../nag-reasons';
 
-/** エンドポイントのポリシー（閉域対応 U2）: restricted はアプリの資源に絞り、open は付けない（すべて許可）。 */
+/** Endpoint policy mode: restricted limits access to the app's resources; open attaches no policy (allow all). */
 export type EndpointPolicyMode = 'restricted' | 'open';
 
-/** 作る VPC エンドポイント 1 つ（EndpointSpec、entities.md）。 */
+/** One VPC interface endpoint to create. */
 export interface EndpointSpec {
-  /** AWS のサービス名の短い形（`com.amazonaws.<region>.` の後ろ）。 */
+  /** Short AWS service name (the part after `com.amazonaws.<region>.`). */
   readonly service: string;
-  /** construct ID。 */
+  /** Construct ID. */
   readonly id: string;
   readonly purpose: string;
-  /** 検証用 EC2 を作るときだけ作る。 */
+  /** Created only when the test EC2 environment is enabled. */
   readonly onlyWithTestEnvironment: boolean;
-  /** restricted は endpoint-policies.ts の表のポリシーを付ける（BR1.1）。open は付けない（BR1.7）。 */
+  /** restricted attaches the policy from the table in endpoint-policies.ts; open attaches none. */
   readonly policy: EndpointPolicyMode;
   readonly awsService: ec2.InterfaceVpcEndpointAwsService;
 }
 
-/** ゲートウェイ型の VPC エンドポイント 1 つ（VPC の gatewayEndpoints で作る）。 */
+/** One gateway VPC endpoint (created through the VPC's gatewayEndpoints). */
 export interface GatewayEndpointSpec {
   readonly service: RestrictedEndpointService;
-  /** construct ID（VPC の子）。 */
+  /** Construct ID (child of the VPC). */
   readonly id: string;
   readonly awsService: ec2.GatewayVpcEndpointAwsService;
 }
 
-/** 閉域のゲートウェイ型 VPC エンドポイント（U1 閉域）。どちらもポリシーで絞る（閉域対応 U2 BR1.1）。 */
+/** Gateway VPC endpoints of the closed network. Both are restricted by policy. */
 export const CLOSED_GATEWAY_ENDPOINTS: readonly GatewayEndpointSpec[] = [
   { service: 'dynamodb', id: 'DynamoDb', awsService: ec2.GatewayVpcEndpointAwsService.DYNAMODB },
   { service: 's3', id: 'S3', awsService: ec2.GatewayVpcEndpointAwsService.S3 },
 ];
 
 /**
- * 閉域のインターフェイス型 VPC エンドポイント（U1 閉域、BR4.2、NFR3.7）。一覧はここにだけ持つ。
+ * Interface VPC endpoints of the closed network. This is the only place the list is kept.
  *
- * bedrock-agentcore-control は aws-cdk-lib に定数がないため、名前から作る（アプリの
- * src/services/strategy_lookup.py が呼ぶ。NFR Design レビュー R-03）。ゲートウェイ型の
- * s3・dynamodb は CLOSED_GATEWAY_ENDPOINTS。アプリが使う 10 種はポリシーで絞り、検証用 EC2 だけが
- * 使う SSM の 3 つは絞らない（閉域対応 U2 BR1.1、BR1.7）。
+ * bedrock-agentcore-control has no constant in aws-cdk-lib, so it is built from the name (the
+ * app's src/services/strategy_lookup.py calls it). The gateway endpoints for s3 and dynamodb are
+ * in CLOSED_GATEWAY_ENDPOINTS. The 10 endpoints the app uses are restricted by policy; the 3 SSM
+ * endpoints used only by the test EC2 are left open.
  */
 export const CLOSED_ENDPOINTS: readonly EndpointSpec[] = [
   { service: 'ecr.api', id: 'EcrApi', purpose: 'イメージの取得（認可・マニフェスト）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.ECR },
@@ -53,8 +53,8 @@ export const CLOSED_ENDPOINTS: readonly EndpointSpec[] = [
   { service: 'secretsmanager', id: 'SecretsManager', purpose: 'タスクの起動時の秘密', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER },
   { service: 'cognito-idp', id: 'CognitoIdp', purpose: '管理 API のログイン（AdminInitiateAuth）と利用者の一覧', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP },
   { service: 'bedrock-runtime', id: 'BedrockRuntime', purpose: '推論（ペルソナの生成・議論）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME },
-  // アンケートの実行の開始・確認・停止（FR9.1）。Bedrock と S3 を呼ぶのは Step Functions のサービス自身で、
-  // VPC を通らない（NFR6.4）。bedrock（コントロールプレーン）のエンドポイントは使うところがなくなったため外した（FR8.4）
+  // Start, check and stop survey runs. Step Functions itself calls Bedrock and S3, and that traffic does
+  // not go through the VPC. The bedrock (control plane) endpoint is no longer needed, so it was removed.
   { service: 'states', id: 'StepFunctions', purpose: 'アンケートの実行（StartExecution・DescribeExecution・StopExecution）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS },
   { service: 'bedrock-agent-runtime', id: 'BedrockAgentRuntime', purpose: 'ナレッジベースの検索（Retrieve）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.BEDROCK_AGENT_RUNTIME },
   { service: 'bedrock-agentcore', id: 'BedrockAgentCore', purpose: 'AgentCore Memory のデータプレーン', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.BEDROCK_AGENTCORE },
@@ -65,10 +65,10 @@ export const CLOSED_ENDPOINTS: readonly EndpointSpec[] = [
 ];
 
 /**
- * AWS 管理のプレフィックスリスト com.amazonaws.<region>.s3 / dynamodb の ID（NFR3.3）。
- * タスクの SG の外向き（ゲートウェイ型エンドポイントへの 443）に使う。fromLookup は synth の
- * たびに AWS へ問い合わせるため（CI は AWS に触れない）、リージョンごとの ID を持つ。
- * デプロイ前に次で確かめる:
+ * IDs of the AWS-managed prefix lists com.amazonaws.<region>.s3 / dynamodb.
+ * Used for the task SG egress (443 to the gateway endpoints). fromLookup would query AWS on every
+ * synth (CI must not touch AWS), so the ID is kept per region.
+ * Verify before deploying:
  *   aws ec2 describe-managed-prefix-lists --region <region> \
  *     --filters Name=prefix-list-name,Values=com.amazonaws.<region>.s3,com.amazonaws.<region>.dynamodb
  */
@@ -80,12 +80,12 @@ export const DYNAMODB_PREFIX_LISTS: Record<string, string> = {
 };
 
 /**
- * 閉域の VPC が使う 2 つの AZ（Infrastructure Design レビュー R-05）。
+ * The two AZs used by the closed VPC.
  *
- * 閉域で使うエンドポイント 13 種は、ap-northeast-1 で使える AZ（1a・1c・1d）のすべてで
- * 提供される。
- * 置く AZ を合成のたびに変えないよう、2 つを決めておく。エンドポイントが提供される AZ は
- * 次で確かめる:
+ * All 13 endpoint services used in the closed network are available in every usable AZ of
+ * ap-northeast-1 (1a, 1c, 1d).
+ * The two AZs are fixed so that placement does not change on every synth. Check which AZs offer
+ * the endpoints with:
  *   aws ec2 describe-vpc-endpoint-services --region <region> \
  *     --service-names com.amazonaws.<region>.bedrock-agentcore-control \
  *     --query 'ServiceDetails[].AvailabilityZones'
@@ -96,28 +96,28 @@ export const CLOSED_AVAILABILITY_ZONES: Record<string, string[]> = {
 
 export interface ClosedNetworkProps {
   envName: string;
-  /** 新規 VPC の CIDR。 */
+  /** CIDR of the new VPC. */
   vpcCidr: string;
-  /** Private Hosted Zone の名前（利用者が開く FQDN）。 */
+  /** Name of the Private Hosted Zone (the FQDN users open). */
   domainName: string;
-  /** 検証用 EC2 のためのエンドポイント（ssm・ssmmessages・ec2messages）も作るか。 */
+  /** Also create the endpoints for the test EC2 (ssm, ssmmessages, ec2messages). */
   createTestEnvironment: boolean;
-  /** インターフェイス型エンドポイントを置く AZ の数（閉域対応 U2 BR2.1、既定 2）。 */
+  /** Number of AZs for the interface endpoints (default 2). */
   endpointAzCount?: EndpointAzCount;
-  /** Resolver Inbound Endpoint を作るときだけ渡す（閉域対応 U2 BR3.1）。 */
+  /** Pass only when a Resolver inbound endpoint should be created. */
   resolver?: ResolverSettings;
 }
 
 /**
- * 資源をどの AZ のサブネットに置くか（閉域対応 U2、entities.md の NetworkPlacement）。
+ * Which AZ subnets each resource is placed in.
  *
- * VPC は常に 2 つの AZ のサブネットを持つ。AZ の数 1 では、インターフェイス型エンドポイント・タスク・
- * 検証用 EC2 を先頭の AZ に置き、内部 ALB と Resolver は 2 AZ のまま（BR2.3、BR2.4、BR3.5）。
+ * The VPC always has subnets in two AZs. With an endpoint AZ count of 1, interface endpoints, tasks
+ * and the test EC2 go to the first AZ, while the internal ALB and the Resolver stay on both AZs.
  */
 export interface NetworkPlacement {
   readonly vpcAzs: readonly string[];
   readonly endpointAzs: readonly string[];
-  /** タスクと検証用 EC2 の AZ（endpointAzs と同じ。Q7 A）。 */
+  /** AZs for tasks and the test EC2 (same as endpointAzs). */
   readonly computeAzs: readonly string[];
   readonly loadBalancerAzs: readonly string[];
   readonly resolverAzs: readonly string[];
@@ -126,13 +126,13 @@ export interface NetworkPlacement {
   readonly loadBalancerSubnets: ec2.SubnetSelection;
 }
 
-/** The subnets of `azs`; every VPC AZ is the plain PRIVATE_ISOLATED selection (U1 unchanged). */
+/** The subnets of `azs`; every VPC AZ is the plain PRIVATE_ISOLATED selection. */
 function isolatedSubnetsIn(azs: readonly string[], vpcAzs: readonly string[]): ec2.SubnetSelection {
   const subnetType = ec2.SubnetType.PRIVATE_ISOLATED;
   return azs.length === vpcAzs.length ? { subnetType } : { subnetType, availabilityZones: [...azs] };
 }
 
-/** Where to put each resource for an endpoint AZ count (BR2.3, BR2.4, BR3.5). */
+/** Where to put each resource for an endpoint AZ count. */
 export function networkPlacement(vpcAzs: readonly string[], endpointAzCount: EndpointAzCount): NetworkPlacement {
   const endpointAzs = vpcAzs.slice(0, endpointAzCount);
   const endpointSubnets = isolatedSubnetsIn(endpointAzs, vpcAzs);
@@ -148,12 +148,12 @@ export function networkPlacement(vpcAzs: readonly string[], endpointAzCount: End
   });
 }
 
-/** DNS（TCP・UDP の 53）。Resolver の受け入れ（BR3.4）。 */
+/** DNS (TCP and UDP 53), accepted by the Resolver. */
 const DNS_PORTS = [ec2.Port.tcp(53), ec2.Port.udp(53)];
 
 /**
  * Allow `ports` from each CIDR into `securityGroup` (CIDR by CIDR, then port by port). Used for
- * the closed ALB's allowed clients (AppStack) and the Resolver's corporate DNS servers (BR3.4).
+ * the closed ALB's allowed clients (AppStack) and the Resolver's corporate DNS servers.
  */
 export function allowIngressFromCidrs(
   securityGroup: ec2.ISecurityGroup,
@@ -169,18 +169,18 @@ export function allowIngressFromCidrs(
 }
 
 /**
- * 閉域のネットワーク（U1 閉域、ADR-004、BR4.1〜BR4.4、App スタック）。
+ * Network of the closed environment (used by the App stack).
  *
- * - 新規 VPC: 2 AZ、PRIVATE_ISOLATED の /24 だけ。NAT・IGW・パブリックサブネットなし
- * - VPC エンドポイント: ゲートウェイ型 2（s3・dynamodb）、インターフェイス型 10（検証用に +3）。
- *   インターフェイス型は placement.endpointAzs のサブネットに置く（閉域対応 U2 BR2.3）
- * - インターフェイス型の共通の SG（受け入れ・外向きのルールなし。結線は AppStack が行う）
- * - FQDN の Private Hosted Zone（ALB への Alias は AppStack が足す）
- * - Resolver Inbound Endpoint（指定したときだけ。閉域対応 U2 BR3.1、BR3.4、BR3.5）
+ * - New VPC: 2 AZs, PRIVATE_ISOLATED /24 subnets only. No NAT, IGW or public subnets
+ * - VPC endpoints: 2 gateway (s3, dynamodb), 10 interface (+3 for the test EC2).
+ *   Interface endpoints go in the subnets of placement.endpointAzs
+ * - A shared SG for the interface endpoints (no ingress/egress rules; AppStack wires them)
+ * - A Private Hosted Zone for the FQDN (AppStack adds the Alias to the ALB)
+ * - A Resolver inbound endpoint (only when requested)
  *
- * エンドポイントのポリシー（閉域対応 U2 BR1.1）は、アクセス先の資源が App スタックにできてから
- * AppStack が restrictEndpoints で付ける。Flow Logs は作らない（BR4.1）。既存 VPC に置くオプションは
- * 後続のリリースで検討する（BR4.2）。
+ * Endpoint policies are attached by AppStack through restrictEndpoints, after the resources they
+ * grant access to exist in the App stack. Flow Logs are not created. Placing the network in an
+ * existing VPC may be considered in a later release.
  */
 export class ClosedNetwork extends Construct {
   public readonly vpc: ec2.Vpc;
@@ -190,7 +190,7 @@ export class ClosedNetwork extends Construct {
   public readonly s3PrefixListId: string;
   public readonly dynamoDbPrefixListId: string;
   public readonly placement: NetworkPlacement;
-  /** 指定したときだけある（閉域対応 U2 BR3.1）。 */
+  /** Present only when requested. */
   public readonly resolverEndpoint?: route53resolver.CfnResolverEndpoint;
   public readonly resolverSecurityGroup?: ec2.SecurityGroup;
   private restricted = false;
@@ -246,7 +246,7 @@ export class ClosedNetwork extends Construct {
         privateDnsEnabled: true,
         subnets: this.placement.endpointSubnets,
         securityGroups: [this.endpointSecurityGroup],
-        // 既定（open: true）は VPC の CIDR からの 443 を足す。受け入れは AppStack が SG で足す
+        // The default (open: true) adds 443 from the VPC CIDR. AppStack adds ingress through the SG instead
         open: false,
       });
     }
@@ -262,7 +262,7 @@ export class ClosedNetwork extends Construct {
       this.resolverEndpoint = new route53resolver.CfnResolverEndpoint(this, 'ResolverInboundEndpoint', {
         name: `ai-persona-v1-${props.envName}-inbound`,
         direction: 'INBOUND',
-        // BR3.5: 2 つの AZ のサブネットに 1 つずつ（AZ の数 1 でも 2 AZ）。アドレスは AWS が割り当てる
+        // One per AZ subnet, always two AZs even with an endpoint AZ count of 1. AWS assigns the addresses
         ipAddresses: this.vpc
           .selectSubnets(isolatedSubnetsIn(this.placement.resolverAzs, availabilityZones))
           .subnets.map((subnet) => ({ subnetId: subnet.subnetId })),
@@ -272,8 +272,8 @@ export class ClosedNetwork extends Construct {
   }
 
   /**
-   * BR3.4: 社内 DNS の CIDR から TCP・UDP の 53 だけを受ける。SG は応答を通すため外向きのルールは
-   * 足さない（CDK の既定はすべての外向きを許すため、allowAllOutbound: false を明示する）。
+   * Accept only TCP and UDP 53 from the corporate DNS CIDRs. The SG passes responses, so no egress
+   * rules are added (allowAllOutbound: false is explicit because the CDK default allows all egress).
    */
   private createResolverSecurityGroup(resolver: ResolverSettings): ec2.SecurityGroup {
     const securityGroup = new ec2.SecurityGroup(this, 'ResolverSecurityGroup', {
@@ -286,10 +286,10 @@ export class ClosedNetwork extends Construct {
   }
 
   /**
-   * アプリが使う 12 種のエンドポイントに、アクセス先を絞るポリシーを付ける（閉域対応 U2 BR1.1、BR1.7）。
+   * Attach policies that limit access targets to the 12 endpoints the app uses.
    *
-   * AppStack が、タスクロールの権限と同じ参照から作った EndpointAccessScope を渡す（BR1.3）。
-   * 検証用 EC2 だけが使う SSM の 3 つ（policy: open）には付けない。1 度だけ呼べる。
+   * AppStack passes an EndpointAccessScope built from the same references as the task role's permissions.
+   * The 3 SSM endpoints used only by the test EC2 (policy: open) get none. Can be called only once.
    */
   public restrictEndpoints(access: EndpointAccessScope): void {
     if (this.restricted) {

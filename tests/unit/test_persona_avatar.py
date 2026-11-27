@@ -1,4 +1,4 @@
-"""ペルソナのアイコン画像（モデル・PersonaManager・表示ヘルパー）のテスト"""
+"""Tests for persona avatar images (model, PersonaManager, display helper)."""
 
 from io import BytesIO
 from unittest.mock import Mock
@@ -31,7 +31,7 @@ def _persona(avatar_path: str | None = None) -> Persona:
     return persona.with_avatar(avatar_path).owned_by(OWNER.sub)
 
 
-#: The persona's owner: avatar changes need manage, the URL needs read (U5 BR4.3, BR4.4)
+#: The persona's owner: avatar changes need manage, the URL needs read
 OWNER = Principal("sub-owner", frozenset({Role.MEMBER}))
 
 
@@ -112,7 +112,7 @@ class TestSetAvatar:
         assert s3.upload_file.call_args.kwargs["content_type"] == "image/webp"
         with Image.open(BytesIO(content)) as img:
             assert img.format == "WEBP"
-        # 読み取った時点の値（画像なし）を条件に、パスだけを書き込む
+        # write only the path, conditioned on the value read at that time (no image)
         db.update_avatar.assert_called_once()
         call = db.update_avatar.call_args
         assert call.args == (persona.id,)
@@ -139,7 +139,7 @@ class TestSetAvatar:
         s3.delete_file.assert_called_once_with(NEW_PATH)
 
     def test_persona_deleted_during_upload_is_not_recreated(self, manager, db, s3):
-        """処理中にペルソナが削除された: 新しい画像を消して NOT_FOUND"""
+        """The persona was deleted during processing: delete the new image and raise NOT_FOUND."""
         db.get.side_effect = [_persona(OLD_PATH), None]
         db.update_avatar.return_value = False
 
@@ -151,7 +151,7 @@ class TestSetAvatar:
         s3.delete_file.assert_called_once_with(NEW_PATH)
 
     def test_concurrent_change_is_conflict(self, manager, db, s3):
-        """同時アップロードで先を越された: 自分の画像だけ消し、相手の画像と旧画像は残す"""
+        """Beaten by a concurrent upload: delete only our own image and keep the other's and the old one."""
         db.get.side_effect = [_persona(OLD_PATH), _persona("s3://other")]
         db.update_avatar.return_value = False
 
@@ -226,7 +226,7 @@ class TestDeleteAvatar:
         s3.delete_file.assert_not_called()
 
     def test_concurrent_change_keeps_objects(self, manager, db, s3):
-        """解除中に別の画像へ差し替えられた: どちらの画像も消さない"""
+        """Replaced by another image during removal: delete neither image."""
         db.get.side_effect = [_persona(OLD_PATH), _persona(NEW_PATH)]
         db.update_avatar.return_value = False
 
@@ -237,7 +237,7 @@ class TestDeleteAvatar:
 
 
 class TestDeliverAvatar:
-    """BR3.1: 読み取りの認可のあとに、アバターのハンドルを AssetDelivery に渡す。"""
+    """After the read authorization, the avatar handle is passed to AssetDelivery."""
 
     STRANGER = Principal("sub-stranger", frozenset({Role.MEMBER}))
 
@@ -300,7 +300,7 @@ class TestDeliverAvatar:
 
 
 class TestDeletePersonaCleansUpAvatar:
-    """削除した時点の本体（delete_with_shares の戻り値）の画像を消す（BR4.1）。"""
+    """Deletes the image of the body at deletion time (the return value of delete_with_shares)."""
 
     OWNER = Principal("sub-owner", frozenset({Role.MEMBER}))
 
@@ -321,7 +321,7 @@ class TestDeletePersonaCleansUpAvatar:
         )
 
     def test_deletes_avatar_of_deleted_record(self, deleter, db, s3, sharing):
-        """削除と同時に得たレコードの画像を消す（事前の読み取りに頼らない）"""
+        """Deletes the image of the record obtained together with the deletion (does not rely on a prior read)."""
         sharing.delete_with_shares.return_value = {"id": "p1", "avatar_path": OLD_PATH}
 
         assert deleter.delete_persona(self.OWNER, "p1") is True

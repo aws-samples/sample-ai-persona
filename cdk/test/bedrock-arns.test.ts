@@ -3,10 +3,10 @@ import { bedrockInferenceArns, inferenceArnList, surveyModelArns } from '../lib/
 import { PUBLIC_PROFILE } from '../lib/deployment-profile';
 
 /**
- * BedrockArns（閉域対応 U5、BR2.1〜BR2.3）の単体テスト。
+ * Unit tests for BedrockArns.
  *
- * inferenceArnList() は CDK の構成部品に依存しない純粋な関数。範囲・Stack のリージョン・
- * 明示したモデル ID から、推論で呼んでよい ARN の一覧を作る。
+ * inferenceArnList() is a pure function with no CDK constructs. From the scope, the Stack's
+ * region and the explicit model IDs it builds the list of ARNs allowed for inference.
  */
 
 const ENV = { partition: 'aws', account: '123456789012', region: 'ap-northeast-1' };

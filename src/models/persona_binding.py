@@ -1,10 +1,10 @@
-"""Bindings of a persona to organization assets (U5, ADR-007, entities.md).
+"""Bindings of a persona to organization assets.
 
 The two former binding tables (datasets, knowledge bases) are merged into one
 ``PersonaBindings`` table: PK ``persona_id``, SK ``target_key``. A dataset
 binding's key is ``DATASET#{dataset_id}``; the knowledge-base binding uses the
 fixed key ``KB`` so a persona has at most one and replacing it is a single
-write (BR2.9). The reverse index ``TargetIndex`` is keyed by ``target_id``.
+write. The reverse index ``TargetIndex`` is keyed by ``target_id``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Mapping
 
-#: Sort key of the one knowledge-base binding of a persona (BR2.9).
+#: Sort key of the one knowledge-base binding of a persona.
 KB_TARGET_KEY = "KB"
 _DATASET_PREFIX = "DATASET#"
 
@@ -33,7 +33,7 @@ def dataset_target_key(dataset_id: str) -> str:
 
 @dataclass(frozen=True)
 class PersonaBinding:
-    """One binding (entities.md PersonaBinding).
+    """One binding.
 
     Attributes:
         persona_id: The persona.
@@ -43,7 +43,7 @@ class PersonaBinding:
         binding_keys: For datasets, the column/value that narrows rows.
         metadata_filters: For knowledge bases, the search filters.
         dedicated: For datasets, whether the dataset belongs to this persona
-            (made from a behaviour CSV on save, BR6.1). Display only; the
+            (made from a behaviour CSV on save). Display only; the
             dataset's ``owner_persona_id`` stays the source of truth.
     """
 

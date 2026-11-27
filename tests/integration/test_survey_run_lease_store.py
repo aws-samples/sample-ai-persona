@@ -1,7 +1,7 @@
-"""SurveyRunLeaseStore（進行役の担当者の記録）の結合テスト。moto を使う。
+"""Integration tests for SurveyRunLeaseStore (the runner holder record), using moto.
 
-BR2.3・NFR3.8: 空き・期限切れ・自分のものなら取れる。他人の有効な記録は取れない。
-延長は自分のものだけ。消せるのも holder が自分のときだけ（NFR4.10）。
+A free, expired or own record can be acquired; another holder's live record cannot.
+Only the holder can extend, and a record is deleted only when the holder is the caller.
 """
 
 from typing import Any
@@ -64,14 +64,14 @@ class TestAcquire:
         assert int(_row(client)["expires_at"]["N"]) == NOW + 75
 
     def test_someone_elses_valid_lease_is_not_taken(self, store, client):
-        """NFR3.8: 2 つの進行役が取り合うと、片方だけが仕事をする。"""
+        """When two runners compete, only one does the work."""
         assert store.acquire("task-a", now=NOW, ttl_seconds=60)
 
         assert not store.acquire("task-b", now=NOW + 30, ttl_seconds=60)
         assert _row(client)["holder"]["S"] == "task-a"
 
     def test_expired_lease_is_taken_over(self, store, client):
-        """NFR4.2: 担当が消えても期限が切れればほかのタスクが取る。"""
+        """If the holder disappears, another task takes over after expiry."""
         store.acquire("task-a", now=NOW, ttl_seconds=60)
 
         assert store.acquire("task-b", now=NOW + 61, ttl_seconds=60)

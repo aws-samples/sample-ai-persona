@@ -1,4 +1,4 @@
-"""画面上部に利用者表示とログアウトのフォームが出ること（US1.5、FR8.1、WF6）。"""
+"""The user badge and logout form appear at the top of the page."""
 
 import re
 
@@ -32,8 +32,8 @@ def test_header_shows_name_role_departments_and_signout(client, login_as):
 
 
 def test_mobile_menu_also_has_the_badge_and_signout(client, login_as):
-    # ロールのない利用者は U2 の BR2.8 でロール未割り当て画面へ移るため、ここでは
-    # member で確かめる（「ロールなし」の表示は tests/unit/test_user_badge.py）。
+    # A user without a role is redirected to the role-unassigned screen, so use
+    # member here (the 'no role' display is tested in tests/unit/test_user_badge.py).
     login_as(
         client, name=None, email="hanako@example.com", roles=("member",), groups=()
     )
@@ -52,7 +52,7 @@ def test_signout_is_no_longer_a_link(client):
 
 
 def test_member_navigation_has_no_settings_link(client, login_as):
-    """U7 BR3.2、NFR1.72: member のナビゲーション（広い・狭い画面）に「設定」がない。"""
+    """The member's navigation (wide and narrow screens) has no 「設定」 entry."""
     login_as(client, roles=("member",), groups=("sales",))
     html = client.get("/persona/management").text
     assert 'href="/settings"' not in html

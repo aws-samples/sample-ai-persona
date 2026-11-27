@@ -13,12 +13,13 @@ import {
 } from './template-paths';
 
 /**
- * cdk-nag の AwsSolutions（U9、NFR7.15、NFR3.14、Infrastructure Design Q1 A）。
+ * cdk-nag AwsSolutions checks.
  *
- * Stage を 3 通り（公開の 2 通りと U1 閉域の Stage）synth し、cdk-nag の違反が 0 件であること（error が 1 件でも残ると
- * app.synth() が ValidationFailed を投げる）と、抑止の一覧が期待と一致することを確かめる。
- * cdk-nag を掛けるのは bin/app.ts とこのテストだけ。抑止を足す・消す変更は、同じ変更で
- * 下の期待の一覧を直す。
+ * Synthesizes three Stages (two public and the closed one) and checks that cdk-nag reports
+ * zero violations (any remaining error makes app.synth() throw ValidationFailed) and that the
+ * list of suppressions matches the expectation.
+ * cdk-nag is applied only in bin/app.ts and this test. A change that adds or removes a
+ * suppression must update the expected lists below in the same change.
  */
 
 jest.setTimeout(60_000);
@@ -27,8 +28,9 @@ jest.setTimeout(60_000);
 const FEATURE_FLAGS: Record<string, unknown> = require('../cdk.json').context;
 
 /**
- * `<抑止を持つリソースの construct のパス>|<ルール ID>`。ルール ID の中の Data スタックの
- * 出力名は `{<出力するリソースのパス>.<属性>}` に直して比べる（CDK が作る名前を書かない）。
+ * `<construct path of the resource with the suppression>|<rule ID>`. A Data stack output
+ * name inside a rule ID is normalized to `{<path of the exporting resource>.<attribute>}` before
+ * comparing (so CDK-generated names are not written out).
  */
 type Suppression = string;
 
@@ -36,7 +38,7 @@ const ACCOUNT = '123456789012';
 const PUBLIC = 'AIPersonaDev';
 const CLOSED = 'AIPersonaDevClosed';
 
-/** AwsCustomResource のシングルトンの Lambda の construct ID（CDK の公開の定数から作る）。 */
+/** Construct ID of the AwsCustomResource singleton Lambda (built from CDK's public constants). */
 const CUSTOM_RESOURCE_PROVIDER = `AWS${AwsCustomResource.PROVIDER_FUNCTION_UUID.replace(/-/g, '')}`;
 
 const on = (resourcePath: string, ...rules: string[]): Suppression[] =>
@@ -47,7 +49,7 @@ const INFERENCE = [
   'IAM5[Resource::arn:aws:bedrock:*::foundation-model/*]',
 ];
 const taskPolicy = (stage: string) => `${stage}/App/App/TaskDefinition/TaskRole/DefaultPolicy/Resource`;
-/** アンケートのモデル（global の Haiku 5.5。リージョンを * にする 2 つ、基盤設計 3.1）。 */
+/** Survey models (global Haiku 5.5; two of them use * for the region). */
 const SURVEY_MODEL = [
   `IAM5[Resource::arn:aws:bedrock:*:${ACCOUNT}:inference-profile/global.anthropic.claude-haiku-5-5]`,
   'IAM5[Resource::arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5]',
@@ -65,8 +67,8 @@ const SURVEY_MAP_RUNS =
   `IAM5[Resource::arn:aws:states:ap-northeast-1:${ACCOUNT}:execution:${MACHINE_NAME}/*]`;
 
 /**
- * 公開・閉域の Stage に共通の抑止（infrastructure-specification.md「cdk-nag の指摘と扱い」）。
- * VPC と CloudFront の抑止は Stage ごとに違うため、下の一覧で足す。
+ * Suppressions common to the public and closed Stages.
+ * VPC and CloudFront suppressions differ per Stage, so they are added in the lists below.
  */
 function commonSuppressions(stage: string): Suppression[] {
   const DATA = `${stage}/Data`;
@@ -76,12 +78,12 @@ function commonSuppressions(stage: string): Suppression[] {
     `IAM5[Resource::${exportedRef(`${DATA}/${resourcePath}`, attribute)}${suffix}]`;
   const bucket = (suffix: string) => fromData('UploadBucket/Bucket/Resource', 'Arn', suffix);
   return [
-    // Data スタック
+    // Data stack
     ...on(`${DATA}/UploadBucket/Bucket/Resource`, 'S1'),
     ...on(`${DATA}/Cognito/UserPool/Resource`, 'COG2', 'COG8'),
     ...on(`${DATA}/TokenEncryptionKeys/Resource`, 'SMG4'),
     ...on(`${DATA}/LoginCookieSigningKey/Resource`, 'SMG4'),
-    // App スタック
+    // App stack
     ...on(`${APP}/App/Alb/Resource`, 'ELB2'),
     ...on(`${APP}/App/Cluster/Resource`, 'ECS4'),
     ...on(`${APP}/App/TaskDefinition/Resource`, 'ECS2'),
@@ -91,20 +93,22 @@ function commonSuppressions(stage: string): Suppression[] {
       'IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]',
     ),
     ...on(`${APP}/App/TaskDefinition/ExecutionRole/DefaultPolicy/Resource`, 'IAM5[Resource::*]'),
-    // テーブルの GSI は名前で付けるため、/index/* の抑止はない
+    // Table GSIs are named, so there is no /index/* suppression
     ...on(
       taskPolicy(stage),
       'IAM5[Resource::*]',
-      ...['/*', '/uploads/*', '/candidates/*'].map(bucket),
+      // Tag on analysis records saved before advanced generation (analysis-records/*), and
+      // deletion of versions of uploaded files (sources/*)
+      ...['/*', '/uploads/*', '/candidates/*', '/analysis-records/*', '/sources/*'].map(bucket),
       ...INFERENCE,
       `IAM5[Resource::arn:aws:bedrock:ap-northeast-1:${ACCOUNT}:knowledge-base/*]`,
       fromData('Memory/Default', 'MemoryArn', '/*'),
       'IAM5[Action::kms:GenerateDataKey*]',
       'IAM5[Action::kms:ReEncrypt*]',
-      // アンケートの実行（このステートマシンの実行の ARN、基盤設計 3.2）
+      // Survey executions (ARN of this state machine's executions)
       SURVEY_EXECUTIONS,
     ),
-    // アンケートのステートマシン（基盤設計 2.2・3.1）: ログは ERROR だけ、トレースは使わない
+    // Survey state machine: logs at ERROR only, no tracing
     ...on(`${APP}/SurveyRun/StateMachine/Resource`, 'SF1', 'SF2'),
     ...on(
       `${APP}/SurveyRun/Role/DefaultPolicy/Resource`,
@@ -116,17 +120,17 @@ function commonSuppressions(stage: string): Suppression[] {
   ];
 }
 
-/** 公開の Stage の VPC（NAT あり）と CloudFront。 */
+/** Public Stage VPC (with NAT) and CloudFront. */
 const PUBLIC_SUPPRESSIONS: Suppression[] = [
   ...commonSuppressions(PUBLIC),
   ...on(`${PUBLIC}/App/Vpc/Vpc/Resource`, 'VPC7'),
   ...on(`${PUBLIC}/App/CloudFront/Distribution/Resource`, 'CFR1', 'CFR3', 'CFR4'),
 ];
 
-/** 既定の dev の値（enableWaf: true）: WebACL があるため CFR2 は出ない。 */
+/** Default dev values (enableWaf: true): a WebACL exists, so CFR2 is not reported. */
 const DEFAULT_SUPPRESSIONS: Suppression[] = PUBLIC_SUPPRESSIONS;
 
-/** 追加のペルソナモデルを有効にし WAF を無効にした値: WebACL がないため CFR2 も抑止し、Mantle の project が増える。 */
+/** Extra persona models enabled and WAF disabled: with no WebACL CFR2 is suppressed too, and Mantle projects increase. */
 const MANTLE_NO_WAF_SUPPRESSIONS: Suppression[] = [
   ...PUBLIC_SUPPRESSIONS,
   ...on(`${PUBLIC}/App/CloudFront/Distribution/Resource`, 'CFR2'),
@@ -134,13 +138,13 @@ const MANTLE_NO_WAF_SUPPRESSIONS: Suppression[] = [
 ];
 
 /**
- * U1 閉域の Stage（検証用 EC2 あり）: CloudFront がなく、閉域の VPC の Flow Logs は U2 までの
- * 一時的な抑止。検証用 EC2 の詳細監視・終了保護と、ロールの AmazonSSMManagedInstanceCore
- * （security-design.md §7）。EBS は暗号化するため EC26 は出ない。
+ * Closed Stage (with the verification EC2): no CloudFront, and Flow Logs of the closed VPC are
+ * a temporary suppression. Also detailed monitoring and termination protection of the
+ * verification EC2, and the role's AmazonSSMManagedInstanceCore. EBS is encrypted, so EC26 is not reported.
  */
 const CLOSED_SUPPRESSIONS: Suppression[] = [
   ...commonSuppressions(CLOSED),
-  // AZ の固定（W3010、aws-cdk-lib の CloudFormation Validate。Infrastructure Design レビュー R-05）
+  // Pin the AZs (W3010, CloudFormation Validate in aws-cdk-lib)
   ...[
     `${CLOSED}/App/Network/Vpc/IsolatedSubnet1/Subnet`,
     `${CLOSED}/App/Network/Vpc/IsolatedSubnet2/Subnet`,
@@ -204,7 +208,7 @@ function suppressionsOf(
   assembly: cdk.cx_api.CloudAssembly,
   stackNames: string[],
 ): { keys: string[]; reasons: string[] } {
-  // Stage のスタックは入れ子のアセンブリにある
+  // Stage stacks live in a nested assembly
   const stacks = [assembly, ...assembly.nestedAssemblies.map((n) => n.nestedAssembly)].flatMap(
     (a) => a.stacks,
   );
@@ -246,7 +250,7 @@ describe.each(VARIANTS)('cdk-nag（$name）', ({ build: buildApp, stackNames, ex
 
   test('validation-report.json の違反（warning を含む）が 0 件', () => {
     expect(assembly).toBeDefined();
-    // 抑止がそろった状態でも出力先に書かれる（cdk-nag 3.0.2 で確かめた）
+    // Written to the output destination even when all suppressions are in place (verified with cdk-nag 3.0.2)
     const report = path.join(assembly.directory, 'validation-report.json');
     expect(fs.existsSync(report)).toBe(true);
     const json = JSON.parse(fs.readFileSync(report, 'utf-8'));

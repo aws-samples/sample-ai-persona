@@ -26,7 +26,7 @@
         </div>
     </div>
 
-    <!-- エラーメッセージ表示エリア -->
+    <!-- Error message area -->
     <div id="form-error"></div>
 
     <form id="template-form"
@@ -39,7 +39,7 @@
           hx-swap="innerHTML"
           @submit="prepareSubmit()">
 
-        <!-- テンプレート名 -->
+        <!-- Template name -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <label class="block text-sm font-medium text-gray-700 mb-2">テンプレート名</label>
             <input type="text" name="name" x-model="name" required
@@ -47,7 +47,7 @@
                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-teal-500 focus:border-teal-500">
         </div>
 
-        <!-- 画像アップロードセクション -->
+        <!-- Image upload section -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
@@ -58,7 +58,7 @@
             </div>
             <p class="text-xs text-gray-500 mb-3">広告や商品画像などをアップロードできます（PNG/JPEG、{{ max_image_mb }}MB以下、{{ max_images }}枚まで）。特定の画像について質問する場合は、質問文に画像の名前を含めてください。</p>
 
-            <!-- アップロード済み画像一覧 -->
+            <!-- Uploaded image list -->
             <template x-for="(img, idx) in images" :key="img.id">
                 <div class="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                     <img :src="img.preview_url || img.preview" class="w-16 h-16 object-cover rounded border" alt="">
@@ -73,7 +73,7 @@
                 </div>
             </template>
 
-            <!-- アップロードエリア -->
+            <!-- Upload area -->
             <div x-show="images.length < maxImages"
                  class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-indigo-400 transition-colors cursor-pointer"
                  @click="$refs.imageInput.click()"
@@ -90,7 +90,7 @@
             </div>
         </div>
 
-        <!-- 質問リスト -->
+        <!-- Question list -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-semibold text-gray-900">質問一覧</h2>
@@ -107,7 +107,7 @@
                         </button>
                     </div>
 
-                    <!-- 質問タイプ -->
+                    <!-- Question type -->
                     <div class="mb-3">
                         <label class="block text-xs text-gray-500 mb-1">質問タイプ</label>
                         <select x-model="q.question_type" @change="onTypeChange(index)"
@@ -118,7 +118,7 @@
                         </select>
                     </div>
 
-                    <!-- 質問テキスト -->
+                    <!-- Question text -->
                     <div class="mb-3">
                         <label class="block text-xs text-gray-500 mb-1">質問文</label>
                         <input type="text" x-model="q.text" required
@@ -129,7 +129,7 @@
                         </p>
                     </div>
 
-                    <!-- 選択肢（選択式の場合のみ） -->
+                    <!-- Choices (choice questions only) -->
                     <template x-if="q.question_type === 'multiple_choice'">
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">選択肢（2つ以上必須）</label>
@@ -149,7 +149,7 @@
                                     class="text-teal-600 hover:text-teal-800 text-sm flex items-center gap-1 mt-1">
                                 {{ icon_plus("w-3.5 h-3.5") }} 選択肢を追加
                             </button>
-                            <!-- 複数回答設定 -->
+                            <!-- Multiple-answer setting -->
                             <div class="mt-3 pt-3 border-t border-gray-200">
                                 <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                                     <input type="checkbox" x-model="q.allow_multiple"
@@ -167,7 +167,7 @@
                 </div>
             </template>
 
-            <!-- 質問追加ボタン -->
+            <!-- Add question button -->
             <div class="flex gap-2 mt-4">
                 <button type="button" @click="addQuestion('multiple_choice')"
                         class="bg-blue-50 text-blue-700 px-3 py-2 rounded-md hover:bg-blue-100 transition-colors text-sm flex items-center gap-1">
@@ -184,11 +184,11 @@
             </div>
         </div>
 
-        <!-- 隠しフィールド -->
+        <!-- Hidden fields -->
         <input type="hidden" name="questions_json" :value="JSON.stringify(questionsForSubmit())">
         <input type="hidden" name="images_json" :value="JSON.stringify(imagesForSubmit())">
 
-        <!-- 保存ボタン -->
+        <!-- Save button -->
         <div class="flex justify-end gap-3">
             <a href="/survey/templates" class="bg-gray-200 text-gray-700 px-6 py-2 rounded-md hover:bg-gray-300 transition-colors">
                 キャンセル
@@ -202,10 +202,10 @@
     </form>
 </div>
 
-<!-- 右側: AIアシスタントパネル -->
+<!-- Right side: AI assistant panel -->
 <aside x-show="showAIPanel" x-transition class="w-full lg:w-96 lg:flex-shrink-0 lg:sticky lg:top-4 lg:self-start">
     <div class="bg-white rounded-lg shadow-md border border-indigo-100 flex flex-col" style="height: calc(100vh - 6rem); min-height: 500px;">
-        <!-- ヘッダ -->
+        <!-- Header -->
         <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-indigo-50 rounded-t-lg">
             <div class="flex items-center gap-2">
                 <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
@@ -216,7 +216,7 @@
             </button>
         </div>
 
-        <!-- 会話履歴 -->
+        <!-- Conversation history -->
         <div class="flex-1 overflow-y-auto p-3 space-y-3" x-ref="aiChatLog">
             <template x-if="aiMessages.length === 0">
                 <div class="text-xs text-gray-500 bg-gray-50 rounded p-3 leading-relaxed">
@@ -244,7 +244,7 @@
             <div x-show="aiError" class="bg-red-50 border border-red-200 text-red-700 rounded p-2 text-xs" x-text="aiError"></div>
         </div>
 
-        <!-- 入力エリア -->
+        <!-- Input area -->
         <div class="border-t border-gray-200 p-3 space-y-2">
             <textarea x-model="aiInput"
                       x-ref="aiTextarea"
@@ -299,7 +299,7 @@ function templateForm() {
         images: initialImages.map(img => ({...img})),
         uploading: false,
 
-        // --- AI アシスタント（Issue #23） ---
+        // --- AI assistant (Issue #23) ---
         showAIPanel: false,
         aiMessages: [],       // [{role:'user'|'assistant', content:string}]
         aiInput: '',
@@ -314,7 +314,7 @@ function templateForm() {
 
         renderMarkdown(text) {
             if (!text) return '';
-            // サニタイズできないときは HTML として扱わずエスケープした文字列を返す
+            // When sanitizing is not possible, return an escaped string instead of treating it as HTML
             const escaped = () => {
                 const div = document.createElement('div');
                 div.textContent = text;
@@ -393,7 +393,7 @@ function templateForm() {
                     _key: keyCounter++,
                 }));
                 this.questions.push(...newQuestions);
-                // テンプレート名が未入力なら AI の提案を自動入力
+                // If the template name is empty, fill in the AI's suggestion automatically
                 let nameMsg = '';
                 if (data.template_name && !this.name.trim()) {
                     this.name = data.template_name;
@@ -425,9 +425,9 @@ function templateForm() {
         },
 
         async uploadImages(files) {
-            // 上げている間の追加は受けない（空き枠の数え直しが重なって枠を超えるため）
+            // Do not accept additions while uploading (recounting free slots would overlap and exceed the limit)
             if (this.uploading) return;
-            // 形式とサイズの合わない画像を先に除き、残りを空き枠の数まで順に上げる
+            // Drop images with an unsupported format or size first, then upload the rest up to the number of free slots
             const notices = [];
             const accepted = [];
             for (const file of Array.from(files)) {
@@ -455,7 +455,7 @@ function templateForm() {
         },
 
         nextImageName() {
-            // 名前を付けない画像にも、重ならない仮の名前を付ける（質問文で画像を指すため）
+            // Give unnamed images a non-colliding temporary name too (questions refer to images by name)
             const used = new Set(this.images.map(img => (img.name || '').trim().toLowerCase()));
             let n = 1;
             while (used.has(`画像${n}`)) n++;
@@ -470,7 +470,7 @@ function templateForm() {
                 const resp = await fetch('/survey/templates/upload-image', { method: 'POST', body: formData, headers: {'X-Requested-With': 'XMLHttpRequest'} });
                 const data = await resp.json();
                 if (data.error) { alert(data.error); return; }
-                // プレビュー用URL: サーバーから返された署名付きURLを優先
+                // Preview URL: prefer the signed URL returned by the server
                 this.images.push({
                     id: data.file_id,
                     name: this.nextImageName(),
@@ -531,7 +531,7 @@ function templateForm() {
         },
 
         prepareSubmit() {
-            // hidden input の値を更新
+            // Update the value of the hidden input
         }
     };
 }

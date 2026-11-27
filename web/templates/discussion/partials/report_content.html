@@ -1,4 +1,4 @@
-<!-- レポート内容表示パーシャル -->
+<!-- Report content display partial -->
 <div class="bg-gray-50 rounded-lg border border-gray-200 p-6">
     <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
@@ -147,7 +147,7 @@
                                 details.innerHTML = '<summary class="cursor-pointer text-green-700 font-semibold hover:text-green-900">データ分析エージェント 分析結果を表示</summary><div class="mt-2 prose prose-sm max-w-none max-h-64 overflow-y-auto text-gray-700">' + DOMPurify.sanitize(marked.parse(data.content, {breaks: true})) + '</div>';
                                 thinking.appendChild(details);
                             } else if (data.type === 'done' && {{ 'true' if manageable is defined and manageable else 'false' }}) {
-                                // 内容の更新は管理できる人だけ（U6 BR4.2）
+                                // Content updates are for users who can manage only
                                 var combinedContent = previousReport + '\n\n---\n\n## 追加分析結果\n\n' + content;
                                 var updateDiv = document.createElement('div');
                                 updateDiv.className = 'mt-4 flex items-center gap-3';

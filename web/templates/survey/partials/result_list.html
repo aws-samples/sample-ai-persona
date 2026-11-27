@@ -4,14 +4,13 @@
 {% from "components/status_label.html" import status_label %}
 {% from "survey/partials/status_badge.html" import survey_status_badge %}
 {#
-  アンケート結果の一覧パーシャル（M6、U7 BR1.2・BR2.10）。タブ（list_tabpanel）の中身。
-  テンプレート名とペルソナ元データの名前は、実行したときの写し（template_snapshot、
-  datasource_name）で出す。
+  Survey result list partial. Content of the tab (list_tabpanel).
+  Template names and persona source names are shown from the copy taken at run time (template_snapshot, datasource_name).
 
-  引数:
-    listing        ... src/models/sharing.py の TabbedList（items は Survey）
-    current_search ... 検索語（今のタブの中を検索する）
-    is_append      ... 「もっと見る」の追加分
+  Arguments:
+    listing        ... TabbedList from src/models/sharing.py (items are Survey)
+    current_search ... search term (searches within the current tab)
+    is_append      ... the part added by "show more"
 #}
 {%- set tab = listing.tab.value -%}
 {%- set surveys = listing.items -%}

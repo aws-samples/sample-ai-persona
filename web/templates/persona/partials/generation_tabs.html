@@ -1,0 +1,31 @@
+{#
+  Tab strip for standard and advanced (beta) generation. These are link tabs; the current page gets aria-current="page". The strip itself is hidden from users who cannot use advanced generation.
+  Arguments:
+    active_tab        ... "standard" or "advanced"
+    show_advanced_tab ... whether advanced generation is available
+    notice_message    ... optional; toast text shown when sent back from advanced generation
+#}
+{% if show_advanced_tab %}
+<nav aria-label="生成の種類" data-testid="generation-tabs" class="mb-6 border-b border-gray-200">
+    <ul class="flex flex-wrap gap-2 -mb-px">
+        <li>
+            <a href="/persona/generation" data-testid="generation-tab-standard"
+               {%- if active_tab != "advanced" %} aria-current="page"{% endif %}
+               class="inline-block px-4 py-2 border-b-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 {{ 'border-blue-600 text-blue-700' if active_tab != 'advanced' else 'border-transparent text-gray-600 hover:text-gray-900' }}">通常の生成</a>
+        </li>
+        <li>
+            <a href="/persona/generation/advanced" data-testid="generation-tab-advanced"
+               {%- if active_tab == "advanced" %} aria-current="page"{% endif %}
+               class="inline-flex items-center gap-2 px-4 py-2 border-b-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 {{ 'border-blue-600 text-blue-700' if active_tab == 'advanced' else 'border-transparent text-gray-600 hover:text-gray-900' }}">高度な生成
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-amber-600 text-xs text-amber-800 bg-amber-50">ベータ</span></a>
+        </li>
+    </ul>
+</nav>
+{% endif %}
+{% if notice_message %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    showFlashMessage({{ notice_message | tojson }}, 'warning');
+});
+</script>
+{% endif %}

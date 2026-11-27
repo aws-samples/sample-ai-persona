@@ -1,0 +1,75 @@
+{#
+  Progress of section C and the container for the result section D.
+  advanced-upload.js connects to the SSE (EventSource) at data-events-url and draws stages, log, and failures.
+  Arguments:
+    generation_id ... generation ID (None when no running generation is found; only a notice is shown)
+    elapsed ... ElapsedClock (seconds since start and whether it is still running). Elapsed time is not shown when None
+    notice ... optional notice shown when a generation was already running and a new one could not start
+#}
+{% if notice %}
+<p data-testid="advanced-already-running" role="status"
+   class="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-md p-3">{{ notice }}</p>
+{% endif %}
+{% if generation_id %}
+<section id="advanced-progress" data-testid="advanced-progress" data-generation-id="{{ generation_id }}"
+         data-events-url="/persona/advanced/generations/{{ generation_id | urlencode }}/events"
+         aria-labelledby="advanced-progress-title" class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="advanced-progress-title" tabindex="-1" class="text-lg font-semibold text-gray-900">進行状況</h2>
+        <div class="flex items-center gap-4">
+            {% if elapsed %}
+            {# Elapsed time is rewritten every second, but it is kept outside aria-live so it is not announced. #}
+            <p data-testid="advanced-elapsed" data-elapsed-seconds="{{ elapsed.seconds }}"
+               data-running="{{ 'true' if elapsed.running else 'false' }}"
+               class="text-sm text-gray-700 tabular-nums">経過 <span data-role="clock">{{ '%02d:%02d' | format(elapsed.seconds // 60, elapsed.seconds % 60) }}</span></p>
+            {% endif %}
+            {# Cancel is shown until the run ends (advanced-upload.js hides it afterwards). #}
+            <div id="advanced-cancel-area" data-testid="advanced-cancel-area" class="flex items-center gap-2" aria-live="polite">
+                {% include "persona/partials/advanced_cancel.html" %}
+            </div>
+        </div>
+    </div>
+    {# A rough bar based on the number of stages (not the actual ratio). advanced-upload.js rewrites the value in setStages. #}
+    <div class="mb-3" data-testid="advanced-progress-bar-area">
+        <div class="flex items-baseline justify-between text-sm text-gray-700 mb-1">
+            <span data-testid="advanced-progress-label" data-role="label">準備中</span>
+            <span data-testid="advanced-progress-count" data-role="count" class="tabular-nums"></span>
+        </div>
+        <div role="progressbar" aria-labelledby="advanced-progress-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+             data-testid="advanced-progress-bar" class="w-full h-2 bg-gray-200 rounded overflow-hidden">
+            <div data-role="fill" data-state="current" class="h-2 bg-blue-600 rounded transition-all duration-500" style="width: 0%"></div>
+        </div>
+    </div>
+    {# Stage circles and lines. setStages in advanced-upload.js rewrites state through data-state, marks, and classes. Status is shown with a mark and text (done, in progress, pending, failed), not by color alone. #}
+    <ol data-testid="advanced-stages" class="flex items-start text-sm text-gray-700 mb-4">
+        {% for key, label in [("preparing", "前準備"), ("planning", "計画"), ("awaiting_plan_approval", "計画の確認待ち"), ("running", "実行"), ("synthesizing", "合成"), ("verifying", "検証")] %}
+        <li data-stage="{{ key }}" data-state="pending" data-testid="advanced-stage-{{ key }}" class="relative flex-1 min-w-0 text-center"{% if key == "awaiting_plan_approval" %} hidden{% endif %}>
+            {% if not loop.first %}<span data-role="line" aria-hidden="true" class="absolute top-3 right-1/2 w-full h-0.5 bg-gray-300"></span>{% endif %}
+            <span data-role="mark" aria-hidden="true" class="relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-gray-300 bg-white text-xs font-bold text-gray-500"></span>
+            <span data-role="label" class="block text-xs mt-1 text-gray-800">{{ label }}</span>
+            <span data-role="state" class="sr-only">未</span>
+        </li>
+        {% endfor %}
+    </ol>
+    <p data-testid="advanced-reconnecting" hidden class="text-sm text-amber-900 mb-2">接続し直しています</p>
+    <div data-testid="advanced-disconnected" hidden class="bg-amber-50 border border-amber-300 rounded-md p-3 mb-2">
+        <p class="text-sm text-amber-900">進み具合を受け取れません。ページを読み直してください</p>
+        <button type="button" data-testid="advanced-reload-button" data-action="reload"
+                class="mt-2 text-sm underline text-amber-900">読み直す</button>
+    </div>
+    <ul data-testid="advanced-log" aria-live="polite" tabindex="0" aria-label="進行の記録" class="text-sm text-gray-800 space-y-1 bg-gray-50 rounded-md p-3 min-h-[3rem] max-h-48 overflow-y-auto"></ul>
+    {# The SSE plan event (plan card) is inserted here. #}
+    <div data-testid="advanced-plan-area"></div>
+    {# Cancellation is not styled as an error. #}
+    <div data-testid="advanced-cancelled" hidden class="mt-4 bg-gray-50 border border-gray-300 rounded-md p-4">
+        <h3 tabindex="-1" data-role="title" class="font-semibold text-gray-900">中止しました</h3>
+        <p class="text-sm text-gray-700 mt-1">指示とファイルの選択はそのままです。もう一度始められます</p>
+    </div>
+    <div data-testid="advanced-failure" hidden class="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
+        <h3 tabindex="-1" data-role="title" class="font-semibold text-red-900">生成できませんでした</h3>
+        <p data-role="message" class="text-sm text-red-800 mt-1"></p>
+        <a href="/persona/generation/advanced" class="inline-block mt-3 text-sm text-red-800 underline">データと指示に戻る</a>
+    </div>
+</section>
+<div id="advanced-result" data-testid="advanced-result-area"></div>
+{% endif %}

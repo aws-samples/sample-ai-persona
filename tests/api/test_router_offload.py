@@ -1,20 +1,21 @@
-"""Router の async の入口が Manager をイベントループの上で直接呼んでいないことの静的検査（NFR9.20）。
+"""Static check that async router entry points do not call a Manager directly on the event loop.
 
-Manager の呼び出しは、判定の読み取り（``ResourceLookup`` による DynamoDB の読み）や
-S3・DuckDB の I/O を含みうる。async の入口でそのまま呼ぶと、その間イベントループが
-止まり、ほかの要求まで待たされる（Loop-back 1 で ``web/routers/persona.py`` に見つかった）。
+A Manager call may include an authorization read (a DynamoDB read via ``ResourceLookup``)
+or S3/DuckDB I/O. Calling it directly in an async entry point blocks the event loop, so
+other requests wait too.
 
-``web/routers/*.py`` の ``async def`` の中で、``get_*_manager()`` の戻り値（またはそれを
-入れた変数）のメソッドを直接呼ぶ箇所を AST で数える。次はスレッドに渡す側として数えない:
+Within each ``async def`` in ``web/routers/*.py``, the AST is used to count places that
+call a method of the return value of ``get_*_manager()`` (or a variable holding it)
+directly. The following are not counted, as they are handed to a thread:
 
-- 呼ばずに参照だけを渡すもの（``await _run(manager.method, ...)``、
-  ``run_in_threadpool``・``anyio.to_thread.run_sync``・``loop.run_in_executor`` の引数）
-- 入れ子の ``def``・``lambda`` の中（スレッドに渡す関数の本体）。ただし、async の本体から
-  直接呼ばれる同期の関数（モジュールの関数と入れ子の ``def``）は、イベントループの上で
-  走るため中まで数える
+- A reference passed without being called (``await _run(manager.method, ...)``, or an
+  argument of ``run_in_threadpool``, ``anyio.to_thread.run_sync`` or ``loop.run_in_executor``)
+- Inside a nested ``def`` or ``lambda`` (the body of a function handed to a thread). A
+  sync function called directly from the async body (a module-level function or a nested
+  ``def``) runs on the event loop, so its inside is counted
 
-直接呼んでよいものは ``ALLOWED_DIRECT_CALLS`` に理由付きで固定する。一覧に実在しない
-項目が残ったら失敗する（古い例外を残さない）。
+Calls that may be direct are pinned in ``ALLOWED_DIRECT_CALLS`` with a reason. The test
+fails if an entry no longer exists (stale exceptions are not kept).
 """
 
 import ast
@@ -31,8 +32,8 @@ _NO_IO = "I/O をしない"
 _ROLE_ONLY = "ロールだけを見る（I/O をしない）"
 _OUT_OF_SCOPE = "Loop-back 1 の対象外（報告済み）"
 
-#: ``(ファイル, 関数, メソッド)`` → 直接呼んでよい理由。
-#: 判定の読み取りを含む呼び出しはここに入れない（スレッドに渡す）。
+#: ``(file, function, method)`` -> why a direct call is acceptable.
+#: Calls that include an authorization read do not belong here (hand them to a thread).
 ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
     # persona.py
     (
@@ -88,6 +89,11 @@ ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
         "settings_page",
         "get_data_agent_settings",
     ): f"ロールを見て、メモリ上の設定値を返すだけで{_NO_IO}",
+    (
+        "settings.py",
+        "settings_page",
+        "is_advanced_generation_section_offered",
+    ): f"環境変数の ON/OFF（メモリ上の設定値）を返すだけで{_NO_IO}",
     (
         "settings.py",
         "data_agent_status",
@@ -252,12 +258,12 @@ def scan_source(source: str, filename: str) -> dict[tuple[str, str, str], list[i
             ):
                 found[(filename, fn.name, func.attr)].append(node.lineno)
             elif isinstance(func, ast.Name) and func.id in local_defs:
-                # 同期の関数を直接呼ぶと、その本体もイベントループの上で走る
-                # （生成器の関数は呼んでも本体が走らないので数えない）
+                # Calling a sync function directly runs its body on the event loop too
+                # (a generator function does not run its body when called, so it is not counted)
                 helper = local_defs[func.id]
                 if _is_generator(helper):
                     continue
-                # モジュールの関数は呼び出し元の変数を見ない。入れ子の def は見る
+                # A module-level function does not see the caller's variables; a nested def does
                 is_module_def = module_defs.get(helper.name) is helper
                 visit(helper, set() if is_module_def else names, local_defs, seen)
 
@@ -282,7 +288,7 @@ def _describe(items: dict[tuple[str, str, str], list[int]]) -> str:
 
 
 class TestManagerCallsAreOffloaded:
-    """NFR9.20: async の入口の Manager の呼び出しはスレッドに渡す。"""
+    """Manager calls in async entry points are handed to a thread."""
 
     def test_no_unlisted_direct_manager_call_on_the_event_loop(self):
         unexpected = {
@@ -305,7 +311,7 @@ class TestManagerCallsAreOffloaded:
         assert all(reason.strip() for reason in ALLOWED_DIRECT_CALLS.values())
 
 
-#: ``queue.Queue`` の待つメソッド。``get_nowait`` / ``put_nowait`` / ``empty`` は待たない
+#: Blocking ``queue.Queue`` methods. ``get_nowait`` / ``put_nowait`` / ``empty`` do not block.
 _BLOCKING_QUEUE_METHODS = {"get", "put", "join"}
 
 
@@ -380,7 +386,7 @@ def scan_blocking_queue_calls(
 
 
 class TestQueueWaitsAreOffloaded:
-    """SSE の生成器がスレッドの Queue を待つ間、イベントループを止めない。"""
+    """An SSE generator waiting on a thread Queue does not block the event loop."""
 
     def test_no_blocking_queue_call_on_the_event_loop(self):
         found: dict[tuple[str, str, str], list[int]] = {}
@@ -425,7 +431,7 @@ async def other(request):
 
 
 class TestScannerIsNotVacuous:
-    """検査が空振りしないこと（違反を拾い、スレッドに渡すものは拾わない）。"""
+    """The check is not vacuous: it catches violations and ignores calls handed to a thread."""
 
     _SOURCE = """
 import asyncio

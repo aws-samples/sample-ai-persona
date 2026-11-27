@@ -1,8 +1,8 @@
-"""DiscussionValidation Component の単体テスト。
+"""Unit tests for the DiscussionValidation component.
 
-discussion / agent_discussion で共有する議論バリデーションの単一ソース。閾値と
-fail-closed 判定、両モードの差（content ゲート・mode 要件）をパラメータで検証する。
-エラーコードで検証する（文言はアサートしない）。
+Single source of discussion validation shared by discussion and agent_discussion. Thresholds,
+fail-closed decisions and the differences between the two modes (content gate, mode
+requirement) are checked with parameters. Assertions use error codes, not messages.
 """
 
 import pytest
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 
 
 class _Err(CodedError):
-    """注入用のテスト例外（Manager 例外の代役）。"""
+    """Test exception for injection (stands in for a Manager exception)."""
 
 
 def _persona(name="p"):
@@ -34,7 +34,7 @@ def _persona(name="p"):
 
 
 def _discussion(topic="有効なトピック", participants=None, mode="agent"):
-    # U6: 発言は本体の外（DiscussionMessages）に置くため、本体だけを作る
+    # Messages live outside the body (DiscussionMessages), so only the body is built
     return Discussion.create_new(
         topic=topic, participants=participants or ["p1", "p2"], mode=mode
     )
@@ -129,7 +129,7 @@ class TestValidateResults:
             )
 
     def test_min_content_enforced_when_required(self):
-        # 各発言は非空だが合計 < 100 文字。require_min_content=True で拒否。
+        # Each message is non-empty but the total is < 100 chars; rejected with require_min_content=True.
         with raises_code(_Err, ErrorCode.DISCUSSION_RESULT_INVALID):
             dv.validate_results(
                 [_msg("p1", "短い"), _msg("p2", "短い")],
@@ -140,7 +140,7 @@ class TestValidateResults:
             )
 
     def test_min_content_skipped_when_not_required(self):
-        # 同じ短い議論でも require_min_content=False なら通過（エージェント挙動）。
+        # The same short discussion passes with require_min_content=False (agent behavior).
         dv.validate_results(
             [_msg("p1", "短い"), _msg("p2", "短い")],
             [],

@@ -1,16 +1,16 @@
 """SurveyRunnerService: the Step Functions execution of a survey and its S3 run
-location (functional-spec.md ch.2 and ch.6).
+location.
 
 - Step Functions: ``StartExecution`` (named after the survey ID, so a restart
-  never runs twice, BR3.1), ``DescribeExecution`` and ``StopExecution``.
+  never runs twice), ``DescribeExecution`` and ``StopExecution``.
 - S3 ``survey-runs/<id>/``: the sampled personas (``personas.parquet``), the
   Distributed Map input (``input.jsonl``), one body per persona for surveys
   with images or large bodies (``bodies/<record_id>.json``, stored in
   parallel as the input is built), and the ResultWriter output under
-  ``results/``, read one file at a time (NFR1.7).
+  ``results/``, read one file at a time.
 
 Every SDK failure becomes :class:`SurveyRunnerServiceError` with one of the
-four :class:`FailureClass` values (reliability-requirements.md 3.1); retries
+four :class:`FailureClass` values; retries
 and timeouts of single calls stay inside this layer (botocore ``standard``
 retry mode). What to do with a failure is decided by ``SurveyRunManager``.
 Other services are not imported.
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 #: Where everything of one execution lives.
 RUN_PREFIX = "survey-runs"
-#: The Anthropic Messages body of one request (BR6.2).
+#: The Anthropic Messages body of one request.
 ANTHROPIC_VERSION = "bedrock-2023-05-31"
 MAX_TOKENS = 2048
 #: Largest body kept in the Distributed Map item. A child execution's input is
@@ -174,7 +174,7 @@ class SurveyRunnerService:
         user_content: list[dict[str, Any]],
         schema: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """One persona's InvokeModel body in the Anthropic Messages format (BR6.2)."""
+        """One persona's InvokeModel body in the Anthropic Messages format."""
         return {
             "anthropic_version": ANTHROPIC_VERSION,
             "max_tokens": MAX_TOKENS,
@@ -212,7 +212,7 @@ class SurveyRunnerService:
         """Whether ``execution_arn`` belongs to the current state machine.
 
         A state machine created again (rollback, logical ID change) has a new
-        ARN; executions of the old one can no longer be followed (基盤設計 2.2).
+        ARN; executions of the old one can no longer be followed.
         """
         prefix = self.execution_arn_for("")
         return execution_arn.startswith(prefix) and len(execution_arn) > len(prefix)
@@ -220,7 +220,7 @@ class SurveyRunnerService:
     # --- Step Functions -------------------------------------------------------------
 
     def start_execution(self, survey_id: str) -> ExecutionInfo:
-        """Start the execution named after the survey (BR3.1, NFR5.2).
+        """Start the execution named after the survey.
 
         The input is only the run location; the model and bodies are in the
         JSONL lines. An execution of that name that exists already is taken
@@ -297,7 +297,7 @@ class SurveyRunnerService:
     # --- run location (S3) ----------------------------------------------------------
 
     def has_personas(self, survey_id: str) -> bool:
-        """Whether the sampled personas were written already (BR1.5)."""
+        """Whether the sampled personas were written already."""
         try:
             self._s3.head_object(
                 Bucket=self.bucket_name, Key=self._key(survey_id, "personas.parquet")
@@ -310,7 +310,7 @@ class SurveyRunnerService:
             raise failure from e
 
     def write_personas(self, survey_id: str, personas: pl.DataFrame) -> None:
-        """Write the sampled personas once, in sampling order (BR1.5)."""
+        """Write the sampled personas once, in sampling order."""
         buffer = io.BytesIO()
         personas.write_parquet(buffer)
         self._put(self._key(survey_id, "personas.parquet"), buffer.getvalue())
@@ -332,7 +332,7 @@ class SurveyRunnerService:
         model_id: str,
         bodies: Iterable[tuple[str, str, bool]],
     ) -> Generator[SurveyRunItem, None, None]:
-        """Store the marked bodies in parallel; yield every item in order (BR6.3).
+        """Store the marked bodies in parallel; yield every item in order.
 
         ``bodies`` is read one at a time in the caller's thread, so a check the
         caller makes while producing it (the lease) runs before each body is
@@ -399,7 +399,7 @@ class SurveyRunnerService:
             pool.shutdown(wait=True, cancel_futures=True)
 
     def write_input(self, survey_id: str, lines: Iterable[str]) -> str:
-        """Write the Distributed Map input, one JSON line each (NFR1.6).
+        """Write the Distributed Map input, one JSON line each.
 
         The lines are consumed one at a time into a spooled file, so the whole
         input never sits in memory as one string. An error raised while
@@ -442,8 +442,7 @@ class SurveyRunnerService:
         """Every item of the ResultWriter output, one result file at a time.
 
         Only the record ID, the response text and the error name are kept;
-        the request bodies in ``Input`` are dropped as each file is read
-        (NFR1.7).
+        the request bodies in ``Input`` are dropped as each file is read.
 
         Raises:
             SurveyRunnerServiceError: A file is missing (``NOT_FOUND``) or not
@@ -466,7 +465,7 @@ class SurveyRunnerService:
                     yield _run_result(item)
 
     def delete_run(self, survey_id: str) -> None:
-        """Remove everything under ``survey-runs/<id>/`` (BR10.1)."""
+        """Remove everything under ``survey-runs/<id>/``."""
         prefix = self._key(survey_id, "")
         try:
             paginator = self._s3.get_paginator("list_objects_v2")

@@ -10,17 +10,18 @@ import {
 import { PATH_METADATA_CONTEXT } from '../template-paths';
 
 /**
- * テストで Stage を組み立てる共通の補助（U1 閉域、security-design.md §6）。
+ * Shared helpers for assembling a Stage in tests.
  *
- * bin/app.ts と同じ関数（createDevStage・createClosedDevStage・applyNagChecks）を通し、
- * cdk.json の機能フラグと construct のパスのメタデータを入れた App で組み立てる。閉域のテストの
- * 値（証明書の ARN・FQDN・許可 CIDR・検証用 EC2）はここにだけ持つ。
+ * Goes through the same functions as bin/app.ts (createDevStage, createClosedDevStage,
+ * applyNagChecks) and builds with an App that has the cdk.json feature flags and the construct
+ * path metadata. The closed-network test values (certificate ARN, FQDN, allowed CIDR,
+ * verification EC2) live only here.
  */
 
 export const ACCOUNT = '123456789012';
 export const REGION = 'ap-northeast-1';
 
-/** 閉域のテストの値（形だけの値。CI の閉域の synth と同じ。AWS には触れない）。 */
+/** Closed-network test values (dummy-shaped; same as the CI closed synth; no AWS access). */
 export const CLOSED_TEST_VALUES = {
   certificateArn:
     'arn:aws:acm:ap-northeast-1:123456789012:certificate/00000000-0000-0000-0000-000000000000',
@@ -50,7 +51,7 @@ export function templatesOf(stage: cdk.Stage): Record<string, Template> {
   return Object.fromEntries(stacks.map((stack) => [stack.node.id, Template.fromStack(stack)]));
 }
 
-/** 閉域の Stage の入力のうち、テストで変えるもの。 */
+/** The inputs of the closed Stage that tests vary. */
 export interface ClosedTestOverrides {
   certificateArn?: string;
   domainName?: string;

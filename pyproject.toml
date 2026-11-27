@@ -43,6 +43,7 @@ dev = [
     "hypothesis>=6.0.0",
     "pytest-playwright>=0.9.0",
     "axe-playwright-python>=0.1.8",
+    "scikit-learn>=1.5,<2",
 ]
 
 [build-system]

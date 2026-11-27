@@ -1,19 +1,15 @@
-"""
-ServiceFactory の単体テスト
-
-サービスファクトリのシングルトン管理をテストします。
-"""
+"""Tests for ServiceFactory singleton management."""
 
 import pytest
 from unittest.mock import Mock, patch
 
 
 class TestServiceFactory:
-    """ServiceFactory のテストクラス"""
+    """Tests for ServiceFactory."""
 
     def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
-        # シングルトンをリセット
+        """Runs before each test method."""
+        # Reset the singletons
         from src.services.service_factory import ServiceFactory
 
         ServiceFactory._instance = None
@@ -21,7 +17,7 @@ class TestServiceFactory:
         ServiceFactory._agent_service = None
 
     def test_singleton_pattern(self):
-        """シングルトンパターンが正しく動作することを確認"""
+        """The singleton pattern works."""
         from src.services.service_factory import ServiceFactory
 
         factory1 = ServiceFactory()
@@ -31,7 +27,7 @@ class TestServiceFactory:
 
     @patch("src.services.service_factory.AIService")
     def test_get_ai_service_returns_same_instance(self, mock_ai_service_class):
-        """AIServiceが同じインスタンスを返すことを確認"""
+        """AIService returns the same instance."""
         from src.services.service_factory import ServiceFactory
 
         mock_ai_service = Mock()
@@ -42,12 +38,12 @@ class TestServiceFactory:
         service2 = factory.get_ai_service()
 
         assert service1 is service2
-        # 1回だけ作成されることを確認
+        # Created only once
         mock_ai_service_class.assert_called_once()
 
     @patch("src.services.service_factory.AgentService")
     def test_get_agent_service_returns_same_instance(self, mock_agent_service_class):
-        """AgentServiceが同じインスタンスを返すことを確認"""
+        """AgentService returns the same instance."""
         from src.services.service_factory import ServiceFactory
 
         mock_agent_service = Mock()
@@ -62,17 +58,17 @@ class TestServiceFactory:
 
 
 class TestServiceFactoryMemoryService:
-    """ServiceFactory のMemoryService関連テストクラス"""
+    """Tests for the MemoryService part of ServiceFactory."""
 
     def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
+        """Runs before each test method."""
         from src.services.service_factory import ServiceFactory
 
         ServiceFactory._instance = None
 
     @patch("src.services.service_factory.config")
     def test_get_memory_service_returns_none_when_disabled(self, mock_config):
-        """ENABLE_LONG_TERM_MEMORYがFalseの場合Noneを返すことを確認"""
+        """Returns None when ENABLE_LONG_TERM_MEMORY is False."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.ENABLE_LONG_TERM_MEMORY = False
@@ -85,7 +81,7 @@ class TestServiceFactoryMemoryService:
 
     @patch("src.services.service_factory.config")
     def test_get_memory_service_returns_none_when_memory_id_not_set(self, mock_config):
-        """AGENTCORE_MEMORY_IDが設定されていない場合Noneを返すことを確認"""
+        """Returns None when AGENTCORE_MEMORY_ID is not set."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -98,7 +94,7 @@ class TestServiceFactoryMemoryService:
 
     @patch("src.services.service_factory.config")
     def test_get_memory_service_returns_none_when_memory_id_empty(self, mock_config):
-        """AGENTCORE_MEMORY_IDが空文字の場合Noneを返すことを確認"""
+        """Returns None when AGENTCORE_MEMORY_ID is an empty string."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -114,7 +110,7 @@ class TestServiceFactoryMemoryService:
     def test_get_memory_service_creates_instance(
         self, mock_config, mock_memory_service_class
     ):
-        """MemoryServiceインスタンスが作成されることを確認"""
+        """A MemoryService instance is created."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -137,7 +133,7 @@ class TestServiceFactoryMemoryService:
     def test_get_memory_service_returns_same_instance(
         self, mock_config, mock_memory_service_class
     ):
-        """MemoryServiceが同じインスタンスを返すことを確認"""
+        """MemoryService returns the same instance."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -159,7 +155,7 @@ class TestServiceFactoryMemoryService:
     def test_get_memory_service_handles_creation_error(
         self, mock_config, mock_memory_service_class
     ):
-        """MemoryService作成エラーが適切に処理されることを確認"""
+        """MemoryService creation errors are handled."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -173,12 +169,12 @@ class TestServiceFactoryMemoryService:
         factory = ServiceFactory()
         result = factory.get_memory_service()
 
-        # エラー時はNoneを返す（例外は投げない）
+        # Returns None on error (does not raise)
         assert result is None
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_is_memory_enabled_returns_true_when_enabled(self, mock_config):
-        """機能が有効な場合Trueを返すことを確認"""
+        """Returns True when the feature is enabled."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.ENABLE_LONG_TERM_MEMORY = True
@@ -191,7 +187,7 @@ class TestServiceFactoryMemoryService:
 
 
 class TestServiceFactoryS3Service:
-    """S3Serviceの取得テスト"""
+    """Retrieving S3Service."""
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
@@ -223,7 +219,7 @@ class TestServiceFactoryS3Service:
 
 
 class TestServiceFactorySurveyBatchService:
-    """SurveyBatchServiceの取得テスト"""
+    """Retrieving SurveyBatchService."""
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
@@ -247,7 +243,7 @@ class TestServiceFactorySurveyBatchService:
 
 
 class TestServiceFactoryDatasetAnalysisService:
-    """DatasetAnalysisServiceの取得テスト"""
+    """Retrieving DatasetAnalysisService."""
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
@@ -281,7 +277,7 @@ class TestServiceFactoryDatasetAnalysisService:
 
 
 class TestServiceFactoryResetServices:
-    """reset_servicesのテスト"""
+    """reset_services."""
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
@@ -290,7 +286,7 @@ class TestServiceFactoryResetServices:
 
 
 class TestServiceFactoryAuthzServices:
-    """判定用の読み取りと部署の一覧の Service（U2）。"""
+    """Services for access checks reads and the department list."""
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
@@ -337,7 +333,7 @@ class TestServiceFactoryAuthzServices:
 
     @patch("src.services.service_factory.config")
     def test_u5_stores_use_their_tables(self, mock_config, monkeypatch):
-        """U5 の 3 つの Service（候補・紐付け・アップロードファイル）。"""
+        """The three services for candidates, links and uploaded files."""
         from src.services.service_factory import ServiceFactory
 
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
@@ -483,7 +479,7 @@ class TestServiceFactoryAuthzServices:
 
     @patch("src.services.service_factory.config")
     def test_survey_runner_needs_the_configuration(self, mock_config):
-        """BR9.1: 設定がなければ Service を作らない（呼ぶ側が先に確かめる）。"""
+        """No service is created without settings (the caller checks first)."""
         from src.services.service_factory import ServiceFactory
 
         mock_config.SURVEY_STATE_MACHINE_ARN = None
@@ -511,7 +507,7 @@ class TestServiceFactoryAuthzServices:
 
     @patch("src.services.service_factory.config")
     def test_u6_stores_use_their_tables(self, mock_config, monkeypatch):
-        """U6 の 2 つの Service（議論・インタビュー）。"""
+        """The two services for discussions and interviews."""
         from src.services.service_factory import ServiceFactory
 
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
@@ -541,7 +537,7 @@ class TestServiceFactoryAuthzServices:
     def test_u7_custom_persona_data_store_uses_its_table(
         self, mock_config, monkeypatch
     ):
-        """U7 の Service（カスタムペルソナデータの登録情報）。"""
+        """The service for custom persona dataset registration info."""
         from src.services.service_factory import ServiceFactory
 
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
@@ -555,6 +551,34 @@ class TestServiceFactoryAuthzServices:
         assert store is factory.get_custom_persona_data_store()
         assert store.table_name == "Custom-physical"
         assert store.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
+    def test_advanced_generation_stores_use_their_tables(
+        self, mock_config, monkeypatch
+    ):
+        """The three stores: SourceFiles, AdvancedGenerations and AppSettings."""
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.SOURCE_FILES_TABLE_NAME = "Sources-physical"
+        mock_config.ADVANCED_GENERATIONS_TABLE_NAME = "Generations-physical"
+        mock_config.APP_SETTINGS_TABLE_NAME = "Settings-physical"
+
+        factory = ServiceFactory()
+        sources = factory.get_source_file_store()
+        generations = factory.get_advanced_generation_store()
+        settings = factory.get_app_settings_store()
+
+        assert sources is factory.get_source_file_store()
+        assert generations is factory.get_advanced_generation_store()
+        assert settings is factory.get_app_settings_store()
+        assert sources.table_name == "Sources-physical"
+        assert generations.table_name == "Generations-physical"
+        assert generations.source_files_table_name == "Sources-physical"
+        assert settings.table_name == "Settings-physical"
+        assert generations.client.meta.region_name == "ap-northeast-1"
 
     @patch("src.services.service_factory.config")
     def test_user_directory_service_needs_a_user_pool(self, mock_config):
@@ -584,7 +608,7 @@ class TestServiceFactoryAuthzServices:
     def test_cognito_auth_service_is_built_for_admin_api(
         self, mock_config, monkeypatch
     ):
-        """U8: AUTH_MODE=admin_api の Cognito 管理 API の Service（1 つだけ作る）。"""
+        """The Cognito admin API service for AUTH_MODE=admin_api (only one is created)."""
         from src.services.service_factory import ServiceFactory
 
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
@@ -686,3 +710,73 @@ class TestServiceFactoryAuthzServices:
         with pytest.raises(CodedError) as info:
             ServiceFactory().get_user_source()
         assert info.value.code is ErrorCode.AUTH_CONFIG_INVALID
+
+    @patch("src.services.service_factory.config")
+    def test_sandbox_service_uses_the_code_interpreter(self, mock_config, monkeypatch):
+        """The Code Interpreter based SandboxService."""
+        from src.services.sandbox_service import CodeInterpreterSandbox
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.CODE_INTERPRETER_ID = "persona_ci-abc"
+        mock_config.AWS_REGION = "ap-northeast-1"
+        mock_config.ADVANCED_TOOL_MAX_OUTPUT_CHARS = 1234
+
+        factory = ServiceFactory()
+        sandbox = factory.get_sandbox_service()
+
+        assert sandbox is factory.get_sandbox_service()
+        assert isinstance(sandbox, CodeInterpreterSandbox)
+        assert sandbox.code_interpreter_id == "persona_ci-abc"
+        assert sandbox.max_output_chars == 1234
+        assert sandbox.client.meta.region_name == "ap-northeast-1"
+        assert sandbox.library_path.endswith("sandbox/persona_analysis.py")
+
+    @patch("src.services.service_factory.config")
+    def test_sandbox_service_needs_a_code_interpreter(self, mock_config):
+        from src.models.errors import CodedError, ErrorCode
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.CODE_INTERPRETER_ID = ""
+        with pytest.raises(CodedError) as info:
+            ServiceFactory().get_sandbox_service()
+        assert info.value.code is ErrorCode.ADVANCED_GENERATION_UNAVAILABLE
+
+    def test_analysis_tools_are_made_per_generation(self):
+        """Built per generation; not a singleton."""
+        from src.models.analysis import AnalysisToolPolicy, U1_ANALYSIS_TOOLS
+        from src.services.dataset_analysis.analysis_tool_service import (
+            AnalysisToolService,
+        )
+        from src.services.service_factory import ServiceFactory
+
+        sandbox = Mock()
+        policy = AnalysisToolPolicy(tools=U1_ANALYSIS_TOOLS, limits={"max_calls": 5})
+        factory = ServiceFactory()
+
+        first = factory.create_analysis_tools(
+            "session",
+            policy,
+            source_id="f1",
+            columns=["age"],
+            persona_count=2,
+            sandbox=sandbox,
+        )
+        second = factory.create_analysis_tools(
+            "session",
+            policy,
+            source_id="f1",
+            columns=["age"],
+            persona_count=2,
+            sandbox=sandbox,
+        )
+
+        assert isinstance(first, AnalysisToolService)
+        assert first is not second
+        assert [t.tool_name for t in first.tools()] == [
+            "profile_dataset",
+            "analyze_dataset",
+            "cluster_segments",
+            "profile_segments",
+        ]

@@ -1,14 +1,14 @@
 """
 Session Manager Factory for AgentCore Memory Integration
-AgentCoreMemorySessionManagerを作成するファクトリ
+Factory that creates AgentCoreMemorySessionManager
 
-Strands Agent SDKの推奨方式に従い、AgentCoreMemorySessionManagerを使用して
-STM（短期記憶）とLTM（長期記憶）の両方を自動管理する。
+Following the Strands Agent SDK's recommended approach, uses AgentCoreMemorySessionManager
+to manage both STM (short-term memory) and LTM (long-term memory) automatically.
 
-memory_modeパラメータにより、以下のモードをサポート:
-- "full": 検索 + 保存（デフォルト）
-- "retrieve_only": 検索のみ（保存しない）
-- "disabled": メモリ機能無効
+The memory_mode parameter supports these modes:
+- "full": retrieve + save (default)
+- "retrieve_only": retrieve only (no saving)
+- "disabled": memory disabled
 """
 
 import logging
@@ -19,12 +19,12 @@ from src.config import config
 logger = logging.getLogger(__name__)
 
 
-# メモリモードの型定義
+# Type definition for memory modes
 MemoryMode = Literal["full", "retrieve_only", "disabled"]
 
 
 class SessionManagerFactoryError(Exception):
-    """Session Manager Factory関連のエラー"""
+    """Errors raised by the Session Manager Factory."""
 
     pass
 
@@ -36,39 +36,39 @@ def create_agentcore_session_manager(
     memory_mode: MemoryMode = "full",
 ) -> Any:
     """
-    AgentCoreMemorySessionManagerを作成
+    Create an AgentCoreMemorySessionManager
 
     Args:
-        actor_id: ペルソナID（AgentCore MemoryのactorIdとして使用）
-        session_id: 議論/インタビューセッションID
-        retrieval_config: LTM検索設定（オプション）
-            例: {
+        actor_id: Persona ID (used as the actorId in AgentCore Memory)
+        session_id: Discussion/interview session ID
+        retrieval_config: LTM retrieval settings (optional)
+            Example: {
                 "/preferences/{actorId}": {"top_k": 5, "relevance_score": 0.7},
                 "/facts/{actorId}": {"top_k": 10, "relevance_score": 0.3}
             }
-        memory_mode: メモリモード
-            - "full": 検索 + 保存（デフォルト）
-            - "retrieve_only": 検索のみ（保存しない）
-            - "disabled": メモリ機能無効
+        memory_mode: Memory mode
+            - "full": retrieve + save (default)
+            - "retrieve_only": retrieve only (no saving)
+            - "disabled": memory disabled
 
     Returns:
-        AgentCoreMemorySessionManager または RetrieveOnlySessionManager:
-        設定済みのセッションマネージャー
+        AgentCoreMemorySessionManager or RetrieveOnlySessionManager:
+        The configured session manager
 
     Raises:
-        SessionManagerFactoryError: 作成に失敗した場合
+        SessionManagerFactoryError: If creation fails
     """
-    # メモリモードがdisabledの場合はNoneを返す
+    # Return None when the memory mode is disabled
     if memory_mode == "disabled":
         logger.debug("Memory mode is 'disabled', returning None")
         return None
 
-    # 長期記憶が無効の場合はNoneを返す
+    # Return None when long-term memory is disabled
     if not config.ENABLE_LONG_TERM_MEMORY:
         logger.debug("Long-term memory is disabled by configuration")
         return None
 
-    # AGENTCORE_MEMORY_IDが設定されていない場合はNoneを返す
+    # Return None when AGENTCORE_MEMORY_ID is not set
     if not config.AGENTCORE_MEMORY_ID:
         logger.warning(
             "ENABLE_LONG_TERM_MEMORY is True but AGENTCORE_MEMORY_ID is not set"
@@ -84,9 +84,9 @@ def create_agentcore_session_manager(
             AgentCoreMemorySessionManager,
         )
 
-        # RetrievalConfigを構築
-        # retrieval_config が明示的に渡された場合（空dict含む）はそのまま使用し、
-        # None の場合のみデフォルト戦略を注入する
+        # Build the RetrievalConfig
+        # If retrieval_config is passed explicitly (even an empty dict) use it as is,
+        # and inject the default strategy only when it is None
         retrieval_config_obj = None
         if retrieval_config is not None:
             retrieval_config_obj = {}
@@ -96,14 +96,14 @@ def create_agentcore_session_manager(
                     relevance_score=settings.get("relevance_score", 0.2),
                 )
 
-        # デフォルトのLTM検索設定（有効な戦略に基づいて構築）
+        # Default LTM retrieval settings (built from the enabled strategies)
         if retrieval_config_obj is None:
             retrieval_config_obj = {}
 
-            # Summary戦略のnamespace（常に有効）
-            # sessions/{sessionId} を含めると検索範囲が現在進行中のセッションに
-            # 固定され、過去セッションの記憶が一切ヒットしなくなるため、
-            # actor（ペルソナ）配下をプレフィックス検索して全セッション横断で取得する
+            # Summary strategy namespace (always enabled)
+            # Including sessions/{sessionId} would pin the search scope to the current session
+            # and no memory from past sessions would ever hit, so prefix-search under the
+            # actor (persona) to retrieve across all sessions
             if config.SUMMARY_MEMORY_STRATEGY_ID:
                 retrieval_config_obj[
                     f"/strategies/{config.SUMMARY_MEMORY_STRATEGY_ID}/actors/{{actorId}}"
@@ -111,17 +111,17 @@ def create_agentcore_session_manager(
                     top_k=config.MEMORY_MAX_RESULTS, relevance_score=0.3
                 )
 
-            # Semantic戦略のnamespace（設定されている場合のみ）
+            # Semantic strategy namespace (only when configured)
             if config.SEMANTIC_MEMORY_STRATEGY_ID:
-                # Semantic戦略は /facts/{actorId} パターンを使用
+                # The Semantic strategy uses the /facts/{actorId} pattern
                 retrieval_config_obj[
                     f"/strategies/{config.SEMANTIC_MEMORY_STRATEGY_ID}/actors/{{actorId}}"
                 ] = RetrievalConfig(
                     top_k=config.MEMORY_MAX_RESULTS,
-                    relevance_score=0.5,  # Semanticは関連性スコアを高めに設定
+                    relevance_score=0.5,  # Set a higher relevance score for Semantic
                 )
 
-        # AgentCoreMemoryConfigを作成
+        # Create the AgentCoreMemoryConfig
         memory_config = AgentCoreMemoryConfig(
             memory_id=config.AGENTCORE_MEMORY_ID,
             session_id=session_id,
@@ -129,13 +129,13 @@ def create_agentcore_session_manager(
             retrieval_config=retrieval_config_obj,
         )
 
-        # AgentCoreMemorySessionManagerを作成
+        # Create the AgentCoreMemorySessionManager
         base_session_manager = AgentCoreMemorySessionManager(
             agentcore_memory_config=memory_config,
             region_name=config.AGENTCORE_MEMORY_REGION,
         )
 
-        # memory_modeに応じてセッションマネージャーを返す
+        # Return a session manager according to memory_mode
         if memory_mode == "retrieve_only":
             from .retrieve_only_session_manager import RetrieveOnlySessionManager
 
@@ -179,9 +179,9 @@ def create_agentcore_session_manager(
 
 def is_memory_enabled() -> bool:
     """
-    長期記憶機能が有効かどうかを確認
+    Check whether the long-term memory feature is enabled
 
     Returns:
-        bool: 長期記憶が有効な場合True
+        bool: True if long-term memory is enabled
     """
     return config.ENABLE_LONG_TERM_MEMORY and bool(config.AGENTCORE_MEMORY_ID)

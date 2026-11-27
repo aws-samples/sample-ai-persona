@@ -1,5 +1,5 @@
 """
-ペルソナ関連のルーター
+Persona router
 """
 
 import logging
@@ -60,19 +60,20 @@ _KEEPALIVE_SECONDS = 3
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
-# main.pyと同じmarkdownフィルターを登録
+# Register the same markdown filter as main.py
 from web.sanitize import render_markdown  # noqa: E402
 
 templates.env.filters["markdown"] = render_markdown
 
-# 表示用ヘルパーをテンプレートのグローバル関数として登録。
-# country_service は ISO国コード→名前の純粋なデータ参照（ビジネスロジックなし）であり、
-# render_markdown と同様に表示ヘルパーとして Router から直接利用する
-# （アーキ規約「Router→Manager経由」の表示ヘルパー例外）。
+# Register display helpers as template global functions.
+# country_service is a pure data lookup from ISO country code to name (no business logic), so like
+# render_markdown the Router uses it directly as a display helper
+# (the display-helper exception to the architecture rule "Router -> via Manager").
 from src.services import country_service  # noqa: E402
 from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
 from ._asset_response import asset_response  # noqa: E402
 from ._persona_avatar import persona_avatar_url  # noqa: E402
+from . import persona_advanced  # noqa: E402
 
 templates.env.globals["country_name"] = country_service.country_name
 templates.env.globals["country_choices"] = country_service.country_choices
@@ -80,17 +81,17 @@ templates.env.globals["gender_label"] = gender_label
 templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
 templates.env.globals["persona_avatar_url"] = persona_avatar_url
 
-# スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
+# Thread pool executor (to run synchronous AI work asynchronously)
 executor = ThreadPoolExecutor(max_workers=8)
 
 
 async def _run(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """Run a synchronous Manager call (DynamoDB / S3) off the event loop (NFR9.20)."""
+    """Run a synchronous Manager call (DynamoDB / S3) off the event loop."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
 
 
-# シングルトンマネージャーインスタンス（モジュールレベルで共有）
+# Singleton manager instances (shared at module level)
 _persona_manager: PersonaManager | None = None
 _persona_memory_manager: PersonaMemoryManager | None = None
 _file_manager: FileManager | None = None
@@ -98,7 +99,7 @@ _persona_generation_manager: PersonaGenerationManager | None = None
 
 
 def get_persona_manager() -> PersonaManager:
-    """PersonaManagerのシングルトンインスタンスを取得"""
+    """Get the PersonaManager singleton instance."""
     global _persona_manager
     if _persona_manager is None:
         _persona_manager = PersonaManager()
@@ -106,7 +107,7 @@ def get_persona_manager() -> PersonaManager:
 
 
 def _principal(request: Request) -> Principal:
-    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    """The signed-in user that ``AuthMiddleware`` put on the request."""
     principal: Principal = request.state.principal
     return principal
 
@@ -134,7 +135,7 @@ def _save_candidates(
 
 
 def get_persona_memory_manager() -> PersonaMemoryManager:
-    """PersonaMemoryManagerのシングルトンインスタンスを取得"""
+    """Get the PersonaMemoryManager singleton instance."""
     global _persona_memory_manager
     if _persona_memory_manager is None:
         _persona_memory_manager = PersonaMemoryManager()
@@ -142,7 +143,7 @@ def get_persona_memory_manager() -> PersonaMemoryManager:
 
 
 def get_file_manager() -> FileManager:
-    """FileManagerのシングルトンインスタンスを取得"""
+    """Get the FileManager singleton instance."""
     global _file_manager
     if _file_manager is None:
         _file_manager = FileManager()
@@ -150,27 +151,53 @@ def get_file_manager() -> FileManager:
 
 
 def get_persona_generation_manager() -> PersonaGenerationManager:
-    """PersonaGenerationManagerのシングルトンインスタンスを取得"""
+    """Get the PersonaGenerationManager singleton instance."""
     global _persona_generation_manager
     if _persona_generation_manager is None:
         _persona_generation_manager = PersonaGenerationManager()
     return _persona_generation_manager
 
 
+async def _advanced_tab_shown(principal: Principal) -> bool:
+    """Whether the advanced generation tab is shown.
+
+    A failed check hides the tab and leaves the ordinary page as it was.
+    """
+    try:
+        shown: bool = await _run(
+            persona_advanced.get_advanced_generation_manager().is_available, principal
+        )
+    except Exception:
+        logger.warning("advanced generation availability unknown", exc_info=True)
+        return False
+    return shown
+
+
 @router.get("/generation", response_class=HTMLResponse)
-async def persona_generation_page(request: Request) -> Any:
-    """ペルソナ生成ページ"""
+async def persona_generation_page(
+    request: Request, notice: Optional[str] = None
+) -> Any:
+    """Persona generation page."""
+    notice_message = (
+        user_message_for_code(ErrorCode.ADVANCED_GENERATION_UNAVAILABLE.value)
+        if notice == persona_advanced.UNAVAILABLE_NOTICE
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "persona/generation.html",
         {
             "request": request,
             "title": "AIペルソナ生成",
-            # アップロード制限をカタログの単一ソース（config）から表示に渡す
+            # Pass the upload limits to the display from the catalog's single source (config)
             "max_file_size_mb": config.PERSONA_SOURCE_MAX_BYTES // (1024 * 1024),
             "max_source_chars": config.PERSONA_SOURCE_MAX_CHARS,
-            # 閉域対応 U3 BR3.5: 権限を問わない判定（Router は閉域かどうかを判断しない）
+            # A check that ignores permissions (the Router does not decide whether this is a closed network)
             "data_agent_allowed": SettingsManager.is_data_agent_allowed(),
+            # Advanced generation (beta): the tab strip and the notice shown when the user is sent back
+            "show_advanced_tab": await _advanced_tab_shown(_principal(request)),
+            "active_tab": "standard",
+            "notice_message": notice_message,
         },
     )
 
@@ -195,10 +222,10 @@ def _with_list_reload(response: Response) -> Response:
 
 @router.get("/management", response_class=HTMLResponse)
 async def persona_management_page(request: Request, tab: Optional[str] = None) -> Any:
-    """ペルソナ管理ページ（タブ別の一覧、M6、BR3）。
+    """Persona management page (per-tab list).
 
-    タブの切り替えと一覧の読み直し（HX-Target が一覧部分）には一覧部分だけを返す。
-    member の tab=all は「自分のもの」になる（BR3.1）。
+    Only the list part is returned for tab switching and list reloading (HX-Target is the list part).
+    For members, tab=all means "my own".
     """
     loop = asyncio.get_running_loop()
     panel_only = request.headers.get("HX-Target") == LIST_PANEL_ID
@@ -256,7 +283,7 @@ def _generate_personas_sync(
     data_description: str | None,
     custom_prompt: str | None,
 ) -> GenerationResult:
-    """同期的な統一ペルソナ生成処理（スレッドプールで実行）。候補は生成した人のもの（BR1.1）"""
+    """Synchronous unified persona generation (runs in the thread pool). Candidates belong to the generating user."""
     gen_manager = get_persona_generation_manager()
     return gen_manager.generate(
         principal,
@@ -279,12 +306,12 @@ async def generate_persona(
     auto_link_behavior: str = Form(""),
     files: list[UploadFile] = File(None),
 ) -> Any:
-    """統一ペルソナ生成（SSEストリーミング）"""
+    """Unified persona generation (SSE streaming)."""
 
     is_auto_link = data_type == "dwh" and auto_link_behavior == "true"
     principal = _principal(request)
 
-    # DWH（データ分析エージェント連携）の場合
+    # For DWH (data analysis agent integration)
     if data_type == "dwh":
         logger.info(
             f"Starting DWH persona generation (SSE) - angle={analysis_angle!r}, count={persona_count}, auto_link={is_auto_link}"
@@ -293,7 +320,7 @@ async def generate_persona(
         import queue as queue_mod
 
         try:
-            # 閉域対応 U3 BR3.7: 流し始める前に拒み、error イベント 1 つだけを返す
+            # Refuse before streaming starts and return only one error event
             get_persona_generation_manager().ensure_data_agent_allowed(principal)
         except PersonaGenerationManagerError as e:
             refusal = _sse_event("error", user_message_for(e))
@@ -319,9 +346,9 @@ async def generate_persona(
 
             future = executor.submit(_run_dwh_generation)
 
-            # Agent 実行中: queue からリアルタイムイベントを読み出す。
-            # 待つのはスレッドで行う（イベントループの上で待つと他の要求が止まる）。
-            # 行動データの CSV（csv_url）は Manager が控えて候補に置く（BR1.2）
+            # While the agent runs: read real-time events from the queue.
+            # Waiting is done in a thread (waiting on the event loop would stall other requests).
+            # The Manager keeps the behavior-data CSV (csv_url) and puts it on the candidate
             while not future.done():
                 try:
                     evt = await asyncio.to_thread(event_queue.get, timeout=0.3)
@@ -362,7 +389,7 @@ async def generate_persona(
                 except queue_mod.Empty:
                     yield _sse_event("keepalive", "")
 
-            # queue に残っているイベントを flush
+            # Flush the events remaining in the queue
             while not event_queue.empty():
                 try:
                     evt = event_queue.get_nowait()
@@ -448,9 +475,9 @@ async def generate_persona(
             },
         )
 
-    # ファイル読み込み（既存フロー）
-    # 形式・サイズ・空は生バイト時点で判定できる粗ガードとしてここで検証する。
-    # 内容不足・合計文字数は抽出後にしか判定できないため Manager 層で行う。
+    # Read the file (existing flow)
+    # Format, size and emptiness are checked here as a coarse guard that works on raw bytes.
+    # Insufficient content and total character count can only be judged after extraction, so the Manager layer does that.
     file_contents: list[tuple[bytes, str]] = []
     file_manager = get_file_manager()
     try:
@@ -474,7 +501,7 @@ async def generate_persona(
     async def event_generator() -> Any:
         yield _sse_event("progress", "データを分析中...")
 
-        # バックグラウンドで生成実行
+        # Run the generation in the background
         future = executor.submit(
             _generate_personas_sync,
             principal,
@@ -485,10 +512,10 @@ async def generate_persona(
             custom_prompt or None,
         )
 
-        # 完了まで keepalive を送信し続ける。終わったらすぐに結果を返す
-        # （一定時間ごとに確かめると、終わってから最大でその時間だけ待たせる）
+        # Keep sending keepalive until it finishes. Return the result right away when done
+        # (checking at fixed intervals would make the caller wait up to that interval after it finishes)
         waiting = asyncio.wrap_future(future)
-        # 途中で接続が切れて下の result() まで来ないときも、例外を読んでおく
+        # Read the exception even if the connection drops midway and we never reach result() below
         waiting.add_done_callback(lambda f: f.cancelled() or f.exception())
         while True:
             done, _ = await asyncio.wait({waiting}, timeout=_KEEPALIVE_SECONDS)
@@ -497,19 +524,19 @@ async def generate_persona(
             yield _sse_event("keepalive", "")
 
         try:
-            # wrap した側から読む（どこからも読まないと、失敗したときに asyncio が
-            # 「Future exception was never retrieved」を例外の文面ごとログに出す）
+            # Read from the wrapping side (if nothing reads it, asyncio logs "Future exception was never retrieved"
+            # together with the exception text when it fails)
             result = waiting.result()
             generated_personas = result.personas
             thinking_log = result.thinking_log
 
             logger.info(f"Successfully generated {len(generated_personas)} personas")
 
-            # 思考ログを送信
+            # Send the thinking log
             for entry in thinking_log:
                 yield _sse_event("thinking", json.dumps(entry, ensure_ascii=False))
 
-            # 結果HTMLを送信
+            # Send the result HTML
             if len(generated_personas) == 1:
                 html = templates.get_template(
                     "persona/partials/generated_persona.html"
@@ -544,7 +571,7 @@ async def generate_persona(
                 ),
             )
         except Exception as e:
-            # 詳細なエラー内容はサーバーログにのみ出力し、クライアントには一般的なメッセージを返す
+            # Detailed errors go only to the server log; the client gets a generic message
             logger.error("Persona generation error occurred", exc_info=True)
             yield _sse_event(
                 "error",
@@ -567,14 +594,14 @@ async def generate_persona(
 
 
 def _sse_event(event_type: str, data: str) -> str:
-    """SSEイベントをフォーマット（複数行データ対応）"""
+    """Format an SSE event (multi-line data supported)."""
     lines = data.split("\n") if data else [""]
     data_lines = "\n".join(f"data: {line}" for line in lines)
     return f"event: {event_type}\n{data_lines}\n\n"
 
 
 def _sse_error(message: str) -> StreamingResponse:
-    """SSEエラーレスポンスを返す"""
+    """Return an SSE error response."""
 
     async def gen() -> Any:
         yield _sse_event("error", message)
@@ -603,15 +630,15 @@ async def save_persona(
     tags: str = Form(""),
     selected_behavior_datasets: str = Form(""),
 ) -> Any:
-    """生成候補を 1 体保存する（htmx対応、WF2）。
+    """Save one generated candidate (htmx supported).
 
-    押さえ → 保存 → 片付けを 1 つのスレッドで順に呼ぶ（片付けは成否にかかわらず必ず呼ぶ。
-    要求が途中で切れても、片付けは保存が終わってから）。
-    persona_id は候補の ID。他人の候補・期限切れ・二重送信は同じ 404 のトースト（BR1.3）。
+    Hold -> save -> clean up are called in order in one thread (clean-up is always called whether it succeeds or not;
+    even if the request is cut midway, clean-up runs after the save finishes).
+    persona_id is the candidate's ID. Someone else's candidate, an expired one and a double submit all give the same 404 toast.
     """
     principal = _principal(request)
     try:
-        # フォームデータからペルソナを作成（create_newを使用してタイムスタンプを自動設定）
+        # Create the persona from the form data (use create_new to set timestamps automatically)
         edited = Persona.create_new(
             name=name,
             age=age,
@@ -652,13 +679,13 @@ async def save_persona(
             },
         )
     except CodedError as e:
-        # 候補がない（他人・期限切れ・保存中）は 404、それ以外も種類で状態を決める。
-        # 本文を返さないトーストにして、生成結果を画面に残す（#117）
+        # A missing candidate (someone else's, expired, being saved) gives 404; others also get a status by kind.
+        # Use a toast with no body so the generation result stays on screen (#117)
         logger.warning("Persona save error", exc_info=True)
         return toast_response(e, status_code=http_status_for(e.code))
     except Exception as e:
-        # 再試行で解決しうるエラーは生成結果を消さずトーストで通知する
-        # （保存し直せるよう、生成済みペルソナを画面に残す）
+        # Errors that a retry can fix are shown as a toast without clearing the generation result
+        # (the generated persona stays on screen so it can be saved again)
         logger.error("Persona save error", exc_info=True)
         return toast_response(
             e, default="ペルソナの保存中にエラーが発生しました", status_code=500
@@ -667,7 +694,7 @@ async def save_persona(
 
 @router.get("/{persona_id}/edit", response_class=HTMLResponse)
 async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
-    """ペルソナ編集フォームパーシャル（htmx対応）。管理できる人だけ（BR6.2）"""
+    """Persona edit form partial (htmx supported). Users who can manage only."""
     try:
         loop = asyncio.get_running_loop()
         persona = await loop.run_in_executor(
@@ -685,7 +712,7 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
     except CodedError as e:
         kind = error_kind_of(e)
         if kind is ErrorKind.FORBIDDEN:
-            raise  # 403 は共通の例外ハンドラ（トースト）
+            raise  # 403 goes to the shared exception handler (toast)
         if kind is ErrorKind.NOT_FOUND:
             return _not_found_banner(request)
         logger.warning("Persona edit form fetch error", exc_info=True)
@@ -720,7 +747,7 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
 
 
 def _not_found_banner(request: Request) -> Any:
-    """読めない・存在しないペルソナの領域置換（同じ応答、NFR1.14）。"""
+    """Region replacement for an unreadable or nonexistent persona (same response)."""
     return mark_renderable(
         templates.TemplateResponse(
             request,
@@ -744,19 +771,19 @@ async def _render_edit_form_with_error(
     error_field: str | None,
     submitted: dict[str, Any],
 ) -> Any | None:
-    """送信値を保持したまま編集フォームを再描画する（Issue #117）。
+    """Re-render the edit form keeping the submitted values (Issue #117).
 
-    入力を直せば解決するエラーでフォームを汎用エラーパーシャルに置換すると、
-    11項目の入力がすべて失われてやり直しになる。送信値をそのまま埋め戻し、
-    エラーは該当フィールドの横に出す。
+    Replacing the form with a generic error partial for an error the user can fix by
+    correcting input would lose all 11 fields and force a redo. The submitted values are filled back in as they are and
+    the error is shown next to the matching field.
 
-    例外そのものではなく解決済みの文言とフィールドキーを受け取るのは、例外を
-    Router のヘルパーに渡すと `str(e)` 露出の検査（tests/api/test_error_exposure）
-    が効かなくなるため。文言解決は呼び出し側で `user_message_for()` に閉じる。
+    It takes the resolved wording and field key rather than the exception because passing the exception to
+    a Router helper would defeat the `str(e)` exposure check (tests/api/test_error_exposure).
+    Wording resolution stays in the caller via `user_message_for()`.
 
     Returns:
-        再描画した応答。ヘッダー部に使う `persona` を取得できずフォームを
-        描画できない場合は ``None``（呼び出し側でトーストに退避する）。
+        The re-rendered response. ``None`` when `persona` for the header part cannot be fetched and the form
+        cannot be rendered (the caller falls back to a toast).
     """
     try:
         persona = await _run(
@@ -782,8 +809,35 @@ async def _render_edit_form_with_error(
     )
 
 
+async def _analysis_record_context(
+    principal: Principal, persona: Persona
+) -> dict[str, Any]:
+    """The analysis record of a persona made by the advanced generation.
+
+    Ordinary personas read nothing. A record that cannot be read shows as
+    "分析の詳細は残っていません" and never stops the detail page.
+    """
+    context = persona.generation_context or {}
+    if context.get("mode") != "advanced":
+        return {}
+    try:
+        found = await _run(
+            get_persona_manager().get_analysis_record, principal, persona.id
+        )
+    except Exception:
+        logger.warning("analysis record not readable", exc_info=True)
+        found = None
+    record, sources = found if found else (None, ())
+    # Whether the original file still exists (only pass the value the Manager already determined)
+    return {
+        "analysis_record": record,
+        "analysis_sources": sources,
+        "analysis_record_checked": True,
+    }
+
+
 def _detail_context(detail: PersonaDetail) -> dict[str, Any]:
-    """The header values the detail page, its reload and the edit swap share (R-07)."""
+    """The header values the detail page, its reload and the edit swap share."""
     return {
         "persona": detail.persona,
         "manageable": detail.manageable,
@@ -809,7 +863,7 @@ async def update_persona(
     city: str = Form(""),
     tags: str = Form(""),
 ) -> Any:
-    """ペルソナ更新処理（htmx対応）- 詳細画面用。管理できる人だけ（BR6.2、BR6.7）"""
+    """Update persona (htmx supported), for the detail screen. Users who can manage only."""
     try:
         persona_manager = get_persona_manager()
 
@@ -830,10 +884,13 @@ async def update_persona(
             tags=[t.strip() for t in tags.split("\n") if t.strip()],
         )
 
-        # htmxスワップ用：ヘッダー + ボディを返す。所有者・共有先の行も詳細ページと
-        # 同じ値で描く（保存後に行が消えないように、R-07）
+        # For the htmx swap: return header + body. The owner and shared-with rows are also drawn with the
+        # same values as the detail page (so the row does not disappear after saving)
         detail = await _run(
             persona_manager.describe_persona, _principal(request), updated_persona
+        )
+        record_context = await _analysis_record_context(
+            _principal(request), detail.persona
         )
         return templates.TemplateResponse(
             request,
@@ -841,6 +898,7 @@ async def update_persona(
             {
                 "request": request,
                 **_detail_context(detail),
+                **record_context,
                 "message": "ペルソナを更新しました",
             },
         )
@@ -848,12 +906,12 @@ async def update_persona(
         logger.warning("Persona update error", exc_info=True)
         kind = error_kind_of(e)
         if kind is ErrorKind.FORBIDDEN:
-            raise  # 403 は共通の例外ハンドラ（トースト）
+            raise  # 403 goes to the shared exception handler (toast)
         if kind is ErrorKind.NOT_FOUND:
             return _not_found_banner(request)
         if is_correctable(e):
-            # 入力を直せば解決するエラーは、送信値を保持したまま編集フォームを
-            # 再描画する。汎用パーシャルに置換すると11項目の入力が失われる
+            # Errors the user can fix by correcting input re-render the edit form keeping the submitted
+            # values. Replacing with a generic partial would lose all 11 fields
             rendered = await _render_edit_form_with_error(
                 request,
                 persona_id,
@@ -875,8 +933,8 @@ async def update_persona(
             )
             if rendered is not None:
                 return rendered
-            # フォームを描画できない場合も入力は壊さない
-        # 再試行で解決しうるエラーは編集フォームを消さずトーストで通知する
+            # Even when the form cannot be rendered, the input is not destroyed
+        # Errors that a retry can fix are shown as a toast without clearing the edit form
         return toast_response(e)
     except Exception as e:
         logger.error("Persona update error", exc_info=True)
@@ -887,7 +945,7 @@ async def update_persona(
 
 @router.get("/{persona_id}", response_class=HTMLResponse)
 async def get_persona_detail(request: Request, persona_id: str) -> Any:
-    """ペルソナ詳細ページ。読める人だけ（BR6.2）、操作は管理できる人だけ（BR6.4）"""
+    """Persona detail page. Readable users only; actions only for those who can manage."""
     try:
         persona_manager = get_persona_manager()
         loop = asyncio.get_running_loop()
@@ -897,6 +955,9 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
             _principal(request),
             persona_id,
         )
+        record_context = await _analysis_record_context(
+            _principal(request), detail.persona
+        )
         return templates.TemplateResponse(
             request,
             "persona/detail.html",
@@ -904,10 +965,11 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
                 "request": request,
                 "title": f"ペルソナ: {detail.persona.name}",
                 **_detail_context(detail),
+                **record_context,
             },
         )
     except (HTTPException, CodedError):
-        # 読めない・存在しない（同じ 404）は共通の例外ハンドラがエラー画面にする
+        # Unreadable/nonexistent (the same 404) becomes the error screen via the shared exception handler
         raise
     except Exception as e:
         logger.error(f"Persona fetch error: {e}")
@@ -921,10 +983,10 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
 
 @router.get("/{persona_id}/header", response_class=HTMLResponse)
 async def get_persona_detail_header(request: Request, persona_id: str) -> Any:
-    """詳細のヘッダーの中身だけ（共有の保存後の listReload、U4 レビュー）。
+    """Only the contents of the detail header (listReload after saving a share).
 
-    判定は詳細と同じ（読める人だけ、BR6.2）。読み直しに失敗しても今の表示は消さない
-    （本文なしのトースト。htmx は 2xx 以外を差し替えない）。
+    The check is the same as the detail (readable users only). If the reload fails the current display is kept
+    (a toast with no body; htmx does not swap non-2xx responses).
     """
     try:
         persona_manager = get_persona_manager()
@@ -954,10 +1016,10 @@ async def get_persona_detail_header(request: Request, persona_id: str) -> Any:
 
 @router.delete("/{persona_id}", response_class=HTMLResponse)
 async def delete_persona(request: Request, persona_id: str) -> Any:
-    """ペルソナ削除処理（htmx対応）。管理できる人だけ（BR6.2、BR4）
+    """Persona deletion (htmx supported). Users who can manage only.
 
-    一覧から削除して 404（別タブで削除済み・読めない）になったときは、読めない対象と
-    同じ 404 のトーストに一覧の読み直し（listReload）を添えて、残ったカードを消す。
+    If deleting from the list gives 404 (already deleted in another tab, or unreadable), the same 404 toast as for
+    an unreadable target is returned with a list reload (listReload) to remove the leftover card.
     """
     referer = request.headers.get("hx-current-url", "")
     from_detail = f"/persona/{persona_id}" in referer
@@ -985,15 +1047,15 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
             and request.headers.get("HX-Request")
             and not from_detail
         ):
-            # 共通の例外ハンドラと同じ 404 のトースト + 一覧の読み直し（R-04）
+            # The same 404 toast as the shared exception handler + a list reload
             return _with_list_reload(toast_response(e, status_code=404))
         if kind in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN):
-            # 読めない・存在しないは同じ 404、共有されているだけは 403（共通の例外ハンドラ）
+            # Unreadable/nonexistent gives the same 404; merely shared gives 403 (shared exception handler)
             raise
         logger.error("Persona delete error", exc_info=True)
         return toast_response(e, status_code=500)
     except Exception as e:
-        # 再試行で解決しうるエラーは一覧を消さずトーストで通知する
+        # Errors that a retry can fix are shown as a toast without clearing the list
         logger.error("Persona delete error", exc_info=True)
         return toast_response(
             e, default="ペルソナの削除中にエラーが発生しました", status_code=500
@@ -1001,14 +1063,14 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
 
 
 # =========================================================================
-# アイコン画像
+# Icon image
 # =========================================================================
 
 
 def _render_avatar_editor(
     request: Request, persona: Persona, message: str | None = None
 ) -> Any:
-    """アイコン編集パーシャルを返す。message があれば成功トーストも出す。"""
+    """Return the icon edit partial. If message is given, also show a success toast."""
     headers = (
         {
             "HX-Trigger": json.dumps(
@@ -1025,7 +1087,7 @@ def _render_avatar_editor(
             "request": request,
             "persona": persona,
             "avatar_upload_enabled": get_persona_manager().avatar_upload_enabled(),
-            # 変えられた人だけがここに来る（BR4.3）
+            # Only users who can change it come here
             "manageable": True,
         },
         headers=headers,
@@ -1036,7 +1098,7 @@ def _render_avatar_editor(
 async def upload_persona_avatar(
     request: Request, persona_id: str, file: UploadFile = File(...)
 ) -> Any:
-    """アイコン画像をアップロードして差し替える（htmx対応）。管理できる人だけ（BR4.3）"""
+    """Upload and replace the icon image (htmx supported). Users who can manage only."""
     try:
         content = await file.read()
         loop = asyncio.get_running_loop()
@@ -1051,7 +1113,7 @@ async def upload_persona_avatar(
     except PersonaManagerError as e:
         logger.warning("Persona avatar upload rejected", exc_info=True)
         if is_correctable(e):
-            # 入力を直せば解決するエラーはフォーム内の専用領域だけ差し替える
+            # Errors the user can fix by correcting input replace only the dedicated area inside the form
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
@@ -1063,7 +1125,7 @@ async def upload_persona_avatar(
             )
         return toast_response(e)
     except CodedError:
-        # 読めない（404）・管理できない（403）は共通の例外ハンドラが答える
+        # Unreadable (404) and unmanageable (403) are answered by the shared exception handler
         raise
     except Exception as e:
         logger.error("Persona avatar upload error", exc_info=True)
@@ -1074,7 +1136,7 @@ async def upload_persona_avatar(
 
 @router.delete("/{persona_id}/avatar", response_class=HTMLResponse)
 async def delete_persona_avatar(request: Request, persona_id: str) -> Any:
-    """アイコン画像を削除して自動生成アバターに戻す（htmx対応）。管理できる人だけ"""
+    """Delete the icon image and revert to the auto-generated avatar (htmx supported). Users who can manage only."""
     try:
         loop = asyncio.get_running_loop()
         persona = await loop.run_in_executor(
@@ -1098,9 +1160,9 @@ async def delete_persona_avatar(request: Request, persona_id: str) -> Any:
 
 @router.get("/{persona_id}/avatar")
 async def get_persona_avatar(request: Request, persona_id: str) -> Any:
-    """アイコン画像を返す。読めなければ 404 で開かず URL も作らない（BR4.4）。
+    """Return the icon image. If unreadable, 404 without opening it or making a URL.
 
-    公開構成は署名付き URL へ 302、閉域（ASSET_DELIVERY=proxy）はアプリが流す（閉域対応 U4）。
+    The public setup redirects 302 to a signed URL; the closed network (ASSET_DELIVERY=proxy) has the app stream it.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -1115,8 +1177,8 @@ async def get_persona_avatar(request: Request, persona_id: str) -> Any:
             return Response(status_code=404)
         logger.error("Persona avatar delivery error", exc_info=True)
         return Response(status_code=500)
-    # 署名付きURLの有効期限より十分短くキャッシュさせる（期限切れURLへの誘導を防ぐ）。
-    # 流すときも同じ指定にする（BR4.3）
+    # Cache for well under the signed URL's validity (avoids leading to an expired URL).
+    # Use the same setting when streaming
     return asset_response(result, cache_control="private, max-age=300")
 
 
@@ -1129,10 +1191,10 @@ async def get_persona_list_partial(
     append: bool = False,
     tab: Optional[str] = None,
 ) -> Any:
-    """ペルソナ一覧パーシャル（htmx対応・カーソル型ページング）。
+    """Persona list partial (htmx supported, cursor paging).
 
-    append=True は「もっと見る」で追加読込する差分 HTML を返す（既存の
-    グリッドに追記 + hx-swap-oob で次ボタンを差し替え）。
+    append=True returns the diff HTML loaded additionally by "show more" (appended to the existing
+    grid + the next button is replaced with hx-swap-oob).
     """
     try:
         persona_manager = get_persona_manager()
@@ -1191,9 +1253,9 @@ async def get_persona_list_partial(
 MEMORIES_PER_PAGE = 10
 
 
-# 記憶の 5 つの入口は、管理できないペルソナ（共有されただけの人・無関係の人）に
-# ないものと同じ 404 を返す（BR4.1、AC4.2.4）。PersonaMemoryManagerError のうち
-# NOT_FOUND は PERSONA_NOT_FOUND だけなので、種類で見て共通の例外ハンドラへ渡す。
+# The five memory entry points return the same 404 as for nonexistent to personas that cannot be managed
+# (only shared or unrelated users). Among PersonaMemoryManagerError, only
+# PERSONA_NOT_FOUND is NOT_FOUND, so look at the kind and hand it to the shared exception handler.
 
 
 @router.get("/{persona_id}/memories", response_class=HTMLResponse)
@@ -1201,19 +1263,12 @@ async def get_persona_memories(
     request: Request, persona_id: str, page: int = 1, strategy_type: str = "summary"
 ) -> Any:
     """
-    ペルソナの長期記憶一覧を取得（htmx対応）
+    Get the persona's long-term memory list (htmx supported)
 
     Args:
-        persona_id: ペルソナID
-        page: ページ番号
-        strategy_type: 戦略タイプ（"summary" または "semantic"）
-
-    Requirements:
-        - 7.1: ペルソナ詳細画面で長期記憶セクションを表示
-        - 7.2: タイムスタンプと内容サマリーを表示
-        - 7.3: 記憶がない場合は適切なメッセージを表示
-        - 7.4: ページネーションをサポート
-        - 10.3: エラー時にユーザーにエラーメッセージを表示
+        persona_id: Persona ID
+        page: Page number
+        strategy_type: Strategy type ("summary" or "semantic")
     """
     try:
         memory_manager = get_persona_memory_manager()
@@ -1242,7 +1297,7 @@ async def get_persona_memories(
 
     except PersonaMemoryManagerError as e:
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
-            raise  # 管理できない・ないペルソナは同じ 404（BR4.1）
+            raise  # Unmanageable/nonexistent personas give the same 404
         logger.warning("Memory error for persona %s", persona_id, exc_info=True)
         return templates.TemplateResponse(
             request,
@@ -1257,7 +1312,7 @@ async def get_persona_memories(
         )
 
     except CodedError:
-        # 判定の読み取りの失敗（503）などは共通の例外ハンドラに任せる（R-05）
+        # Failures reading the decision data (503) and the like are left to the shared exception handler
         raise
 
     except Exception as e:
@@ -1282,7 +1337,7 @@ async def get_persona_memories(
 async def delete_persona_memory(
     request: Request, persona_id: str, memory_id: str
 ) -> Any:
-    """ペルソナの特定の記憶を削除（htmx対応）"""
+    """Delete a specific memory of the persona (htmx supported)."""
     memory_manager = get_persona_memory_manager()
     try:
         success = await _run(
@@ -1309,13 +1364,13 @@ async def delete_persona_memory(
 
     except PersonaMemoryManagerError as e:
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
-            raise  # 管理できない・ないペルソナは同じ 404（BR4.1）
+            raise  # Unmanageable/nonexistent personas give the same 404
         logger.warning("Memory error deleting memory %s", memory_id, exc_info=True)
-        # 削除の hx-swap は outerHTML で、失敗時にエラーカードが記憶アイテム
-        # そのものを置換する。再試行で解決しうるエラー（サービス障害・タイム
-        # アウト）ではその記憶はまだ存在するため、アイテムを消してしまうと
-        # 一覧の状態が実データと食い違い、再試行の導線も失われる。TRANSIENT は
-        # DOMを書き換えずトーストで通知する（#117）
+        # The delete's hx-swap is outerHTML, and on failure the error card replaces the memory item
+        # itself. For errors a retry can fix (service failure, timeout)
+        # the memory still exists, so removing the item would make the list state diverge
+        # from the real data and lose the retry path. TRANSIENT is notified with a toast
+        # without rewriting the DOM (#117)
         if is_transient(e):
             return toast_response(e)
         return mark_renderable(
@@ -1332,12 +1387,12 @@ async def delete_persona_memory(
         )
 
     except CodedError:
-        # 判定の読み取りの失敗（503）などは共通の例外ハンドラに任せる（R-05）
+        # Failures reading the decision data (503) and the like are left to the shared exception handler
         raise
 
     except Exception as e:
-        # 削除に失敗した記憶はまだ存在するため、アイテムをエラー表示で
-        # 置換せずトーストで通知する（一覧の状態と実データを一致させる）
+        # A memory that failed to delete still exists, so notify with a toast instead of
+        # replacing the item with an error display (keeps the list state matching the real data)
         logger.error("Error deleting memory %s", memory_id, exc_info=True)
         return toast_response(
             e,
@@ -1350,7 +1405,7 @@ async def delete_persona_memory(
 async def delete_all_persona_memories(
     request: Request, persona_id: str, strategy_type: str = "summary"
 ) -> Any:
-    """ペルソナの全記憶を削除（htmx対応）"""
+    """Delete all memories of the persona (htmx supported)."""
     memory_manager = get_persona_memory_manager()
     principal = _principal(request)
     try:
@@ -1377,7 +1432,7 @@ async def delete_all_persona_memories(
 
     except PersonaMemoryManagerError as e:
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
-            raise  # 管理できない・ないペルソナは同じ 404（BR4.1）
+            raise  # Unmanageable/nonexistent personas give the same 404
         error_msg = user_message_for(
             e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
@@ -1404,7 +1459,7 @@ async def delete_all_persona_memories(
         )
 
     except CodedError:
-        # 判定の読み取りの失敗（503）などは共通の例外ハンドラに任せる（R-05）
+        # Failures reading the decision data (503) and the like are left to the shared exception handler
         raise
 
     except Exception as e:
@@ -1442,7 +1497,7 @@ async def add_persona_memory(
     topic_content: str = Form(...),
     strategy_type: str = Form(default="semantic"),
 ) -> Any:
-    """ペルソナに手動で知識を追加（htmx対応）"""
+    """Manually add knowledge to the persona (htmx supported)."""
     principal = _principal(request)
     try:
         memory_manager = get_persona_memory_manager()
@@ -1456,7 +1511,7 @@ async def add_persona_memory(
         )
 
         topic_name_clean = topic_name.strip()
-        # 題名は記憶の中身の一部のためログに出さない（NFR3.11）
+        # The title is part of the memory content, so it is not logged
         logger.info(f"Manual knowledge added for persona {persona_id}")
 
         memories, current_page, total_pages = await _run(
@@ -1484,19 +1539,19 @@ async def add_persona_memory(
 
     except PersonaMemoryManagerError as e:
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
-            raise  # 管理できない・ないペルソナは同じ 404（BR4.1）
+            raise  # Unmanageable/nonexistent personas give the same 404
         logger.warning(
             "Memory error adding knowledge for persona %s", persona_id, exc_info=True
         )
         if is_transient(e):
-            # 入力フォームを含む記憶一覧を置換せず、入力内容を保持する
+            # Do not replace the memory list that contains the input form; keep the input
             return toast_response(e)
-        # 入力を直せば解決するエラーは、フォーム内の専用領域だけを差し替える。
-        # hx-target（記憶一覧）を置換すると Alpine の showForm が false に戻って
-        # 入力欄が閉じ、入力内容も失われる（Issue #117）。
-        # find 相対セレクタで送信元フォーム内の領域を指す。手動入力タブと
-        # ファイルプレビューが同時にDOM上へ存在するため、絶対 id では別フォーム
-        # 側の領域が選ばれてエラーが見えなくなる。
+        # Errors the user can fix by correcting input replace only the dedicated area inside the form.
+        # Replacing hx-target (the memory list) makes Alpine's showForm go back to false,
+        # closing the input fields and losing the input (Issue #117).
+        # Point at the area inside the originating form with a find-relative selector. The manual-input tab and
+        # the file preview both exist in the DOM at once, so an absolute id would pick the area of the other
+        # form and the error would not be visible.
         response = mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1516,7 +1571,7 @@ async def add_persona_memory(
         return toast_response(e, status_code=503)
 
     except CodedError:
-        # 判定の読み取りの失敗（503）などは共通の例外ハンドラに任せる（R-05）
+        # Failures reading the decision data (503) and the like are left to the shared exception handler
         raise
 
     except Exception as e:
@@ -1533,38 +1588,38 @@ async def upload_knowledge_file_preview(
     request: Request, persona_id: str, file: UploadFile = File(...)
 ) -> Any:
     """
-    知識ファイルをアップロードしてプレビュー表示（htmx対応）
+    Upload a knowledge file and show a preview (htmx supported)
 
-    管理できる人だけ（BR4.1）。ファイルはこの要求の中で変換するだけで保存しない（BR5.9）。
+    Users who can manage only. The file is only converted within this request and not stored.
 
     Args:
-        persona_id: ペルソナID
-        file: アップロードされたファイル
+        persona_id: Persona ID
+        file: Uploaded file
     """
     try:
-        # 変換の前に判定する（共有された人・読めない人は 404）
+        # Check before converting (shared and unreadable users get 404)
         await _run(
             get_persona_memory_manager().ensure_memory_manageable,
             _principal(request),
             persona_id,
         )
 
-        # ファイル内容を読み込み
+        # Read the file contents
         file_content = await file.read()
 
-        # FileManagerで変換
+        # Convert with FileManager
         file_manager = get_file_manager()
-        # 変換（PDF 等の読み取り）も重いのでスレッドで行う
+        # Conversion (reading PDFs etc.) is heavy too, so do it in a thread
         markdown_content = await _run(
             file_manager.convert_file_to_markdown,
             file_content,
             file.filename,  # type: ignore[arg-type]
         )
 
-        # 1 つの知識の上限は手入力と同じ（判定は Manager。文字数を見るだけ）
+        # One piece of knowledge has the same limit as manual input (the Manager decides; this only looks at the character count)
         get_persona_memory_manager().check_knowledge_file_content(markdown_content)
 
-        # ファイル名から拡張子を除去してトピック名を生成
+        # Build the topic name by removing the extension from the file name
         topic_name = Path(file.filename).stem  # type: ignore[arg-type]
 
         logger.info(
@@ -1606,7 +1661,7 @@ async def upload_knowledge_file_preview(
 
     except PersonaMemoryManagerError as e:
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
-            raise  # 管理できない・ないペルソナは同じ 404（BR4.1）
+            raise  # Unmanageable/nonexistent personas give the same 404
         logger.warning("Knowledge preview rejected", exc_info=True)
         return templates.TemplateResponse(
             request,
@@ -1615,7 +1670,7 @@ async def upload_knowledge_file_preview(
         )
 
     except CodedError:
-        # 照合の障害（503）などは共通の例外ハンドラに任せる
+        # Lookup failures (503) and the like are left to the shared exception handler
         raise
 
     except Exception as e:
@@ -1636,14 +1691,14 @@ async def upload_knowledge_file_preview(
         )
 
 
-# ナレッジベース紐付け関連エンドポイント
+# Knowledge base binding endpoints
 
 
 @router.get("/{persona_id}/kb-binding", response_class=HTMLResponse)
 async def get_kb_binding(request: Request, persona_id: str) -> Any:
-    """ペルソナのナレッジベース紐付けを出す。読める人だけ、操作は管理できる人だけ（BR2.1）
+    """Show the persona's knowledge base binding. Readable users only; actions only for those who can manage.
 
-    読めない・存在しない（404）は共通の例外ハンドラが答える。
+    Unreadable/nonexistent (404) is answered by the shared exception handler.
     """
     view = await _run(
         get_persona_manager().get_kb_binding, _principal(request), persona_id
@@ -1662,9 +1717,9 @@ async def create_kb_binding(
     kb_id: str = Form(...),
     metadata_filters_json: str = Form(default="{}"),
 ) -> Any:
-    """ナレッジベース紐付けを作成（既存があれば上書き、BR2.9）。
+    """Create a knowledge base binding (overwrites an existing one).
 
-    管理できない（403）、読めない・使えない KB（404）は共通の例外ハンドラが答える。
+    Unmanageable (403) and unreadable/unusable KBs (404) are answered by the shared exception handler.
     """
     try:
         metadata_filters = (
@@ -1687,17 +1742,17 @@ async def create_kb_binding(
 
 @router.delete("/{persona_id}/kb-binding", response_class=HTMLResponse)
 async def delete_kb_binding(request: Request, persona_id: str) -> Any:
-    """ナレッジベース紐付けを解除する（BR2.2、BR2.5）。KB は 1 つなので ID を取らない"""
+    """Remove the knowledge base binding. There is only one KB, so no ID is taken."""
     await _run(get_persona_manager().delete_kb_binding, _principal(request), persona_id)
     return await get_kb_binding(request, persona_id)
 
 
-# データセット紐付け関連エンドポイント
+# Dataset binding endpoints
 
 
 @router.get("/{persona_id}/dataset-bindings", response_class=HTMLResponse)
 async def get_dataset_bindings(request: Request, persona_id: str) -> Any:
-    """ペルソナのデータセット紐付けを出す。読める人だけ、操作は管理できる人だけ（BR2.1）"""
+    """Show the persona's dataset bindings. Readable users only; actions only for those who can manage."""
     view = await _run(
         get_persona_manager().get_dataset_bindings, _principal(request), persona_id
     )
@@ -1716,10 +1771,10 @@ async def create_dataset_binding(
     key_name: str = Form(default=""),
     key_value: str = Form(default=""),
 ) -> Any:
-    """データセット紐付けを作成（BR2.2〜BR2.4）。
+    """Create a dataset binding.
 
-    管理できない（403）・読めない（404）は共通の例外ハンドラが答える。データセットが
-    使えない・列がないときは、ダイアログ内の専用領域に文言を出す。
+    Unmanageable (403) and unreadable (404) are answered by the shared exception handler. When the dataset
+    is unusable or a column is missing, the wording is shown in a dedicated area inside the dialog.
     """
     try:
         await _run(
@@ -1750,7 +1805,7 @@ async def create_dataset_binding(
 async def delete_dataset_binding(
     request: Request, persona_id: str, dataset_id: str
 ) -> Any:
-    """データセット紐付けを削除する（BR2.2、BR2.5）。専用のデータセットは一緒に消える（BR6.4）"""
+    """Remove a dataset binding. A dedicated dataset is removed with it."""
     await _run(
         get_persona_manager().delete_dataset_binding,
         _principal(request),
@@ -1784,10 +1839,10 @@ def _preview_error(request: Request, message: str) -> Any:
 async def preview_dataset_binding(
     request: Request, persona_id: str, dataset_id: str
 ) -> Any:
-    """紐付けデータセットのプレビュー表示（BR2.6）。
+    """Preview of the bound datasets.
 
-    ペルソナを読めなければ 404（共通の例外ハンドラ）。紐付けがない・使えない組織資産は
-    行を出さずに文言だけを出す。
+    If the persona is unreadable, 404 (shared exception handler). An organization asset that has no binding or is unusable
+    shows only wording, with no row.
     """
     try:
         data = await _run(
@@ -1805,7 +1860,7 @@ async def preview_dataset_binding(
         logger.warning("Dataset preview error", exc_info=True)
         return _preview_error(request, user_message_for(e, default=_PREVIEW_FAILED))
     except CodedError:
-        # 読めない（404）・照合の障害（503）は共通の例外ハンドラが答える
+        # Unreadable (404) and lookup failures (503) are answered by the shared exception handler
         raise
     except Exception as e:
         logger.error("Dataset preview error", exc_info=True)
@@ -1814,10 +1869,10 @@ async def preview_dataset_binding(
 
 @router.get("/{persona_id}/export")
 async def export_persona(request: Request, persona_id: str) -> Any:
-    """ペルソナを Markdown でダウンロードさせる。読める人すべて（BR7.1、AC4.1.2）。
+    """Download a persona as Markdown. All readable users.
 
-    読めない・存在しない（404）は共通の例外ハンドラが答える。日本語のファイル名は
-    RFC 5987 の ``filename*`` で渡し、``filename`` には ASCII の代わりの名前を置く。
+    Unreadable/nonexistent (404) is answered by the shared exception handler. A Japanese file name is
+    passed as RFC 5987 ``filename*``, and ``filename`` holds an ASCII substitute name.
     """
     export = await _run(
         get_persona_manager().export_persona, _principal(request), persona_id
@@ -1834,10 +1889,10 @@ async def export_persona(request: Request, persona_id: str) -> Any:
 
 @router.post("/save-selected", response_class=HTMLResponse)
 async def save_selected_personas(request: Request, persona_ids: str = Form(...)) -> Any:
-    """選択された複数の候補を保存する（htmx対応、WF2、BR1.9）。
+    """Save several selected candidates (htmx supported).
 
-    押さえ → 保存 → 片付けを 1 つのスレッドで順に呼ぶ。1 件でも押さえられなければ何も保存しない。
-    保存できた件数と、保存できなかった候補の名前を出す。
+    Hold -> save -> clean up are called in order in one thread. If even one cannot be held, nothing is saved.
+    Shows the number saved and the names of the candidates that could not be saved.
     """
     principal = _principal(request)
     try:
@@ -1856,13 +1911,13 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
         )
 
     except CodedError as e:
-        # 押さえられない（他人・期限切れ・保存中）は 404、未選択は 400 のトースト。
-        # 候補一覧と選択状態は画面に残す
+        # Candidates that cannot be held (someone else's, expired, being saved) give 404; no selection gives a 400 toast.
+        # The candidate list and selection state stay on screen
         logger.warning("Saving selected personas failed", exc_info=True)
         return toast_response(e, status_code=http_status_for(e.code))
     except Exception as e:
-        # 再試行で解決しうるエラーは候補一覧を消さずトーストで通知する
-        # （選択状態を保ったまま保存し直せるようにする）
+        # Errors that a retry can fix are shown as a toast without clearing the candidate list
+        # (so the user can save again with the selection kept)
         logger.error("Unexpected error saving personas", exc_info=True)
         return toast_response(
             e, default="ペルソナの保存中にエラーが発生しました", status_code=500

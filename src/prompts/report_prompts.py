@@ -1,4 +1,4 @@
-"""レポート生成プロンプトテンプレート。"""
+"""Prompt templates for report generation."""
 
 from typing import Optional
 
@@ -6,7 +6,7 @@ from typing import Optional
 def build_report_system_prompt(
     topic: str, template_type: str, custom_prompt: Optional[str] = None
 ) -> str:
-    """レポート生成用システムプロンプトを構築する。"""
+    """Build the system prompt for report generation."""
     base = (
         f"あなたは定性調査の分析専門家です。"
         f"以下の議論・インタビューデータ（トピック: {topic}）を分析し、"
@@ -55,7 +55,7 @@ def build_report_system_prompt(
 def build_data_driven_system_prompt(
     topic: str, custom_prompt: Optional[str] = None
 ) -> str:
-    """データドリブン分析レポート用システムプロンプトを構築する。"""
+    """Build the system prompt for data-driven analysis reports."""
     prompt = (
         f"あなたは定性調査 × 実データ分析の専門家です。\n"
         f"議論トピック「{topic}」について、定性インタビューで得られたインサイトを\n"
@@ -96,7 +96,7 @@ def build_data_driven_system_prompt(
 def build_data_driven_followup_system_prompt(
     topic: str, custom_prompt: Optional[str] = None
 ) -> str:
-    """フォローアップ分析用システムプロンプトを構築する。"""
+    """Build the system prompt for follow-up analysis."""
     prompt = (
         f"あなたは定性調査 × 実データ分析の専門家です。\n"
         f"議論トピック「{topic}」について、前回の分析セッションの続きとして追加分析を行います。\n\n"

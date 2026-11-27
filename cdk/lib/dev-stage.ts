@@ -4,28 +4,28 @@ import { AppParameter, closedDevParameter, devParameter } from '../parameters';
 import { AIPersonaStage } from './ai-persona-stage';
 import { closedStageRequested, mergeClosedStageContext } from './deployment-profile';
 
-/** 閉域の Stage の ID（U1 閉域）。公開の AIPersonaDev と並べて置く。 */
+/** ID of the closed Stage. It sits alongside the public AIPersonaDev. */
 export const CLOSED_DEV_STAGE_ID = 'AIPersonaDevClosed';
 
-/** 閉域の Stage の組み立てで上書きできる値。 */
+/** Values that can be overridden when building the closed Stage. */
 export interface ClosedDevStageOverrides {
-  /** デプロイ先のアカウント。省略時は closedDevParameter.env.account（CDK_DEFAULT_ACCOUNT）。 */
+  /** Target account. Defaults to closedDevParameter.env.account (CDK_DEFAULT_ACCOUNT). */
   account?: string;
 }
 
-/** Stage AIPersonaDev の組み立てで上書きできる値（テストで 2 通りの構成を作る）。 */
+/** Values that can be overridden when building Stage AIPersonaDev (tests build two configurations). */
 export interface DevStageOverrides {
-  /** デプロイ先のアカウント。省略時は devParameter.env.account（CDK_DEFAULT_ACCOUNT）。 */
+  /** Target account. Defaults to devParameter.env.account (CDK_DEFAULT_ACCOUNT). */
   account?: string;
   enableAdditionalPersonaModels?: AppParameter['enableAdditionalPersonaModels'];
   enableWaf?: AppParameter['enableWaf'];
 }
 
 /**
- * Stage AIPersonaDev（Data・App・Edge）を作る（U9、NFR7.15）。
+ * Creates Stage AIPersonaDev (Data, App, Edge).
  *
- * bin/app.ts とテストが同じ組み立てを通るように lib/ に置く。devParameter は書き換えず、
- * overrides を重ねた写しを渡す。
+ * Lives in lib/ so bin/app.ts and the tests share the same assembly. devParameter is not mutated;
+ * a copy with overrides layered on top is passed.
  */
 export function createDevStage(app: App, overrides: DevStageOverrides = {}): AIPersonaStage {
   const { account, enableAdditionalPersonaModels, enableWaf } = overrides;
@@ -38,13 +38,12 @@ export function createDevStage(app: App, overrides: DevStageOverrides = {}): AIP
 }
 
 /**
- * 閉域の Stage AIPersonaDevClosed（Data・App）を、閉域のパラメータがあるときだけ作る
- * （U1 閉域、ADR-001、BR1.1、security-design.md §1）。
+ * Creates the closed Stage AIPersonaDevClosed (Data, App) only when closed parameters are present.
  *
- * closedDevParameter の閉域の既定に、コンテキストの closedCertificateArn・closedDomainName・
- * closedAllowedCidrs・closedCreateTestEnvironment・closedVpcCidr を重ねる。証明書の ARN と FQDN の
- * 両方がなければ何もせずに undefined を返す（CI の synth と deploy.sh --closed なしは今と同じ）。
- * 片方だけならエラー。bin/app.ts は applyNagChecks の前に呼ぶ。
+ * Layers the context values closedCertificateArn, closedDomainName, closedAllowedCidrs,
+ * closedCreateTestEnvironment and closedVpcCidr onto the closed defaults of closedDevParameter.
+ * Returns undefined without doing anything unless both the certificate ARN and FQDN are given (so CI synth and
+ * deploy.sh without --closed behave as before). Giving only one is an error. bin/app.ts calls it before applyNagChecks.
  */
 export function createClosedDevStage(
   app: App,
@@ -67,12 +66,12 @@ export function createClosedDevStage(
 }
 
 /**
- * cdk-nag の AwsSolutions を App 全体（Stage の中のスタックを含む）に掛ける（NFR7.15、Q1 A）。
+ * Applies cdk-nag AwsSolutions to the whole App (including stacks inside Stages).
  *
- * 呼ぶのは bin/app.ts と test/cdk-nag.test.ts だけで、Stage を作った後に呼ぶ。抑止
- * （acknowledge）はリソースのそばに置き、template の Metadata（cdk_nag.rules_to_suppress）
- * にも書く（監査のため）。writeSuppressionsToCloudFormation が App に足す Aspect は Stage の
- * 境界を越えないため、同じ Aspect を各 Stage にも足す。
+ * Called only from bin/app.ts and test/cdk-nag.test.ts, after the Stage is created. Suppressions
+ * (acknowledge) sit next to the resources and are also written to the template Metadata (cdk_nag.rules_to_suppress)
+ * for audit. The Aspect that writeSuppressionsToCloudFormation adds to the App does not cross the Stage
+ * boundary, so the same Aspect is added to each Stage as well.
  */
 export function applyNagChecks(app: App): void {
   const stages = app.node.children.filter((child): child is Stage => Stage.isStage(child));

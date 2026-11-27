@@ -1,4 +1,4 @@
-"""Real U6 Managers behind the routers, on the fakes of tests/unit/discussion_world.py.
+"""Real Managers behind the routers, on the fakes of tests/unit/discussion_world.py.
 
 The API tests sign the client in as :data:`ME` (``MEMBER_A``, in ``sales``)
 and patch the routers' ``get_*_manager`` functions with Managers wired to one

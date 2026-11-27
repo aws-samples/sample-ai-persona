@@ -5,7 +5,7 @@ uvicorn's access log prints the full URL including the query string, which
 for ``/auth/callback?code=...&state=...`` would put the authorization code and
 state into CloudWatch Logs. uvicorn runs with ``--no-access-log`` and this
 middleware writes one JSON line per request instead: method, path *without*
-the query, status code and duration (``security-design.md``, NFR3.3).
+the query, status code and duration.
 """
 
 import time

@@ -1,9 +1,9 @@
 """
 Retrieve-Only Session Manager for AgentCore Memory Integration
-検索のみモードのセッションマネージャー
+Session manager for retrieve-only mode
 
-AgentCoreMemorySessionManagerをラップし、保存機能を無効化して
-検索のみを行うセッションマネージャーを提供する。
+Wraps AgentCoreMemorySessionManager and provides a session manager that
+disables saving and only retrieves.
 """
 
 import logging
@@ -18,43 +18,43 @@ logger = logging.getLogger(__name__)
 
 class RetrieveOnlySessionManager:
     """
-    検索のみモードのセッションマネージャー
+    Session manager for retrieve-only mode
 
-    AgentCoreMemorySessionManagerをラップし、保存機能を無効化する。
-    LTMからの検索は行うが、会話内容をSTM/LTMに保存しない。
+    Wraps AgentCoreMemorySessionManager and disables saving.
+    It retrieves from LTM but does not save the conversation to STM/LTM.
 
-    重要: AgentCore MemoryはSTMに保存すると自動的にLTMに抽出される仕組みのため、
-    検索のみモードではSTMへの保存（create_event）も無効化する必要がある。
+    Important: AgentCore Memory automatically extracts STM into LTM, so
+    retrieve-only mode must also disable saving to STM (create_event).
 
-    Strands Agent SDKでは、Agentにsession_managerを渡すと、
-    hooks.add_hook(session_manager)が呼び出され、register_hooksで
-    登録されたメソッドがイベントハンドラとして使用される。
+    In the Strands Agent SDK, passing a session_manager to an Agent calls
+    hooks.add_hook(session_manager), and the methods registered in
+    register_hooks are used as event handlers.
 
-    このクラスでは、register_hooksで自分自身のメソッドを登録することで、
-    ベースマネージャーのappend_message（STM保存）ではなく、
-    このクラスのappend_message（何もしない）が呼び出されるようにする。
+    This class registers its own methods in register_hooks so that this class's
+    append_message (a no-op) is called instead of the base manager's
+    append_message (which saves to STM).
 
     Attributes:
-        _base_manager: ベースとなるAgentCoreMemorySessionManager
-        _actor_id: ペルソナID
-        _session_id: セッションID
+        _base_manager: The underlying AgentCoreMemorySessionManager
+        _actor_id: Persona ID
+        _session_id: Session ID
     """
 
     def __init__(self, base_manager: Any, actor_id: str, session_id: str):
         """
-        RetrieveOnlySessionManagerを初期化
+        Initialize RetrieveOnlySessionManager
 
         Args:
-            base_manager: ベースとなるAgentCoreMemorySessionManager
-            actor_id: ペルソナID
-            session_id: セッションID
+            base_manager: The underlying AgentCoreMemorySessionManager
+            actor_id: Persona ID
+            session_id: Session ID
         """
         self._base_manager = base_manager
         self._actor_id = actor_id
         self._session_id = session_id
         self._messages: List[
             Any
-        ] = []  # ローカルでメッセージを保持（検索コンテキスト用）
+        ] = []  # Keep messages locally (for the retrieval context)
 
         logger.info(
             f"Created RetrieveOnlySessionManager: actor_id={actor_id}, session_id={session_id}"
@@ -62,17 +62,17 @@ class RetrieveOnlySessionManager:
 
     def initialize(self, agent: "Agent", **kwargs: Any) -> None:
         """
-        エージェントを初期化
+        Initialize the agent
 
-        ベースマネージャーの初期化は呼び出さない。
-        register_hooksで必要なフックのみを登録する。
+        Does not call the base manager's initialization.
+        Only the needed hooks are registered via register_hooks.
 
         Args:
             agent: Strands Agent
-            **kwargs: 追加のキーワード引数
+            **kwargs: Extra keyword arguments
         """
-        # ベースマネージャーの初期化は呼び出さない
-        # （initializeがregister_hooksを呼び出す可能性があるため）
+        # Do not call the base manager's initialization
+        # (initialize may call register_hooks)
         logger.debug(
             f"RetrieveOnlySessionManager: Initialized for actor={self._actor_id} "
             "(retrieve-only mode, no base manager initialization)"
@@ -80,28 +80,28 @@ class RetrieveOnlySessionManager:
 
     def register_hooks(self, registry: Any, **kwargs: Any) -> None:
         """
-        フックを登録（LTM検索のフックのみ登録、保存フックは登録しない）
+        Register hooks (only the LTM retrieval hook; the save hook is not registered)
 
-        重要: ベースマネージャーのregister_hooksを呼び出すと、
-        ベースマネージャーのappend_messageがフックとして登録され、
-        STMに保存されてしまう。
+        Important: calling the base manager's register_hooks would register the
+        base manager's append_message as a hook,
+        which would save to STM.
 
-        このメソッドでは、自分自身のメソッドを直接登録することで、
-        保存を無効化しつつLTM検索のみを有効にする。
+        By registering this class's own methods directly,
+        saving is disabled and only LTM retrieval is enabled.
 
         Args:
             registry: HookRegistry
-            **kwargs: 追加のキーワード引数
+            **kwargs: Extra keyword arguments
         """
         try:
             from strands.hooks import MessageAddedEvent
 
-            # LTM検索のフックを登録（retrieve_customer_context）
-            # MessageAddedEventに対してretrieve_customer_contextを登録
+            # Register the LTM retrieval hook (retrieve_customer_context)
+            # Register retrieve_customer_context for MessageAddedEvent
             registry.add_callback(MessageAddedEvent, self.retrieve_customer_context)
 
-            # 注意: append_messageは登録しない（STM保存を無効化）
-            # ベースマネージャーのregister_hooksは呼び出さない
+            # Note: append_message is not registered (disables STM saving)
+            # Do not call the base manager's register_hooks
 
             logger.debug(
                 f"RetrieveOnlySessionManager: Registered retrieve_customer_context hook "
@@ -117,20 +117,20 @@ class RetrieveOnlySessionManager:
 
     def append_message(self, message: "Message", agent: "Agent", **kwargs: Any) -> None:
         """
-        メッセージを追加（検索のみモードではSTMに保存しない）
+        Add a message (not saved to STM in retrieve-only mode)
 
-        重要: AgentCore MemoryはSTMに保存すると自動的にLTMに抽出されるため、
-        検索のみモードではcreate_eventを呼び出さない。
+        Important: AgentCore Memory automatically extracts STM into LTM, so
+        create_event is not called in retrieve-only mode.
 
-        このメソッドはregister_hooksで登録されないため、通常は呼び出されない。
-        互換性のために残している。
+        This method is not registered via register_hooks, so it is normally not called.
+        It is kept for compatibility.
 
         Args:
-            message: 追加するメッセージ
+            message: Message to add
             agent: Strands Agent
-            **kwargs: 追加のキーワード引数
+            **kwargs: Extra keyword arguments
         """
-        # STMへの保存をスキップ（create_eventを呼び出さない）
+        # Skip saving to STM (do not call create_event)
         logger.debug(
             f"RetrieveOnlySessionManager: append_message called but skipped "
             f"(retrieve-only mode) for actor={self._actor_id}"
@@ -138,14 +138,14 @@ class RetrieveOnlySessionManager:
 
     def create_session(self, session: Any, **kwargs: Any) -> Any:
         """
-        セッションを作成（検索のみモードでは何もしない）
+        Create a session (no-op in retrieve-only mode)
 
         Args:
-            session: セッションオブジェクト
-            **kwargs: 追加のキーワード引数
+            session: Session object
+            **kwargs: Extra keyword arguments
 
         Returns:
-            セッションオブジェクト（変更なし）
+            Session object (unchanged)
         """
         logger.debug(
             f"RetrieveOnlySessionManager: create_session called but skipped "
@@ -155,12 +155,12 @@ class RetrieveOnlySessionManager:
 
     def create_agent(self, session_id: str, session_agent: Any, **kwargs: Any) -> None:
         """
-        エージェントを作成（検索のみモードでは何もしない）
+        Create an agent (no-op in retrieve-only mode)
 
         Args:
-            session_id: セッションID
-            session_agent: セッションエージェント
-            **kwargs: 追加のキーワード引数
+            session_id: Session ID
+            session_agent: Session agent
+            **kwargs: Extra keyword arguments
         """
         logger.debug(
             f"RetrieveOnlySessionManager: create_agent called but skipped "
@@ -171,16 +171,16 @@ class RetrieveOnlySessionManager:
         self, session_id: str, agent_id: str, session_message: Any, **kwargs: Any
     ) -> Optional[dict]:
         """
-        メッセージを作成（検索のみモードでは何もしない）
+        Create a message (no-op in retrieve-only mode)
 
         Args:
-            session_id: セッションID
-            agent_id: エージェントID
-            session_message: セッションメッセージ
-            **kwargs: 追加のキーワード引数
+            session_id: Session ID
+            agent_id: Agent ID
+            session_message: Session message
+            **kwargs: Extra keyword arguments
 
         Returns:
-            None（保存しない）
+            None (nothing is saved)
         """
         logger.debug(
             f"RetrieveOnlySessionManager: create_message called but skipped "
@@ -190,7 +190,7 @@ class RetrieveOnlySessionManager:
 
     def retrieve_customer_context(self, event: Any) -> None:
         """
-        LTMからコンテキストを検索（ベースマネージャーに委譲）
+        Retrieve context from LTM (delegates to the base manager)
 
         Args:
             event: MessageAddedEvent
@@ -208,12 +208,12 @@ class RetrieveOnlySessionManager:
 
     def save(self, messages: List[Any]) -> None:
         """
-        メッセージを保存（検索のみモードでは何もしない）
+        Save messages (no-op in retrieve-only mode)
 
         Args:
-            messages: 保存するメッセージリスト（無視される）
+            messages: List of messages to save (ignored)
         """
-        # 検索のみモードでは保存しない
+        # Do not save in retrieve-only mode
         logger.debug(
             f"RetrieveOnlySessionManager: save called but skipped (retrieve-only mode) "
             f"for actor={self._actor_id}, message_count={len(messages)}"
@@ -221,16 +221,16 @@ class RetrieveOnlySessionManager:
 
     def get_messages(self) -> List[Any]:
         """
-        現在のメッセージリストを取得
+        Get the current message list
 
         Returns:
-            メッセージリスト
+            List of messages
         """
         return self._messages
 
     def clear(self) -> None:
         """
-        メッセージをクリア
+        Clear messages
         """
         self._messages = []
         logger.debug(
@@ -239,32 +239,32 @@ class RetrieveOnlySessionManager:
 
     @property
     def actor_id(self) -> str:
-        """ペルソナIDを取得"""
+        """Get the persona ID."""
         return self._actor_id
 
     @property
     def session_id(self) -> str:
-        """セッションIDを取得"""
+        """Get the session ID."""
         return self._session_id
 
     @property
     def config(self) -> Any:
-        """ベースマネージャーの設定を取得"""
+        """Get the base manager's config."""
         return self._base_manager.config
 
     @property
     def memory_client(self) -> Any:
-        """ベースマネージャーのメモリクライアントを取得"""
+        """Get the base manager's memory client."""
         return self._base_manager.memory_client
 
     def __getattr__(self, name: str) -> Any:
         """
-        未定義の属性はベースマネージャーに委譲
+        Delegate undefined attributes to the base manager
 
         Args:
-            name: 属性名
+            name: Attribute name
 
         Returns:
-            ベースマネージャーの属性
+            The base manager's attribute
         """
         return getattr(self._base_manager, name)

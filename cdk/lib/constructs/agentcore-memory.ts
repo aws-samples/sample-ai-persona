@@ -101,7 +101,7 @@ export class AgentCoreMemory extends Construct {
     Tags.of(this.memory).add('Environment', envName);
     Tags.of(this.memory).add('Application', 'AIPersona');
 
-    // Export memory ID and ARN（ARN は App スタックのタスクロールの文を絞るのに使う。U9）
+    // Export memory ID and ARN (the ARN narrows the App stack task role statements)
     this.memoryId = this.memory.attrMemoryId;
     this.memoryArn = this.memory.attrMemoryArn;
 

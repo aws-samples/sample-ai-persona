@@ -1,13 +1,12 @@
-"""
-User context and authorization types shared across layers (contracts C1, C3, C4).
+"""User context and authorization types shared across layers.
 
 ``AuthMiddleware`` builds a :class:`Principal` per request and stores it on
 ``request.state.principal``. Routers pass it to Managers as an argument;
 Managers never receive the request object.
 
-Authorization is always decided by :class:`Permission`, never by role names
-(ADR-005). :data:`ROLE_PERMISSIONS` is the only place that knows which role
-grants which permission (BR2.1). The decision itself lives in
+Authorization is always decided by :class:`Permission`, never by role names.
+:data:`ROLE_PERMISSIONS` is the only place that knows which role
+grants which permission. The decision itself lives in
 ``src/managers/components/access_policy.py``; this module only holds the data.
 """
 
@@ -35,7 +34,7 @@ class Permission(StrEnum):
     SETTINGS_MANAGE = "settings:manage"
 
 
-#: Role -> permissions. The single table of BR2.1; read-only at run time.
+#: Role -> permissions. The single source of truth; read-only at run time.
 ROLE_PERMISSIONS: Mapping[Role, frozenset[Permission]] = MappingProxyType(
     {
         Role.ADMIN: frozenset(Permission),
@@ -45,10 +44,10 @@ ROLE_PERMISSIONS: Mapping[Role, frozenset[Permission]] = MappingProxyType(
 
 
 def permissions_of(roles: Iterable[Role]) -> frozenset[Permission]:
-    """Return the union of the permissions of ``roles`` (BR2.1).
+    """Return the union of the permissions of ``roles``.
 
     No role, or only names that are not in :data:`ROLE_PERMISSIONS`, yields the
-    empty set, which allows nothing (FR1.7, NFR1.7).
+    empty set, which allows nothing.
     """
     granted: set[Permission] = set()
     for role in roles:
@@ -76,7 +75,7 @@ class Principal:
 
 
 class ResourceType(StrEnum):
-    """Kinds of resources that carry an owner or a usage scope (contract C1)."""
+    """Kinds of resources that carry an owner or a usage scope."""
 
     PERSONA = "persona"
     DISCUSSION = "discussion"
@@ -89,10 +88,10 @@ class ResourceType(StrEnum):
 
 @dataclass(frozen=True)
 class AccessTarget:
-    """What an authorization decision looks at, and nothing more (ADR-011).
+    """What an authorization decision looks at, and nothing more.
 
     Read by ``ResourceLookup`` and judged by ``AccessPolicy``. It never goes to
-    a response: Routers must not return it (NFR3.7).
+    a response: Routers must not return it.
 
     Attributes:
         resource_type: Kind of the resource.
@@ -114,15 +113,15 @@ class AccessTarget:
 
     @classmethod
     def missing(cls, resource_type: ResourceType, resource_id: str) -> "AccessTarget":
-        """A target for an ID that does not exist (never an exception, C3)."""
+        """A target for an ID that does not exist (never an exception)."""
         return cls(resource_type=resource_type, resource_id=resource_id, exists=False)
 
 
 @dataclass(frozen=True)
 class ExecutionContext:
-    """Who runs one persona's agent, and whether its memory is written (C1, C9).
+    """Who runs one persona's agent, and whether its memory is written.
 
-    Built per participant of a discussion or an interview (U6, BR6.1).
+    Built per participant of a discussion or an interview.
 
     Attributes:
         principal: The user running the agent.
@@ -139,7 +138,7 @@ class ExecutionContext:
     def for_persona(
         cls, principal: Principal, persona_target: AccessTarget
     ) -> "ExecutionContext":
-        """The context of ``principal`` running ``persona_target`` (BR6.1)."""
+        """The context of ``principal`` running ``persona_target``."""
         owner = persona_target.owner_sub
         return cls(
             principal=principal,
@@ -150,7 +149,7 @@ class ExecutionContext:
 
 @dataclass(frozen=True)
 class Department:
-    """A department, made from a Cognito ``group:`` group (ADR-009, C4).
+    """A department, made from a Cognito ``group:`` group.
 
     Attributes:
         group_id: Group name without the ``group:`` prefix.
@@ -162,10 +161,10 @@ class Department:
 
 
 class LookupReader(Protocol):
-    """How ``ResourceLookup`` reads one resource type (BR2.10, Q1).
+    """How ``ResourceLookup`` reads one resource type.
 
     Implemented in the Service layer (it talks to DynamoDB) and registered with
-    ``ResourceLookup`` once at start-up by the Unit that owns the table.
+    ``ResourceLookup`` once at start-up by the code that owns the table.
     """
 
     def read(self, ids: Sequence[str], deadline: float) -> dict[str, AccessTarget]:
