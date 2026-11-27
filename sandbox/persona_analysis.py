@@ -967,6 +967,10 @@ def cluster_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         }
         for index, label in enumerate(order)
     ]
+    _mark_twins(
+        {str(c["index"]): c["features"] for c in clusters},
+        _sample_twins(sample, columns),
+    )
     return {
         "k": k,
         "seed": seed,
@@ -2171,6 +2175,8 @@ def _profile_views(
     numeric = numeric[:_PROFILE_MAX_COLUMNS]
     categories = categories[:_PROFILE_MAX_COLUMNS]
     join = "FROM d JOIN a ON d.__pid = a.person_id"
+    # (feature name, its per-person value, whether it is of the assignment)
+    figures: List[Tuple[str, str, bool]] = []
 
     for chunk in _chunks(numeric, _PROFILE_CHUNK):
         cols = [_quote_ident(n) for n in chunk]
@@ -2191,6 +2197,7 @@ def _profile_views(
             mean_all, spread = overall[2 * index], overall[2 * index + 1]
             if mean_all is None:
                 continue
+            figures.append((_short(name), f"CAST(d.{cols[index]} AS DOUBLE)", False))
             for record in per_segment:
                 mean = record[1 + index]
                 if mean is not None:
@@ -2270,6 +2277,7 @@ def _profile_views(
         if overall_row[0] is None:
             continue
         derived += 1
+        figures.append((_short(name), f"CAST(a.{col} AS DOUBLE)", True))
         for key, mean in rows:
             if mean is not None and str(key) in out:
                 out[str(key)].append(
@@ -2281,7 +2289,143 @@ def _profile_views(
                         "spread": round(float(overall_row[1] or 0.0), 4),
                     }
                 )
+    _mark_twins(out, _counted_twins(con, out, figures))
     return out
+
+
+#: Two numbers whose per-person values correlate at least this much (either
+#: way) say the same thing: a column copied under another name, or a metric
+#: the code computed that the library counts too. Set high, so that two
+#: figures that merely go together (visits and spending) stay apart.
+_TWIN_CORRELATION = 0.995
+#: Pairs whose correlation is counted, those alike across segments first.
+_TWIN_MAX_PAIRS = 300
+#: Pairs whose differences from the whole are less alike across the segments
+#: (cosine) cannot be twins and are not counted.
+_TWIN_ALIKE = 0.9
+
+
+def _deviations(
+    out: Dict[str, List[Dict[str, Any]]], keys: List[str]
+) -> Dict[str, List[float]]:
+    """Each number's difference from the whole in each segment, in spreads."""
+    vectors: Dict[str, List[float]] = {}
+    for position, key in enumerate(keys):
+        for f in out[key]:
+            if f["kind"] == "share" or not f.get("spread"):
+                continue
+            vector = vectors.setdefault(f["name"], [0.0] * len(keys))
+            vector[position] = (f["value"] - f["baseline"]) / f["spread"]
+    return vectors
+
+
+def _alike(a: List[float], b: List[float]) -> float:
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return abs(sum(x * y for x, y in zip(a, b))) / norm if norm else 0.0
+
+
+def _twin_groups(pairs: List[Tuple[str, str]], order: List[str]) -> Dict[str, str]:
+    """Name -> the first name of its group, for groups of two or more."""
+    parent = {name: name for name in order}
+
+    def root(name: str) -> str:
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    for a, b in pairs:
+        ra, rb = root(a), root(b)
+        if ra != rb:
+            first, second = sorted((ra, rb), key=order.index)
+            parent[second] = first
+    grouped: Dict[str, List[str]] = {}
+    for name in order:
+        grouped.setdefault(root(name), []).append(name)
+    return {
+        name: group
+        for group, names in grouped.items()
+        if len(names) > 1
+        for name in names
+    }
+
+
+def _mark_twins(out: Dict[str, List[Dict[str, Any]]], twins: Dict[str, str]) -> None:
+    """Put ``twin`` (the group's first name) on each feature of a group; the
+    app shows one feature of a group."""
+    for features in out.values():
+        for f in features:
+            if f["kind"] != "share" and f["name"] in twins:
+                f["twin"] = twins[f["name"]]
+
+
+def _counted_twins(
+    con: Any,
+    out: Dict[str, List[Dict[str, Any]]],
+    figures: List[Tuple[str, str, bool]],
+) -> Dict[str, str]:
+    """The twins among the numbers of :func:`_profile_views`.
+
+    The correlation is counted over the rows of ``d`` (one per person but in
+    :func:`profile_segments`), or over the people of ``a`` for a metric of the
+    code. The twins only tidy the features, so a failure gives none (but an
+    interruption or a lack of memory goes on up).
+    """
+    vectors = _deviations(out, sorted(out))
+    known = [f for f in figures if f[0] in vectors]
+    order = [f[0] for f in known]
+    pairs: List[Tuple[float, Tuple[str, str, bool], Tuple[str, str, bool]]] = []
+    for i, first in enumerate(known):
+        for second in known[i + 1 :]:
+            score = _alike(vectors[first[0]], vectors[second[0]])
+            if score >= _TWIN_ALIKE:
+                pairs.append((score, first, second))
+    pairs.sort(key=lambda p: -p[0])
+    pairs = pairs[:_TWIN_MAX_PAIRS]
+    same: List[Tuple[str, str]] = []
+    try:
+        for joined in (False, True):
+            chosen = [p for p in pairs if (p[1][2] or p[2][2]) == joined]
+            source = "FROM d JOIN a ON d.__pid = a.person_id" if joined else "FROM d"
+            for chunk in _chunks(chosen, _PROFILE_CHUNK):
+                row = con.execute(
+                    "SELECT "
+                    + ", ".join(f"corr({p[1][1]}, {p[2][1]})" for p in chunk)
+                    + f" {source}"
+                ).fetchone()
+                same += [
+                    (p[1][0], p[2][0])
+                    for p, r in zip(chunk, row)
+                    if r is not None and abs(float(r)) >= _TWIN_CORRELATION
+                ]
+    except Exception as e:  # noqa: BLE001 - twins only tidy the features
+        if _is_out_of_memory(e) or "Interrupt" in type(e).__name__:
+            raise
+        return {}
+    return _twin_groups(same, order)
+
+
+def _sample_twins(
+    sample: Dict[str, List[Any]], columns: List[Tuple[str, bool]]
+) -> Dict[str, str]:
+    """The twins among the numeric columns of a clustering, on its sample."""
+    import numpy as np
+
+    names = [name for name, numeric in columns if numeric]
+    arrays = {
+        n: np.array([np.nan if v is None else float(v) for v in sample[n]])
+        for n in names
+    }
+    pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1 :]]
+    same: List[Tuple[str, str]] = []
+    for a, b in pairs[:_TWIN_MAX_PAIRS]:
+        both = np.isfinite(arrays[a]) & np.isfinite(arrays[b])
+        x, y = arrays[a][both], arrays[b][both]
+        if len(x) < 3 or not x.std() or not y.std():
+            continue
+        if abs(float(np.corrcoef(x, y)[0, 1])) >= _TWIN_CORRELATION:
+            same.append((a, b))
+    return _twin_groups(same, names)
 
 
 def _confirmed_people(value: Any) -> Dict[str, Tuple[str, frozenset]]:

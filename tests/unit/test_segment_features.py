@@ -325,3 +325,51 @@ class TestMalformedSpec:
         [settled] = settle_features([segment], runs={}, outputs={})
 
         assert settled.features == ()
+
+
+def _twin(feature: dict[str, Any], group: str) -> dict[str, Any]:
+    return {**feature, "twin": group}
+
+
+class TestTwinsShowOnce:
+    """Features the library marked as saying the same thing show once."""
+
+    def _settled(self, features: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+        runs = {"call-1": _emitted(features)}
+        [settled] = settle_features([_segment(segment_key="a")], runs=runs, outputs={})
+        return settled.features
+
+    def test_of_two_counted_twins_the_bigger_difference_stays(self) -> None:
+        features = self._settled(
+            [
+                _twin(
+                    _mean_s("単価の合計", 64_000.0, 80_000.0, 20_000.0), "単価の合計"
+                ),
+                _twin(
+                    _mean_s("標準価格の合計", 63_000.0, 80_000.0, 20_000.0),
+                    "単価の合計",
+                ),
+                _mean_s("活動日数", 23.0, 31.0, 10.0),
+            ]
+        )
+
+        assert [f["name"] for f in features] == ["標準価格の合計", "活動日数"]
+
+    def test_the_counted_figure_stays_over_the_codes_own(self) -> None:
+        derived = {
+            **_mean_s("recency", 99.0, 44.0, 30.0),
+            "kind": "derived",
+            "twin": "最後からの日数",
+        }
+        counted = _twin(_mean_s("最後からの日数", 95.0, 44.0, 30.0), "最後からの日数")
+
+        features = self._settled([derived, counted])
+
+        assert [f["name"] for f in features] == ["最後からの日数"]
+
+    def test_the_mark_is_not_kept_with_the_feature(self) -> None:
+        features = self._settled(
+            [_twin(_mean_s("最後からの日数", 95.0, 44.0, 30.0), "最後からの日数")]
+        )
+
+        assert "twin" not in features[0]

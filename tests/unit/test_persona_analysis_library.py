@@ -1710,6 +1710,8 @@ class TestEmitAndFinalize:
 
         by_key = {s["segment_key"]: s["features"] for s in result["segments"]}
         score = next(f for f in by_key["young"] if f["name"] == "score")
+        # twice the age says what the age says: the app shows one of them
+        assert score.pop("twin") == "age"
         assert score == {
             "name": "score",
             "kind": "derived",
@@ -2743,3 +2745,78 @@ class TestPersonProfile:
             if f["kind"] == "derived"
         }
         assert "回数（行）" in names and any("合計" in n for n in names)
+
+
+# --- features that say the same thing ---------------------------------------
+
+
+def _priced_csv(rows: int = 60) -> bytes:
+    """``list_price`` is ``price`` under another name; ``age`` is unrelated."""
+    rnd = random.Random(7)
+    lines = ["id,plan,price,list_price,age"]
+    for i in range(rows):
+        plan = "gold" if i % 3 == 0 else "basic"
+        price = (900 if plan == "gold" else 300) + rnd.randint(-50, 50)
+        lines.append(f"M{i:03d},{plan},{price},{price * 1.1:.1f},{rnd.randint(20, 70)}")
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _twins(features: list[dict[str, Any]]) -> dict[str, Any]:
+    return {f["name"]: f.get("twin") for f in features if f["kind"] != "share"}
+
+
+class TestTwinFeatures:
+    """Features whose per-person values move together are marked as twins."""
+
+    def test_a_column_copied_under_another_name_is_a_twin(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        _prepare(lib, tmp_path, _priced_csv(), source_id="src1")
+
+        result = _call(
+            lib, tmp_path, "profile_segments", source_id="src1", by="plan", filters=[]
+        )
+
+        for layer in result["value"]["layers"]:
+            twins = _twins(layer["features"])
+            # the first column of the group names it
+            assert twins["price"] == "price" and twins["list_price"] == "price"
+            assert twins["age"] is None
+
+    def test_a_metric_the_code_computed_is_a_twin_of_the_counted_one(
+        self, lib: ModuleType, tmp_path: Path, history: None
+    ) -> None:
+        code = (
+            'p = person_profile(read_table("source_1"), "利用者", skip=["店舗"])\n'
+            'p["recency"] = p["最後からの日数"] + 1\n'
+            'p["seg"] = ["many" if n >= 2 else "one" for n in p["回数（行）"]]\n'
+            'emit_result(p, "seg", "people:source_1", id_column="利用者",'
+            ' metrics=["recency"])\n'
+        )
+        _run_ai(lib, tmp_path, code, sources=_HISTORY_SOURCES)
+
+        result = _finalize_history(lib, tmp_path)["result"]
+
+        for segment in result["segments"]:
+            twins = _twins(segment["features"])
+            # the library's own figure names the group, not the code's
+            assert twins["recency"] == "最後からの日数"
+            assert twins["最後からの日数"] == "最後からの日数"
+
+    def test_columns_of_a_clustering_that_move_together_are_twins(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        _prepare(lib, tmp_path, _priced_csv(), source_id="src1")
+
+        result = _call(
+            lib,
+            tmp_path,
+            "cluster_segments",
+            source_id="src1",
+            columns=["price", "list_price", "age"],
+            k=2,
+        )
+
+        for cluster in result["value"]["clusters"]:
+            twins = _twins(cluster["features"])
+            assert twins["list_price"] == "price" and twins["age"] is None

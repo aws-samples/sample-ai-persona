@@ -23,7 +23,9 @@ agent writes is not used:
   layer there are no features.
 
 Features are put in order of how far they are from the whole, and only the
-first :data:`MAX_FEATURES` stay. One that is hardly different from the whole
+first :data:`MAX_FEATURES` stay. Of the features the library marked as twins
+(their values per person move together), only one stays: the library's own
+figure over a metric of the code, then the bigger difference. One that is hardly different from the whole
 is no trait of the segment and is left out: under :data:`MIN_EFFECT` spreads
 (standard deviations for a mean, Cohen's h for a share), or, when no spread is
 known, under :data:`MIN_DIFFERENCE` of the whole.
@@ -96,6 +98,9 @@ def _feature(item: Any, kind: Optional[str] = None) -> Optional[dict[str, Any]]:
     spread = _number(item.get("spread"))
     if spread is not None and spread > 0:
         feature["spread"] = spread
+    twin = item.get("twin")
+    if isinstance(twin, str) and twin.strip():
+        feature["twin"] = twin.strip()
     return feature
 
 
@@ -138,8 +143,28 @@ def _is_trait(feature: Mapping[str, Any]) -> bool:
     return _distance(feature) >= MIN_DIFFERENCE
 
 
+def _preference(feature: Mapping[str, Any]) -> tuple[bool, float]:
+    """A counted figure before the code's own, then the bigger difference."""
+    return (feature["kind"] != "derived", _distance(feature))
+
+
+def _one_of_each_twin(
+    features: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """One feature of each group the library marked as saying the same thing
+    (``twin``: a column copied under another name, or a metric of the code
+    the library counts too), so that one fact does not take two places."""
+    best: dict[str, Mapping[str, Any]] = {}
+    for feature in features:
+        group = str(feature.get("twin") or feature["name"])
+        if group not in best or _preference(feature) > _preference(best[group]):
+            best[group] = feature
+    kept = {id(f) for f in best.values()}
+    return [f for f in features if id(f) in kept]
+
+
 def _ranked(features: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
-    features = [f for f in features if _is_trait(f)]
+    features = _one_of_each_twin([f for f in features if _is_trait(f)])
     return _ranked_by_distance(features)
 
 
@@ -156,7 +181,7 @@ def _ranked_by_distance(
     derived = [f for f in ordered if f["kind"] == "derived"][:DERIVED_SLOTS]
     rest = [f for f in ordered if f not in derived][: MAX_FEATURES - len(derived)]
     kept = sorted([*derived, *rest], key=_distance, reverse=True)
-    return tuple(dict(f) for f in kept)
+    return tuple({k: v for k, v in f.items() if k != "twin"} for f in kept)
 
 
 def _counted(items: Any, skip: Collection[str] = ()) -> tuple[dict[str, Any], ...]:
