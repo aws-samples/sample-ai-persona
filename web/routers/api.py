@@ -189,7 +189,7 @@ class RunDiscussionRequest(BaseModel):
         description="議論モード: classic または agent",
     )
     rounds: int = Field(
-        default=3, ge=1, le=10, description="議論ラウンド数（agentモードのみ、1-10）"
+        default=5, ge=1, le=10, description="議論ラウンド数（agentモードのみ、1-10）"
     )
     categories: Optional[List[CategoryInput]] = Field(
         default=None,
@@ -462,7 +462,7 @@ def _run_agent_discussion(
     personas: list,
     topic: str,
     categories: list | None,
-    rounds: int = 3,
+    rounds: int = 5,
 ) -> dict:
     """Run an agent discussion in the background."""
     adm = get_agent_discussion_manager()
